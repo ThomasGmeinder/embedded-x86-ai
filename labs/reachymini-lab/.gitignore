@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+.env
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Test files
+*.log
+*.tmp
+
+# Byte-compiled files
+*.pyc
+
+# Jupyter notebook checkpoints (keep the .ipynb files themselves)
+.ipynb_checkpoints/
+lab/.ipynb_checkpoints/
+
+# Reachy / runtime artifacts
+MUJOCO_LOG.TXT
+.app_metadata/
+
+# Local-only files (kept on disk, not tracked)
+AGENTS.md
+archive/VAD_DEMO.mp4
+
+# Per-station reset snapshot (captured by setup.sh, restored by reset.sh)
+.lab-baseline/

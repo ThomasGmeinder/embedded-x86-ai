@@ -1,0 +1,140 @@
+# =============================================================================
+# Workshop pipeline configuration - self-contained copy for the workshop
+# project. Values mirror the real pipeline config at the repository root
+# (config/pipeline.yaml) so what you build here drives the same hardware.
+#
+# All relative paths resolve against the PROJECT root (the directory that
+# contains this config/ folder). The model/cache paths below assume the
+# workshop/ directory sits inside the pipeline repository, so the ONNX
+# models, the GGUF, and the NPU compile cache are shared with the main
+# pipeline (../../models, ../../cache). Adjust if you move things.
+# =============================================================================
+
+system:
+  models_dir: ../../models          # repo-root models/ (exported by bootstrap.sh)
+  cache_dir: ../../cache            # VitisAI NPU compile cache - REUSED, so no recompile
+  log_dir: logs
+
+# --- Component 1: AI models --------------------------------------------------
+
+yolo_pose:                          # eyes (where you are) - NPU
+  onnx: ../../models/yolo26s-pose/yolo26s-pose.onnx
+  device: npu                       # npu | cpu (falls back to cpu with a warning)
+  vitisai_config: config/vaiep_config.json
+  imgsz: 640
+  conf_threshold: 0.4
+  kpt_threshold: 0.3
+  cache_key: yolo26s_pose_fp32      # unique per model - cache entries must not collide
+
+yolo_detect:                        # eyes (what to grab) - NPU
+  onnx: ../../models/yolo26s/yolo26s.onnx
+  device: npu
+  vitisai_config: config/vaiep_config.json
+  imgsz: 640
+  conf_threshold: 0.35
+  cache_key: yolo26s_detect_fp32
+
+mediapipe:                          # fingers (pinch) - CPU
+  max_num_hands: 2                  # detect both so we can keep just the tracked one
+  track_hand: right                 # right | left | any - the hand that drives the arm
+  frames_mirrored: false            # rig frames are NOT selfie-mirrored, so MediaPipe's
+                                    # Left/Right label is flipped; hands.py corrects it
+  min_detection_confidence: 0.5
+  min_tracking_confidence: 0.5
+  roll_ti_full_px: 40.0
+
+llm:                                # brain (intent) - iGPU via llama.cpp + ROCm/HIP
+  server_bin: ../../third_party/llama.cpp/build/bin/llama-server
+  model_gguf: ../../models/llama-3.2-3b/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+  host: 127.0.0.1
+  port: 8081
+  n_gpu_layers: 99                  # everything on the iGPU
+  ctx_size: 2048                    # MUST stay capped - native 131072 OOMs the iGPU carve-out
+  grammar_file: config/intent.gbnf
+  temperature: 0.0
+  parallel: 1
+  no_warmup: true                   # gfx1151 can segfault on the warmup pass
+  hsa_override_gfx_version: "11.5.0"   # Strix Point ("11.5.1" Strix Halo, "11.0.0" fallback)
+  autostart: true
+
+# --- Component 2: ROS 2 nodes & topics ---------------------------------------
+
+cameras:
+  mount:                            # externally mounted, faces the human
+    device: /dev/video0
+    width: 640
+    height: 480
+    fps: 30
+    rotate: 0
+    use_ros2: true
+    topic: /cameras/mount/image_raw
+    stale_after_s: 1.0
+  arm:                              # mounted on the end effector
+    device: /dev/v4l/by-id/usb-icSpring_icspring_camera-video-index0
+    width: 640
+    height: 480
+    fps: 30
+    rotate: 0
+    use_ros2: true
+    topic: /cameras/arm/image_raw
+    stale_after_s: 1.0
+
+robot:
+  use_ros2: true
+  motor_port: /dev/ttyACM0
+  robot_id: my_awesome_follower_arm
+  enable_motors: true
+  control_fps: 60.0
+  max_relative_target: null    # per-tick slew clamp OFF (matches the pipeline
+                               # config): commands are absolute goals and the
+                               # servo's onboard profile produces the motion -
+                               # exactly how gesture_mimic drives the arm
+  command_topic: /so101/joint_command
+  state_topic: /so101/joint_state
+
+intent_node:                        # the Llama intent node (component 2)
+  transcript_topic: /vla/transcript # std_msgs/String in (what was said)
+  intent_topic: /vla/intent         # std_msgs/String out (JSON {"command","object"})
+
+# --- Component 3: integration / behaviors ------------------------------------
+
+mimic:                              # camera-frame → joint mapping (values from the real rig)
+  shoulder_pan0: 0.0
+  shoulder_lift0: -5.0
+  elbow_flex0: 10.0
+  wrist_flex0: -10.0
+  wrist_roll0: 0.0
+  pan_gain: 150.0
+  sl_fwd_gain: 110.0
+  sl_fwd_away_gain: 165.0           # shoulder_lift gain moving AWAY from camera (+50%)
+  ef_fwd_gain: -75.0
+  ef_up_gain: -55.0                 # inverted, ~30% less sensitive (was 78.0)
+  sl_up_gain: 58.0
+  wf_up_gain: 135.0                 # wrist_flex gain (wrist-bend axis; flip sign to invert)
+  wrist_half_deg: 45.0              # ±this much hand-vs-forearm bend → full wrist_flex
+  roll_gain: 128.0
+  x_center: 0.5
+  x_half: 0.384
+  y_center: 0.5
+  y_half: 0.336
+  deadzone: 0.05
+  mirror: true
+  hand_size_neutral: 0.0            # 0 = auto-calibrate from the first frames
+  depth_rel_span: 0.30
+  depth_baseline_frames: 8
+  roll_half_deg: 75.0
+  grip_min: 0.10
+  grip_max: 1.40
+  grip_close_frac: 0.10
+  grip_open_pos: 90.0
+  smoothing:
+    min_cutoff: 1.5
+    beta: 0.03
+    d_cutoff: 1.0
+
+dance:
+  bpm: 100
+  duration_s: 20.0
+
+wave:
+  cycles: 3

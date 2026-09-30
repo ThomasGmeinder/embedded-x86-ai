@@ -1,0 +1,30 @@
+# Extras on top of the ryzen-ai-1.7.1 venv (Linux).
+# Install with: pip install -r requirements.txt
+#
+# Already in the Ryzen AI env: onnxruntime (with VitisAI EP), quark,
+# opencv-python, psutil, matplotlib, torch.
+#
+# NOTE: jupyter is NOT bundled in the Linux ryzen-ai venv, so jupyterlab is
+# listed explicitly below.
+#
+# Package          Why
+# -----------      -------------------------------------------------------
+# jupyterlab       Notebook UI
+# ipywidgets       Live dashboard and webcam UI in the notebook
+# netron           ONNX graph visualization (CLI tool)
+# ninja            Quark custom-ops compilation (Section 11)
+# mujoco           SO-101 arm sim + IK for the tele-op demo (>=3.1.3 for SO-101 model)
+#
+# numpy is PINNED: the Ryzen AI NPU stack (flexml, flexmlrt, amd-quark) requires
+# numpy<=1.26.4. Keep this line first so the resolver honors it.
+#
+# YOLO export additionally needs ultralytics — install it manually
+# (pip install ultralytics); it is not listed here. Note: ultralytics
+# upgrades numpy to 2.x, so re-pin afterward: pip install "numpy==1.26.4".
+
+numpy==1.26.4
+jupyterlab>=4.5.10
+ipywidgets
+netron
+ninja
+mujoco>=3.1.3

@@ -1,0 +1,59 @@
+<mujoco model="so101 teleop">
+  <include file="so101.xml"/>
+
+  <statistic center="0.16 0 0.05" extent="0.5"/>
+
+  <visual>
+    <headlight diffuse="0.65 0.65 0.65" ambient="0.35 0.35 0.35" specular="0.1 0.1 0.1"/>
+    <rgba haze="0.12 0.16 0.22 1"/>
+    <global azimuth="140" elevation="-24" offwidth="1280" offheight="1280"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.16 0.22 0.32" rgb2="0.02 0.03 0.05"
+      width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+      rgb1="0.18 0.22 0.28" rgb2="0.1 0.13 0.17" markrgb="0.7 0.7 0.7"
+      width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true"
+      texrepeat="6 6" reflectance="0.15"/>
+    <material name="console" rgba="0.14 0.15 0.18 1" specular="0.3" shininess="0.5"/>
+    <material name="cube_mat" rgba="0.95 0.55 0.18 1" specular="0.4" shininess="0.5"/>
+    <material name="target_mat" rgba="0.20 0.85 0.40 0.45"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0.2 -0.2 1.0" dir="-0.2 0.2 -1" directional="true"/>
+    <!-- flush ground plane just below the tabletop surface -->
+    <geom name="floor" pos="0 0 -0.001" size="0 0 0.05" type="plane" material="groundplane"/>
+
+    <!-- camera framing the small arm + workspace -->
+    <body name="look_at" pos="0.16 0 0.04"/>
+    <camera name="demo" mode="targetbody" target="look_at" pos="0.62 -0.42 0.40"/>
+
+    <!-- workspace tabletop, a single flush slab with its top at z=0 (the arm is mounted on it) -->
+    <body name="console" pos="0.09 0 -0.025">
+      <geom name="console_geom" type="box" size="0.22 0.22 0.025" material="console"/>
+    </body>
+
+    <!-- place target: a flat green disc resting on the tabletop. The runtime code
+         relocates it (in Y) each round, so this XML pos is just a default. -->
+    <body name="target" pos="0.20 0.13 0.0015">
+      <geom name="target_g" type="cylinder" size="0.04 0.0015" material="target_mat"
+        contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- graspable cube (free body, real physics) sitting on the table -->
+    <body name="cube" pos="0.20 -0.13 0.016">
+      <freejoint name="cube_j"/>
+      <geom name="cube_g" type="box" size="0.016 0.016 0.016" material="cube_mat"
+        mass="0.03" friction="1.2 0.02 0.001"/>
+    </body>
+  </worldbody>
+
+  <keyframe>
+    <!-- arm(5) + gripper(1) + cube free joint(7) -->
+    <key name="home"
+      qpos="-0.0065 -1.2213 1.0583 1.1736 -0.0062 1.2  0.20 -0.13 0.016  1 0 0 0"/>
+  </keyframe>
+</mujoco>
