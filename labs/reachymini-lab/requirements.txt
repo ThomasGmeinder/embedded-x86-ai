@@ -1,0 +1,45 @@
+# Requirements for Reachy Mini Chat App
+
+# Core dependencies
+requests>=2.31.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# For development/testing
+# pytest>=7.4.0
+# black>=23.0.0
+
+# TTS + audio playback dependencies
+# Edge TTS client (async wrapper for Microsoft Edge TTS voices)
+edge-tts>=1.2.0
+# Read/write audio files
+soundfile>=0.12.1
+# Playback using PortAudio (may require system PortAudio installed)
+sounddevice>=0.4.8
+
+# Async HTTP for non-blocking LLM requests
+aiohttp>=3.9.0
+
+# ASR 
+faster-whisper>=1.2.1
+
+# Piper TTS (Offline)
+piper-tts>=1.4.0
+
+# Vision task (lab/emo_v3.py) sends camera frames to a local Ollama vision
+# model (qwen2.5vl). Frames are captured directly from the robot's V4L2 camera
+# using the system `ffmpeg` binary (install via apt), so no extra Python image
+# library is required for the default (no-preview) path.
+
+# Optional live camera preview for Task 3 (`python lab/emo_v3.py --preview`).
+# Use the GUI build (NOT opencv-python-headless) — we need cv2.imshow. Imported
+# lazily, so emo_v3.py runs fine without it unless --preview is requested.
+opencv-python>=4.8.0
+
+# Notebook lab experience (lab/lab.ipynb, lab/explainer.ipynb). jupyterlab runs
+# the notebooks; ipywidgets provides the widget/IProgress support that tqdm (via
+# huggingface_hub, used when loading the recorded-move library) expects — without
+# it you get a harmless "IProgress not found" TqdmWarning. The .py script lab does
+# not need these; they're only for the notebook path.
+jupyterlab>=4.5.10
+ipywidgets>=8.0.0

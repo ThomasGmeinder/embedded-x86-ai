@@ -1,0 +1,14 @@
+[Unit]
+Description=Set Ryzen AI NPU to turbo power mode
+# Wait until the base system is up so the XDNA driver / xrt-smi is ready.
+After=multi-user.target
+
+[Service]
+Type=oneshot
+# xrt-smi is installed here by the XRT .deb packages.
+ExecStart=/opt/xilinx/xrt/bin/xrt-smi configure --pmode turbo
+# Keep the unit reported as "active" after the one-shot command exits.
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
