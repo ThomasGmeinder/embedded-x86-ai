@@ -24,11 +24,11 @@ Models compiled (each keyed separately in cache/):
   - yolo26s-pose                 (config: yolo_pose.*)
   - yolo26s-detect               (config: yolo_detect.*) - voice pick-and-place
 
-Usage (from the repo root, with the SDK venv activated):
+Usage (from the repo root):
 
-    source ./ryzenai-compile/bin/activate           # the FULL SDK venv
-    python scripts/compile_npu_models.py             # all; reads config/pipeline.yaml
-    python scripts/compile_npu_models.py --only yolo_detect
+    export RYZEN_AI_VENV=$HOME/ryzen_ai-1.8.0/venv
+    scripts/compile_npu_models.sh
+    scripts/compile_npu_models.sh --only yolo_detect
 
 The cache_dir/keys/configs are read straight from config/pipeline.yaml so they
 always match what the pipeline expects.
@@ -37,123 +37,10 @@ always match what the pipeline expects.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _setup_npu_env() -> None:
-    """Set XLNX_VART_FIRMWARE and LD_LIBRARY_PATH from THIS interpreter's venv.
-
-    The compile runs under the full SDK venv; the EP needs its native libs on
-    the loader path and a specific .xclbin FILE (not a directory). We configure
-    both from the running interpreter so the script is self-contained no matter
-    how it's launched. Must run before onnxruntime touches the EP.
-    """
-    import os
-    import sys
-    import glob
-
-    sp = (
-        Path(sys.executable).resolve().parent.parent
-        / "lib"
-        / f"python{sys.version_info.major}.{sys.version_info.minor}"
-        / "site-packages"
-    )
-
-    # Native runtime libs.
-    lib_dirs = [
-        sp / "voe" / "lib",
-        sp / "flexmlrt" / "lib",
-        sp / "onnxruntime" / "capi",
-    ]
-    cur = os.environ.get("LD_LIBRARY_PATH", "")
-    before = cur
-    for d in lib_dirs:
-        if d.is_dir() and str(d) not in cur:
-            cur = f"{d}{':' + cur if cur else ''}"
-    os.environ["LD_LIBRARY_PATH"] = cur
-
-    # NPU firmware: a specific xclbin file. Strix Halo -> 2x4x4.
-    if not os.environ.get("XLNX_VART_FIRMWARE"):
-        override = os.environ.get("RAI_XCLBIN")
-        xclbin_dir = sp / "flexml" / "flexml_extras" / "data" / "ryzen-ai" / "stx"
-        chosen = None
-        if override and Path(override).is_file():
-            chosen = override
-        else:
-            for name in ("unified-2x4x4.xclbin", "unified-4x4.xclbin"):
-                cand = xclbin_dir / name
-                if cand.is_file():
-                    chosen = str(cand)
-                    break
-            if not chosen:
-                hits = sorted(glob.glob(str(xclbin_dir / "*.xclbin")))
-                chosen = hits[0] if hits else None
-        if chosen:
-            os.environ["XLNX_VART_FIRMWARE"] = chosen
-            print(f"  XLNX_VART_FIRMWARE = {chosen}")
-
-    # If we extended LD_LIBRARY_PATH, re-exec once so the dynamic linker uses it
-    # (it's read at process start; mutating os.environ afterward isn't enough for
-    # libs loaded via DT_NEEDED). Guard with a sentinel to avoid a loop.
-    if cur != before and os.environ.get("_RAI_REEXEC") != "1":
-        os.environ["_RAI_REEXEC"] = "1"
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-
-
-_setup_npu_env()
-
-
-def _ensure_native_libs_on_path() -> None:
-    """Put this venv's VitisAI native libs on LD_LIBRARY_PATH, then re-exec once.
-
-    The VitisAI EP needs voe/lib, flexmlrt/lib, etc. on the loader path. They
-    live in the active (SDK) venv's site-packages but aren't auto-added. We set
-    them and re-exec the interpreter once (guarded by an env flag) so the new
-    LD_LIBRARY_PATH is in effect before onnxruntime is imported.
-    """
-    if os.environ.get("_COMPILE_NPU_REEXEC") == "1":
-        return
-    import sysconfig
-
-    sp = sysconfig.get_paths()["purelib"]
-    libs = [
-        os.path.join(sp, "voe", "lib"),
-        os.path.join(sp, "flexmlrt", "lib"),
-        os.path.join(sp, "onnxruntime", "capi"),
-        os.path.join(sp, "flexml", "lib"),
-    ]
-    libs = [d for d in libs if os.path.isdir(d)]
-    cur = os.environ.get("LD_LIBRARY_PATH", "")
-    new = ":".join(libs + ([cur] if cur else []))
-    # XLNX_VART_FIRMWARE must be a specific .xclbin FILE, not the directory.
-    # Strix (STX) ships unified-*.xclbin; prefer the larger 4x4 partition.
-    xclbin_dir = os.path.join(sp, "flexml", "flexml_extras", "data", "ryzen-ai", "stx")
-    xclbin_file = ""
-    if os.path.isdir(xclbin_dir):
-        prefer = ["unified-4x4.xclbin", "unified-2x4x4.xclbin"]
-        for name in prefer:
-            cand = os.path.join(xclbin_dir, name)
-            if os.path.isfile(cand):
-                xclbin_file = cand
-                break
-        if not xclbin_file:  # fall back to any .xclbin present
-            import glob
-
-            hits = sorted(glob.glob(os.path.join(xclbin_dir, "*.xclbin")))
-            xclbin_file = hits[0] if hits else ""
-    env = dict(os.environ)
-    env["LD_LIBRARY_PATH"] = new
-    env["_COMPILE_NPU_REEXEC"] = "1"
-    if xclbin_file:
-        env["XLNX_VART_FIRMWARE"] = xclbin_file
-    os.execve(sys.executable, [sys.executable] + sys.argv, env)
-
-
-_ensure_native_libs_on_path()
 
 import numpy as np  # noqa: E402
 import onnxruntime as ort  # noqa: E402
@@ -226,9 +113,8 @@ def _compile_one(
             f"\nERROR: VitisAIExecutionProvider did NOT load for {name} - "
             f"active providers: {active}.\n"
             "The compile fell back to CPU and produced NO NPU artifacts.\n"
-            "The compile venv's native libs (voe/lib, flexmlrt/lib) must be on\n"
-            "LD_LIBRARY_PATH. Re-run the compile with the env sourced for the\n"
-            "SDK venv (see scripts/compile_npu_models.py header)."
+            "Re-run scripts/compile_npu_models.sh so it can source the SDK's\n"
+            "local fix_activate.sh after venv/bin/activate."
         )
 
     # One inference to make sure the compiled graph is exercised/finalized.
