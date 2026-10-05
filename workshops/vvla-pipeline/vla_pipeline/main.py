@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Pipeline orchestrator: microphone → Whisper (NPU) → Llama intent (iGPU) →
+"""Pipeline orchestrator: microphone → Whisper (CPU by default, optional NPU) → Llama intent (iGPU) →
 behavior dispatch, with an always-hot listener for the safety stop.
 
 Architecture

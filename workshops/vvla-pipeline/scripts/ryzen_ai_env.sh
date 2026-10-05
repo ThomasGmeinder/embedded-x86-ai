@@ -7,7 +7,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-# Ryzen AI NPU runtime environment (venv-only).
+# Ryzen AI NPU runtime environment.
 #
 # The VitisAI ONNX Runtime EP needs its native libraries (libxcompiler-core-*,
 # libonnxruntime_vitisai_ep.so, etc.) on LD_LIBRARY_PATH. The `voe` and
@@ -19,7 +19,7 @@
 # Source this AFTER activating the venv:
 #     source scripts/ryzen_ai_env.sh
 #
-# Safe to source repeatedly; a no-op if the libs aren't found.
+# Safe to source repeatedly.
 
 # Resolve the active venv (VIRTUAL_ENV is set by `source .venv/bin/activate`).
 _RAI_VENV="${VIRTUAL_ENV:-}"
@@ -74,7 +74,31 @@ if [[ ! -e "${_RAI_SP}/voe/lib/libxcompiler-core-without-symbol.so" ]]; then
   echo "[ryzen_ai_env] the NPU EP will fall back to CPU. Ensure the 'voe' wheel installed." >&2
 fi
 
-unset _RAI_VENV _RAI_SELF _RAI_PYVER _RAI_SP _RAI_CANDIDATES _d _RAI_XCLBIN_DIR _x
+# Ryzen AI 1.8.0's own venv/bin/activate puts voe/lib ahead of the installed
+# XRT and omits Peano. That correction stays with the SDK install
+# (~/ryzen_ai-1.8.0/fix_activate.sh) and is intentionally not part of this repo.
+_RAI_SDK_FIX=""
+if [[ -n "${RYZEN_AI_VENV:-}" && -d "${RYZEN_AI_VENV}" ]]; then
+  _x="$(cd "${RYZEN_AI_VENV}/.." && pwd)/fix_activate.sh"
+  [[ -f "${_x}" ]] && _RAI_SDK_FIX="${_x}"
+fi
+if [[ -z "${_RAI_SDK_FIX}" ]]; then
+  for _x in "${HOME:-}"/ryzen_ai*/fix_activate.sh /opt/ryzen_ai*/fix_activate.sh; do
+    if [[ -f "${_x}" ]]; then
+      _RAI_SDK_FIX="${_x}"
+      break
+    fi
+  done
+fi
+if [[ -n "${_RAI_SDK_FIX}" ]]; then
+  # shellcheck disable=SC1090
+  source "${_RAI_SDK_FIX}"
+else
+  echo "[ryzen_ai_env] no fix_activate.sh next to the Ryzen AI SDK." >&2
+  echo "[ryzen_ai_env] venv/bin/activate leaves voe/lib ahead of XRT; NPU load will fail." >&2
+fi
+
+unset _RAI_VENV _RAI_SELF _RAI_PYVER _RAI_SP _RAI_CANDIDATES _d _RAI_XCLBIN_DIR _x _RAI_SDK_FIX
 
 # llama.cpp is built for gfx1100 on Strix (gfx1150/gfx1151); present the
 # iGPU as gfx1100 so its HIP kernels load instead of segfaulting. Affects
