@@ -3,10 +3,13 @@ set -eo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RYZEN_AI_VENV="${RYZEN_AI_VENV:-${RYZEN_AI_COMPILE_VENV:-}}"
+if [[ -z "$RYZEN_AI_VENV" && -n "${RYZEN_AI_WHEELS:-}" ]]; then
+  RYZEN_AI_VENV="${RYZEN_AI_WHEELS}/venv"
+fi
 
 if [[ -z "$RYZEN_AI_VENV" || ! -f "$RYZEN_AI_VENV/bin/activate" ]]; then
-  echo "Set RYZEN_AI_VENV to the external full Ryzen AI SDK venv." >&2
-  echo "Example: export RYZEN_AI_VENV=\$HOME/ryzen_ai-1.8.0/venv" >&2
+  echo "Set RYZEN_AI_WHEELS to the Ryzen AI install that contains venv/." >&2
+  echo "Example: export RYZEN_AI_WHEELS=\$HOME/ryzen_ai-1.8.0" >&2
   exit 2
 fi
 
