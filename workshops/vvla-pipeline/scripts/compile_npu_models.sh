@@ -8,8 +8,8 @@ if [[ -z "$RYZEN_AI_VENV" && -n "${RYZEN_AI_WHEELS:-}" ]]; then
 fi
 
 if [[ -z "$RYZEN_AI_VENV" || ! -f "$RYZEN_AI_VENV/bin/activate" ]]; then
-  echo "Set RYZEN_AI_WHEELS to the Ryzen AI install that contains venv/." >&2
-  echo "Example: export RYZEN_AI_WHEELS=\$HOME/ryzen_ai-1.8.0" >&2
+  echo "Set RYZEN_AI_WHEELS to the Ryzen AI 1.7.1 install that contains venv/." >&2
+  echo "Example: export RYZEN_AI_WHEELS=\$HOME/ryzen_ai-1.7.1" >&2
   exit 2
 fi
 
@@ -17,15 +17,10 @@ fi
 set +u
 # shellcheck disable=SC1090
 source "$RYZEN_AI_VENV/bin/activate"
-_SDK_FIX="$(cd "$RYZEN_AI_VENV/.." && pwd)/fix_activate.sh"
-if [[ ! -f "$_SDK_FIX" ]]; then
-  echo "Missing ${_SDK_FIX}" >&2
-  echo "Ryzen AI's venv/bin/activate puts voe/lib ahead of system XRT and omits Peano." >&2
-  echo "That correction is specific to the SDK install and is not part of this repo." >&2
-  exit 1
+if [[ -z "${XILINX_XRT:-}" && -f /opt/xilinx/xrt/setup.sh ]]; then
+  # shellcheck disable=SC1091
+  source /opt/xilinx/xrt/setup.sh
 fi
-# shellcheck disable=SC1090
-source "$_SDK_FIX"
 set -u
 
 cd "$REPO_ROOT"

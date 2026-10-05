@@ -13,7 +13,7 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SDK_ROOT="${RYZEN_AI_WHEELS:-${HOME}/ryzen_ai-1.8.0}"
+SDK_ROOT="${RYZEN_AI_WHEELS:-${HOME}/ryzen_ai-1.7.1}"
 SDK_VENV="${RYZEN_AI_VENV:-${SDK_ROOT}/venv}"
 FULL=0
 WAV="${WHISPER_WAV:-}"
@@ -24,7 +24,7 @@ usage() {
   cat <<EOF
 Usage: ./scripts/validate_setup.sh [--full] [--wav FILE]
 
-  default   static checks, SDK library order, existing VAIML caches, and .venv
+  default   static checks, SDK VitisAI registration, existing VAIML caches, and .venv
   --full    also repeat bootstrap with --skip-compile
   --wav     transcribe FILE with Whisper on the NPU, using cache/
 EOF
@@ -70,8 +70,7 @@ run_check "shell syntax" bash -n \
   "$REPO_ROOT/scripts/compile_npu_models.sh" \
   "$REPO_ROOT/scripts/install_kernel.sh" \
   "$REPO_ROOT/scripts/ryzen_ai_env.sh" \
-  "$REPO_ROOT/workshop/run_notebooks.sh" \
-  "$SDK_ROOT/fix_activate.sh"
+  "$REPO_ROOT/workshop/run_notebooks.sh"
 
 run_check "python syntax" python3 -m py_compile \
   "$REPO_ROOT/scripts/compile_npu_models.py" \
@@ -95,13 +94,6 @@ run_check "requirements do not install stock onnxruntime" bash -c '
     grep -Eiq "^onnxruntime([<>=[:space:]]|$)" && exit 1
   exit 0
 ' bash "$REPO_ROOT"
-
-run_check "SDK fix is outside this repository" bash -c '
-  set -euo pipefail
-  [[ -f "$1/fix_activate.sh" ]] || exit 1
-  git -C "$2" ls-files --error-unmatch "$(realpath "$1/fix_activate.sh")" >/dev/null 2>&1 && exit 1
-  exit 0
-' bash "$SDK_ROOT" "$REPO_ROOT"
 
 run_check "Ryzen AI wheels are discoverable through a symlink" bash -c '
   set -euo pipefail
@@ -128,31 +120,11 @@ run_check "requirements resolve without stock onnxruntime" bash -c '
   fi
 ' bash "$REPO_ROOT"
 
-run_check "SDK activate fix orders XRT before voe" bash -c '
+run_check "SDK venv registers VitisAI" bash -c '
   set -euo pipefail
   set +u
   # shellcheck disable=SC1090
   source "$1/venv/bin/activate"
-  # shellcheck disable=SC1090
-  source "$1/fix_activate.sh"
-  python - <<PY
-import os, sys
-paths = [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(":") if p]
-try:
-    xrt = paths.index("/opt/xilinx/xrt/lib")
-    voe = next(i for i, p in enumerate(paths) if p.endswith("/voe/lib"))
-except (ValueError, StopIteration):
-    sys.exit(1)
-assert xrt < voe, (xrt, voe)
-assert any(p.endswith("/lnx64.o/tools/peano/lib") for p in paths)
-assert any(p.endswith("/flexml/flexml_extras/lib") for p in paths)
-assert os.path.isfile(os.environ.get("XLNX_VART_FIRMWARE", ""))
-pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
-open("/tmp/vvla-sdk-pyver", "w").write(pyver)
-PY
-  pyver="$(cat /tmp/vvla-sdk-pyver)"
-  ep="$1/venv/lib/python${pyver}/site-packages/onnxruntime/capi/libonnxruntime_vitisai_ep.so"
-  ldd "$ep" | grep -q "not found" && exit 1
   python - <<PY
 import onnxruntime as ort
 assert "VitisAIExecutionProvider" in ort.get_available_providers()

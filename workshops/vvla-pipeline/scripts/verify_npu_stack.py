@@ -34,14 +34,6 @@ def main() -> int:
     else:
         fail("XILINX_XRT is not configured", errors)
 
-    ld_dirs = [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(":") if p]
-    xrt_lib = str(Path(xrt, "lib")) if xrt else ""
-    voe_index = next((i for i, p in enumerate(ld_dirs) if p.endswith("/voe/lib")), None)
-    if xrt_lib in ld_dirs and (voe_index is None or ld_dirs.index(xrt_lib) < voe_index):
-        print("  [ok] XRT libraries precede voe/lib")
-    else:
-        fail("XRT libraries must precede voe/lib on LD_LIBRARY_PATH", errors)
-
     firmware = os.environ.get("XLNX_VART_FIRMWARE", "")
     if firmware and Path(firmware).is_file():
         print(f"  [ok] firmware: {firmware}")

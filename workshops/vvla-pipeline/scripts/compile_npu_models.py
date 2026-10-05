@@ -26,7 +26,7 @@ Models compiled (each keyed separately in cache/):
 
 Usage (from the repo root):
 
-    export RYZEN_AI_VENV=$HOME/ryzen_ai-1.8.0/venv
+    export RYZEN_AI_VENV=$HOME/ryzen_ai-1.7.1/venv
     scripts/compile_npu_models.sh
     scripts/compile_npu_models.sh --only yolo_detect
 
@@ -113,8 +113,8 @@ def _compile_one(
             f"\nERROR: VitisAIExecutionProvider did NOT load for {name} - "
             f"active providers: {active}.\n"
             "The compile fell back to CPU and produced NO NPU artifacts.\n"
-            "Re-run scripts/compile_npu_models.sh so it can source the SDK's\n"
-            "local fix_activate.sh after venv/bin/activate."
+            "Re-run scripts/compile_npu_models.sh from the Ryzen AI 1.7.1 venv\n"
+            "(export RYZEN_AI_WHEELS=$HOME/ryzen_ai-1.7.1)."
         )
 
     # One inference to make sure the compiled graph is exercised/finalized.
