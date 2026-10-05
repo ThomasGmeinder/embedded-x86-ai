@@ -339,7 +339,7 @@ export RYZEN_AI_WHEELS=~/ryzen_ai-1.8.0
 cd embedded-x86-ai/workshops/vvla-pipeline
 ./bootstrap.sh --skip-compile
 source .venv/bin/activate
-pip install ultralytics
+pip install 'ultralytics' 'numpy==1.26.4' 'opencv-contrib-python==4.11.0.86'
 python scripts/export_yolo26s_pose.py
 python scripts/export_yolo26s_detect.py
 deactivate
