@@ -22,6 +22,14 @@ Tutorials, demos, workshops, and enablement material for AI development with ROC
 | [vision-kernels-rocm](workshops/vision-kernels-rocm/) | Advancing AI 2026 | Write custom HIP/ROCm vision kernels feeding a simulated robot arm (iGPU) |
 | [ryzen-ai-always-on](workshops/ryzen-ai-always-on/) | Advancing AI 2026 | Always-on inference on the Ryzen AI NPU — YOLO26 pose and pinch-to-teleop of a simulated SO-101 arm (MuJoCo) |
 
+For the VVLA workshop, clone this repository once. Point `RYZEN_AI_WHEELS` at an existing Ryzen AI installation outside the repo, then bootstrap the workshop:
+
+```bash
+export RYZEN_AI_WHEELS=~/ryzen_ai-1.8.0
+cd embedded-x86-ai/workshops/vvla-pipeline
+./bootstrap.sh --skip-compile
+```
+
 ## Issues and Support
 
 Open a [GitHub issue](../../issues) to report bugs or ask questions.

@@ -17,7 +17,7 @@ flowchart TB
         ARMCAM([Arm camera<br/>end effector]):::io
 
         VAD["VAD listener thread<br/>0.35 s end-of-speech<br/>(always hot)"]:::cpu
-        WHISPER["Whisper-base<br/>speech → text"]:::npu
+        WHISPER["Whisper-base<br/>speech → text<br/>(CPU default; NPU optional)"]:::cpu
         POSE["YOLOv26s-pose<br/>17 body keypoints"]:::npu
         DETECT["YOLOv26s-detect<br/>80-class objects"]:::npu
         HANDS["MediaPipe Hands<br/>thumb/index pinch"]:::cpu
@@ -81,7 +81,7 @@ flowchart TB
     classDef gate fill:#f5f5f5,stroke:#666,color:#000;
 ```
 
-Legend — <span title="NPU">🟧 NPU (VitisAI EP)</span> · 🟦 iGPU (ROCm) · 🟪 CPU · 🟩 behavior · 🟥 robot/transport. The three ONNX models (Whisper, YOLO-pose, YOLO-detect) all target the NPU through the common `build_session` factory with separate VitisAI cache keys — but the NPU can't hold all of them resident at once, so one (Whisper by default) runs on CPU; see [Compute placement → NPU context budget](#npu-context-budget-important).
+Legend — <span title="NPU">🟧 NPU (VitisAI EP)</span> · 🟦 iGPU (ROCm) · 🟪 CPU · 🟩 behavior · 🟥 robot/transport. YOLO-pose and YOLO-detect target the NPU by default; Whisper defaults to CPU because the NPU cannot hold all four ONNX contexts at once. Whisper can instead use its compiled NPU cache when explicitly selected; see [Compute placement → NPU context budget](#npu-context-budget-important).
 
 ## The robot's senses → an SO-101
 
@@ -99,7 +99,7 @@ flowchart LR
         BASE --- SHOULDER --- ELBOW --- WRIST --- JAW
     end
 
-    EARS["👂 EARS<br/><b>Whisper-base · NPU</b><br/>speech → text"]:::ear
+    EARS["👂 EARS<br/><b>Whisper-base · CPU default / NPU optional</b><br/>speech → text"]:::ear
     BRAIN["🧠 BRAIN<br/><b>Llama 3.2 3B · iGPU</b><br/>intent + object<br/>(GBNF-constrained)"]:::brain
     EYES["👁 EYES<br/><b>YOLOv26s · NPU</b><br/>pose = where you are<br/>detect = what to grab"]:::eye
     TOUCH["✋ TOUCH<br/><b>Feedback gripper</b><br/>current + position stall<br/>+ camera verify"]:::touch
@@ -314,23 +314,27 @@ strix-vla-pipeline/
 ```
 
 ## Installation
-Install Ubuntu 24.04.4
+Install Ubuntu 24.04.4 and install Ryzen AI once, outside this repository, so the directory contains the wheels and `venv/` from `install_ryzen_ai.sh`. Then:
 
 ```bash
-git clone <this-repo> aai-vla-pipeline
-cd aai-vla-pipeline
-Download: https://account.amd.com/en/forms/downloads/xef.html?filename=ryzen_ai-1.7.1.tgz
-Untar into the repository root
-
-# Point at your Ryzen AI 1.7.1 wheel directory so the NPU EP gets installed.
-# Without it, everything falls back to the CPU execution provider.
-
-export RYZEN_AI_WHEELS=./ryzen_ai-1.7.1
-
-./bootstrap.sh
+git clone https://github.com/amd/embedded-x86-ai
+export RYZEN_AI_WHEELS=~/ryzen_ai-1.8.0
+cd embedded-x86-ai/workshops/vvla-pipeline
+./bootstrap.sh --skip-compile
 ```
 
-`bootstrap.sh` does everything in one pass:
+`RYZEN_AI_WHEELS` is that existing installation. `bootstrap.sh` installs the runtime wheels from it. `--skip-compile` keeps the VAIML caches already in `cache/`:
+
+```text
+cache/whisper_base_encoder/whisper_base_encoder.rai
+cache/whisper_base_decoder/whisper_base_decoder.rai
+cache/yolo26s_pose_fp32/yolo26s_pose_fp32.rai
+cache/yolo26s_detect_fp32/yolo26s_detect_fp32.rai
+```
+
+The deployment `.venv` loads those `.rai` files. It does not compile them again. Drop `--skip-compile` only when `cache/` does not already contain them. Do not clone this repository again inside the workshop, and do not unpack the SDK into the repository.
+
+`bootstrap.sh`:
 
 1. apt build deps (ffmpeg, cmake, portaudio, libav*, …)
 2. **uv venv at `./.venv`** with `--system-site-packages` (so ROS 2 Jazzy's `rclpy` stays importable)
@@ -342,7 +346,8 @@ export RYZEN_AI_WHEELS=./ryzen_ai-1.7.1
 8. Model downloads: Llama-3.2-3B-Instruct Q4_K_M GGUF, AMD NPU-optimized Whisper-base ONNX. YOLO ONNX must be exported manually — see "Export the YOLO models" below.
 9. Installs ROS2 Jazzy if it doesn't exist
 
-Flags: `--skip-apt`, `--skip-llama`, `--skip-models`, `--cpu-only` (dev machine without ROCm/NPU).
+Flags: `--skip-apt`, `--skip-llama`, `--skip-models`, `--skip-compile`,
+`--cpu-only` (dev machine without ROCm/NPU). With an existing `cache/`, keep `--skip-compile`.
 
 > **Note:** `meta-llama/Llama-3.2-3B-Instruct` is gated; the script downloads the community Q4_K_M GGUF and prints a warning with manual instructions if the download requires authentication (`hf auth login`).
 
@@ -353,46 +358,39 @@ and export the models as part of setup:
 
 ```bash
 source .venv/bin/activate
-pip install ultralytics
+uv pip install ultralytics
 python scripts/export_yolo26s_pose.py
 python scripts/export_yolo26s_detect.py
-```
-
-Then compile them for the NPU (see the first-run NPU compile section below).
-
-### First-run NPU compile (two-venv workflow)
-
-NPU models must be **compiled** once before the deployment runtime can run them. Compilation needs the **full** Ryzen AI SDK (the AIE/vaiml compiler); the lightweight `voe` runtime in the pipeline's `.venv` can only *run* already-compiled models. Attempting to compile from the deployment venv fails with *"Model compilation is not supported in a deployment only installation"*.
-
-The compiled artifacts are keyed by `cache_dir` + `cache_key`, so they are portable: compile once in the SDK venv, then run forever from `.venv`.
-
-**1. Place the SDK in the repo root.** Put the Ryzen AI 1.7.1 wheel directory (the one containing `install_ryzen_ai.sh`) at the repo root as `ryzen_ai-1.7.1/`.
-
-**2. Compile.** `bootstrap.sh` installs the full SDK compiler into the repo at `./ryzenai-compile/` and compiles **whisper, yolo-pose, and yolo-detect** into `cache/` automatically. It also installs the `flexmlrt` runtime into `.venv` (needed to *run* compiled models). Just run:
-
-```bash
-sudo apt install -y linux-libc-dev zip
-[ -d /usr/include/asm ] || sudo ln -s /usr/include/asm-generic /usr/include/asm
-./bootstrap.sh --skip-apt --skip-llama --skip-models   # installs SDK, compiles NPU models
-```
-
-(Needs ~50 GB free for the SDK; the compiler venv lands at `./ryzenai-compile/` and is git-ignored.) Or compile manually any time:
-
-```bash
-source ./ryzenai-compile/bin/activate
-python scripts/compile_npu_models.py           # all; or --only whisper / yolo / yolo_pose / yolo_detect
 deactivate
 ```
 
-If the SDK wheels aren't present, bootstrap prints the steps and continues (the pipeline still runs llama on the iGPU; set `whisper.device` / `yolo_pose.device` / `yolo_detect.device` to `cpu` to run those without the NPU until compiled).
+Skip this export when `cache/yolo26s_pose_fp32/yolo26s_pose_fp32.rai` and `cache/yolo26s_detect_fp32/yolo26s_detect_fp32.rai` are already present.
 
-**3. Run from the deployment venv as normal** — it loads the cache, no SDK:
+### NPU cache
+
+The compiled VAIML artifacts live in `cache/` and are reused by cache key. `./scripts/validate_setup.sh` checks that the four `.rai` files above are present and does not compile over them. `./scripts/validate_setup.sh --full` repeats bootstrap with `--skip-compile`, then loads the existing Whisper cache.
+
+Compile only a cache key that has no `.rai` file yet:
+
+```bash
+export RYZEN_AI_WHEELS=~/ryzen_ai-1.8.0
+scripts/compile_npu_models.sh --only yolo_pose
+```
+
+Ryzen AI 1.8.0's `venv/bin/activate` puts `voe/lib` ahead of the installed XRT and omits Peano. The local correction is `$RYZEN_AI_WHEELS/fix_activate.sh`. It stays with the SDK install and is not part of this repository. The compile wrapper sources it after activate.
+
+**Run from the deployment venv** — Python packages come from `.venv`, compiled models come from `cache/`, and native runtime libraries come from the Ryzen AI install:
 
 ```bash
 source .venv/bin/activate
 source scripts/ryzen_ai_env.sh
-python -m vla_pipeline.audio.whisper_npu --input mic    # NPU, no recompile
+python scripts/verify_npu_stack.py --preflight
+python -m vla_pipeline.audio.whisper_npu --input speech.wav --device npu
 ```
+
+`config/pipeline.yaml` defaults Whisper to CPU to preserve NPU capacity for
+YOLO. Pass `--device npu` for this component test. In a remote SSH/Cursor
+session, use a WAV file; `--input mic` records the remote host's microphone.
 
 ### Robot prerequisites (hardware runs only)
 
@@ -556,6 +554,6 @@ All tunables live in `config/pipeline.yaml`:
 - **llama-server segfaults during "warming up the model"** — a gfx1151 ROCm kernel-dispatch issue. The pipeline sets `HSA_OVERRIDE_GFX_VERSION` automatically; if it persists, set `llm.no_warmup: true`.
 - **Arm doesn't move** — verify `motor_port` permissions and that your calibration JSON matches `robot_id`.
 - **Gripper trips `Overload error` on shutdown** — usually a side effect of an abnormal exit while the arm was parking; once the run exits cleanly it goes away. If it recurs, power-cycle the servo bus to clear the overload latch before the next run.
-- **Voice latency feels high / onsets clipped** — `pip install webrtcvad` for the better VAD backend; tune `audio.vad.hangover_s` and `pre_roll_s`.
+- **Voice latency feels high / onsets clipped** — `uv pip install webrtcvad` for the better VAD backend; tune `audio.vad.hangover_s` and `pre_roll_s`.
 - **Gripper drops thin objects** — raise `grip.stall_grace_s` and/or lower `grip.load_threshold`; verify effort feedback with `python -m vla_pipeline.robot.arm_interface --dry-run` (prints whether the gripper load register is readable).
 - **Arm camera image is sideways** — set `cameras.arm.rotate` (0/90/180/270) to match the end-effector mounting.
