@@ -331,25 +331,22 @@ source ~/ryzen_ai-1.8.0/venv/bin/activate
 source /opt/xilinx/xrt/setup.sh
 ```
 
-Then clone this repository once and bootstrap the workshop:
+Then clone this repository once and build the workshop. The NPU compile cache is not in git. `bootstrap.sh` builds it on this machine after the YOLO models have been exported:
 
 ```bash
 git clone https://github.com/amd/embedded-x86-ai
 export RYZEN_AI_WHEELS=~/ryzen_ai-1.8.0
 cd embedded-x86-ai/workshops/vvla-pipeline
 ./bootstrap.sh --skip-compile
+source .venv/bin/activate
+pip install ultralytics
+python scripts/export_yolo26s_pose.py
+python scripts/export_yolo26s_detect.py
+deactivate
+./bootstrap.sh --skip-apt --skip-llama --skip-models
 ```
 
-`RYZEN_AI_WHEELS` is that existing installation. `bootstrap.sh` installs the runtime wheels from it. `--skip-compile` keeps the VAIML caches already in `cache/`:
-
-```text
-cache/whisper_base_encoder/whisper_base_encoder.rai
-cache/whisper_base_decoder/whisper_base_decoder.rai
-cache/yolo26s_pose_fp32/yolo26s_pose_fp32.rai
-cache/yolo26s_detect_fp32/yolo26s_detect_fp32.rai
-```
-
-The deployment `.venv` loads those `.rai` files. It does not compile them again. Drop `--skip-compile` only when `cache/` does not already contain them. Do not clone this repository again inside the workshop, and do not unpack the SDK into the repository.
+The first `bootstrap.sh` creates `.venv` and downloads the Whisper ONNX. `--skip-compile` is only for that pass, because the YOLO ONNX files do not exist yet. The second `bootstrap.sh` compiles Whisper, YOLO-pose, and YOLO-detect into `cache/`. Those `.rai` files stay on the machine. Do not clone this repository again inside the workshop, and do not unpack the SDK into the repository.
 
 `bootstrap.sh`:
 
@@ -364,32 +361,25 @@ The deployment `.venv` loads those `.rai` files. It does not compile them again.
 9. Installs ROS2 Jazzy if it doesn't exist
 
 Flags: `--skip-apt`, `--skip-llama`, `--skip-models`, `--skip-compile`,
-`--cpu-only` (dev machine without ROCm/NPU). With an existing `cache/`, keep `--skip-compile`.
+`--cpu-only` (dev machine without ROCm/NPU). `--skip-compile` skips the NPU build. The normal setup runs that build and writes `cache/`.
 
 > **Note:** `meta-llama/Llama-3.2-3B-Instruct` is gated; the script downloads the community Q4_K_M GGUF and prints a warning with manual instructions if the download requires authentication (`hf auth login`).
 
-### Export the YOLO models
-
-The workshop runs YOLO pose and object detection on the NPU. Install ultralytics
-and export the models as part of setup:
-
-```bash
-source .venv/bin/activate
-pip install ultralytics
-python scripts/export_yolo26s_pose.py
-python scripts/export_yolo26s_detect.py
-deactivate
-```
-
-Skip this export when `cache/yolo26s_pose_fp32/yolo26s_pose_fp32.rai` and `cache/yolo26s_detect_fp32/yolo26s_detect_fp32.rai` are already present.
-
 ### NPU cache
 
-The compiled VAIML artifacts live in `cache/` and are reused by cache key. `./scripts/validate_setup.sh` checks that the four `.rai` files above are present and does not compile over them. `./scripts/validate_setup.sh --full` repeats bootstrap with `--skip-compile`, then loads the existing Whisper cache.
+`cache/` is gitignored. The second `bootstrap.sh` above builds it:
 
-Compile only a cache key that has no `.rai` file yet:
+```text
+cache/whisper_base_encoder/whisper_base_encoder.rai
+cache/whisper_base_decoder/whisper_base_decoder.rai
+cache/yolo26s_pose_fp32/yolo26s_pose_fp32.rai
+cache/yolo26s_detect_fp32/yolo26s_detect_fp32.rai
+```
+
+Rebuild one model by removing its directory and compiling that family again:
 
 ```bash
+rm -rf cache/yolo26s_pose_fp32
 export RYZEN_AI_WHEELS=~/ryzen_ai-1.8.0
 scripts/compile_npu_models.sh --only yolo_pose
 ```
