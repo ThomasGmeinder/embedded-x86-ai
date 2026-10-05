@@ -22,7 +22,7 @@ Tutorials, demos, workshops, and enablement material for AI development with ROC
 | [vision-kernels-rocm](workshops/vision-kernels-rocm/) | Advancing AI 2026 | Write custom HIP/ROCm vision kernels feeding a simulated robot arm (iGPU) |
 | [ryzen-ai-always-on](workshops/ryzen-ai-always-on/) | Advancing AI 2026 | Always-on inference on the Ryzen AI NPU — YOLO26 pose and pinch-to-teleop of a simulated SO-101 arm (MuJoCo) |
 
-For the VVLA workshop, install Ryzen AI 1.8.0 outside this repository by following the [Linux installation instructions](https://ryzenai.docs.amd.com/en/latest/linux.html). From `~/ryzen_ai-1.8.0`, run `./install_ryzen_ai.sh -a yes -p $PWD/venv`. The workshop README then builds the NPU cache locally. That cache is not stored in git.
+For the VVLA workshop, follow the [workshop README](workshops/vvla-pipeline/).
 
 ## Issues and Support
 

@@ -69,7 +69,7 @@ LLAMA_GGUF_FILE="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
 LLAMA_OUT_DIR="${MODELS_DIR}/llama-3.2-3b"
 # Installed Ryzen AI directory (wheels plus venv/). Keep it outside this
 # repository. Set before running, e.g.:
-#   export RYZEN_AI_WHEELS=$HOME/ryzen_ai-1.8.0
+#   export RYZEN_AI_WHEELS=$HOME/ryzen_ai-1.7.1
 # bootstrap uses $RYZEN_AI_WHEELS/venv when that interpreter exists.
 RYZEN_AI_WHEELS="${RYZEN_AI_WHEELS:-}"
 if [[ -z "$RYZEN_AI_WHEELS" ]]; then
@@ -637,13 +637,13 @@ cat <<EOF
 
      source /opt/ros/jazzy/setup.bash      # if using the ROS 2 transport
      source .venv/bin/activate
-     source scripts/ryzen_ai_env.sh        # NPU: XRT-first runtime environment
+     source scripts/ryzen_ai_env.sh        # NPU runtime environment
 
  Component tests (each piece is independently verifiable):
 
      python -m vla_pipeline.utils.resource_monitor
      ./workshop/launch_monitor.sh                 # always-on-top CPU%/GPU%/NPU inf/s HUD (open/close anytime)
-     python -m vla_pipeline.audio.whisper_npu --input speech.wav --device npu
+     python -m vla_pipeline.audio.whisper_npu --input /tmp/speech.wav --device npu
      python -m vla_pipeline.llm.llama_intent --selftest
      python -m vla_pipeline.vision.yolo_pose_npu
 

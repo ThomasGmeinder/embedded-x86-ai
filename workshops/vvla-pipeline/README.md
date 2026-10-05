@@ -314,28 +314,22 @@ strix-vla-pipeline/
 ```
 
 ## Installation
-Install Ubuntu 24.04.4. Install Ryzen AI 1.8.0 once, outside this repository, by following the [Linux installation instructions](https://ryzenai.docs.amd.com/en/latest/linux.html). Unpack the installer into `~/ryzen_ai-1.8.0` and create its virtual environment inside that directory:
+Install Ubuntu 24.04.4. Install Ryzen AI 1.7.1 once, outside this repository. Unpack the installer into `~/ryzen_ai-1.7.1` and create its virtual environment inside that directory:
 
 ```bash
-mkdir -p ~/ryzen_ai-1.8.0
-cp ~/Downloads/ryzen_ai-1.8.0.tgz ~/ryzen_ai-1.8.0/
-cd ~/ryzen_ai-1.8.0
-tar -xvzf ryzen_ai-1.8.0.tgz
+mkdir -p ~/ryzen_ai-1.7.1
+cp ~/Downloads/ryzen_ai-1.7.1.tgz ~/ryzen_ai-1.7.1/
+cd ~/ryzen_ai-1.7.1
+tar -xvzf ryzen_ai-1.7.1.tgz
 ./install_ryzen_ai.sh -a yes -p $PWD/venv
-```
-
-`$PWD/venv` is `~/ryzen_ai-1.8.0/venv`. After that installer finishes, the same page says to activate this environment and then load XRT:
-
-```bash
-source ~/ryzen_ai-1.8.0/venv/bin/activate
 source /opt/xilinx/xrt/setup.sh
 ```
 
-Then clone this repository once and build the workshop. The NPU compile cache is not in git. `bootstrap.sh` builds it on this machine after the YOLO models have been exported:
+`$PWD/venv` is `~/ryzen_ai-1.7.1/venv`. Then clone this repository once. The NPU compile cache is not in git. A fresh clone exports the YOLO models, then compiles them:
 
 ```bash
 git clone https://github.com/amd/embedded-x86-ai
-export RYZEN_AI_WHEELS=~/ryzen_ai-1.8.0
+export RYZEN_AI_WHEELS=~/ryzen_ai-1.7.1
 cd embedded-x86-ai/workshops/vvla-pipeline
 ./bootstrap.sh --skip-compile
 source .venv/bin/activate
@@ -344,9 +338,18 @@ python scripts/export_yolo26s_pose.py
 python scripts/export_yolo26s_detect.py
 deactivate
 ./bootstrap.sh --skip-apt --skip-llama --skip-models
+source .venv/bin/activate
+source scripts/ryzen_ai_env.sh
 ```
 
 The first `bootstrap.sh` creates `.venv` and downloads the Whisper ONNX. `--skip-compile` is only for that pass, because the YOLO ONNX files do not exist yet. The second `bootstrap.sh` compiles Whisper, YOLO-pose, and YOLO-detect into `cache/`. Those `.rai` files stay on the machine. Do not clone this repository again inside the workshop, and do not unpack the SDK into the repository.
+
+When `cache/` already contains the `.rai` files, skip the export and the compile:
+
+```bash
+export RYZEN_AI_WHEELS=~/ryzen_ai-1.7.1
+./bootstrap.sh --skip-compile
+```
 
 `bootstrap.sh`:
 
@@ -361,7 +364,7 @@ The first `bootstrap.sh` creates `.venv` and downloads the Whisper ONNX. `--skip
 9. Installs ROS2 Jazzy if it doesn't exist
 
 Flags: `--skip-apt`, `--skip-llama`, `--skip-models`, `--skip-compile`,
-`--cpu-only` (dev machine without ROCm/NPU). `--skip-compile` skips the NPU build. The normal setup runs that build and writes `cache/`.
+`--cpu-only` (dev machine without ROCm/NPU). `--skip-compile` skips the NPU build. Use it on the first pass above, and again when `cache/*.rai` is already present. The compile pass omits `--skip-compile` and writes `cache/`.
 
 > **Note:** `meta-llama/Llama-3.2-3B-Instruct` is gated; the script downloads the community Q4_K_M GGUF and prints a warning with manual instructions if the download requires authentication (`hf auth login`).
 
@@ -380,19 +383,27 @@ Rebuild one model by removing its directory and compiling that family again:
 
 ```bash
 rm -rf cache/yolo26s_pose_fp32
-export RYZEN_AI_WHEELS=~/ryzen_ai-1.8.0
+export RYZEN_AI_WHEELS=~/ryzen_ai-1.7.1
 scripts/compile_npu_models.sh --only yolo_pose
 ```
 
-Ryzen AI 1.8.0's `venv/bin/activate` puts `voe/lib` ahead of the installed XRT and omits Peano. The local correction is `$RYZEN_AI_WHEELS/fix_activate.sh`. It stays with the SDK install and is not part of this repository. The compile wrapper sources it after activate.
+**Run from the deployment venv** — Python packages come from `.venv`, compiled models come from `cache/`, and native runtime libraries come from the Ryzen AI install.
 
-**Run from the deployment venv** — Python packages come from `.venv`, compiled models come from `cache/`, and native runtime libraries come from the Ryzen AI install:
+Download a short public sample (OpenAI Whisper's JFK clip) and convert it to 16 kHz mono WAV:
+
+```bash
+curl -fsSL -o /tmp/jfk.flac \
+  https://raw.githubusercontent.com/openai/whisper/main/tests/jfk.flac
+ffmpeg -y -i /tmp/jfk.flac -ar 16000 -ac 1 /tmp/speech.wav
+```
+
+Then:
 
 ```bash
 source .venv/bin/activate
 source scripts/ryzen_ai_env.sh
 python scripts/verify_npu_stack.py --preflight
-python -m vla_pipeline.audio.whisper_npu --input speech.wav --device npu
+python -m vla_pipeline.audio.whisper_npu --input /tmp/speech.wav --device npu
 ```
 
 `config/pipeline.yaml` defaults Whisper to CPU to preserve NPU capacity for
