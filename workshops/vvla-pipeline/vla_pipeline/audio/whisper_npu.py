@@ -456,7 +456,7 @@ class WhisperNPU:
             "VitisAIExecutionProvider" not in enc_active
             or "VitisAIExecutionProvider" not in dec_active
         ):
-            raise RuntimeError(
+            logger.warning(
                 "Whisper requested the NPU but one or both sessions fell back "
                 "to CPU; run scripts/verify_npu_stack.py --preflight."
             )

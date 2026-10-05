@@ -357,7 +357,7 @@ print("  xrt-smi       : %s" % (shutil.which("xrt-smi") or
 PYEOF
 
 # Registration alone does not prove the native EP can load XRT, firmware, and
-# a compiled model. Fail closed when any configured component requests NPU.
+# a compiled model. Warn when any configured component requests NPU and fails.
 NPU_CONFIGURED="$("$PY" - "${REPO_ROOT}/config/pipeline.yaml" <<'PYEOF'
 import sys, yaml
 cfg = yaml.safe_load(open(sys.argv[1]))
@@ -367,9 +367,10 @@ print("1" if any(str(cfg.get(s, {}).get("device", "cpu")).lower() == "npu"
 PYEOF
 )"
 if [ "$NPU_CONFIGURED" = "1" ]; then
-    say "Running fail-closed NPU hardware/cache preflight"
+    say "Running NPU hardware/cache preflight"
     "$PY" "${REPO_ROOT}/scripts/verify_npu_stack.py" --preflight ||
-        die "NPU preflight failed; fix the reported condition or select device: cpu"
+        printf '\033[1;33mWARNING:\033[0m %s\n' \
+            "NPU preflight failed; models configured for the NPU will run on CPU." >&2
 fi
 
 cat <<EOF

@@ -55,9 +55,8 @@ def build_session(
 
     Args:
         onnx_path: Path to the FP32 ONNX model.
-        device: ``"npu"`` or ``"cpu"``. NPU requests fail closed when VitisAI
-            is unavailable or fails to load. Select ``"cpu"`` explicitly for
-            machines without the Ryzen AI stack.
+        device: ``"npu"`` or ``"cpu"``. An NPU request falls back to CPU with
+            a warning when VitisAI is unavailable or fails to load.
         vitisai_config: VitisAI compiler pass configuration (JSON).
         cache_dir: NPU compile cache directory.
         cache_key: Unique cache key per model.
@@ -69,11 +68,13 @@ def build_session(
         )
 
     if device == "npu" and not npu_available():
-        raise RuntimeError(
+        logger.warning(
             "VitisAIExecutionProvider not available in this onnxruntime build - "
-            "install the Ryzen AI onnxruntime-vitisai wheel (see "
-            "bootstrap.sh / RYZEN_AI_WHEELS), or select device: cpu."
+            "running %s on CPU. Install the Ryzen AI onnxruntime-vitisai wheel "
+            "(see bootstrap.sh / RYZEN_AI_WHEELS) to use the NPU.",
+            onnx_path.name,
         )
+        device = "cpu"
 
     if device == "cpu":
         return ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
@@ -84,22 +85,33 @@ def build_session(
         "Building NPU session for %s (cache hit ~1s, first compile can take 30-60 min)",
         onnx_path.name,
     )
-    session = ort.InferenceSession(
-        str(onnx_path),
-        providers=["VitisAIExecutionProvider"],
-        provider_options=[
-            {
-                "config_file": str(resolve(vitisai_config)),
-                "cache_dir": str(cache),
-                "cache_key": cache_key,
-                "target": "VAIML",
-            }
-        ],
-    )
+    try:
+        session = ort.InferenceSession(
+            str(onnx_path),
+            providers=["VitisAIExecutionProvider"],
+            provider_options=[
+                {
+                    "config_file": str(resolve(vitisai_config)),
+                    "cache_dir": str(cache),
+                    "cache_key": cache_key,
+                    "target": "VAIML",
+                }
+            ],
+        )
+    except Exception as e:
+        logger.warning(
+            "VitisAI session for %s failed (%s) - running on CPU. "
+            "Run scripts/verify_npu_stack.py --preflight.",
+            onnx_path.name,
+            e,
+        )
+        return ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
     if "VitisAIExecutionProvider" not in session.get_providers():
-        raise RuntimeError(
-            f"VitisAI session for {onnx_path.name} fell back to "
-            f"{session.get_providers()}; check scripts/verify_npu_stack.py."
+        logger.warning(
+            "VitisAI session for %s fell back to %s - running on CPU. "
+            "Run scripts/verify_npu_stack.py --preflight.",
+            onnx_path.name,
+            session.get_providers(),
         )
     logger.info("%s active provider: %s", onnx_path.name, active_provider(session))
     return session

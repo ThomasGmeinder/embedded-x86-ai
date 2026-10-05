@@ -44,8 +44,7 @@ PY
 )"
 if [[ "$NPU_CONFIGURED" == "yes" ]]; then
   python scripts/verify_npu_stack.py --preflight || {
-    echo "NPU preflight failed; refusing silent CPU fallback." >&2
-    exit 1
+    echo "WARNING: NPU preflight failed; models configured for the NPU will run on CPU." >&2
   }
 fi
 
