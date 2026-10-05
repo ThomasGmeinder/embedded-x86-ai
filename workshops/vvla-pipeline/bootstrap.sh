@@ -341,7 +341,13 @@ if [[ -x "${VENV_DIR}/bin/python" ]]; then
     rm -rf "$VENV_DIR"
   fi
 fi
-uv venv --python "$SYS_PY" --system-site-packages --allow-existing "$VENV_DIR"
+# --seed installs pip into the venv. Without it, `source .venv/bin/activate`
+# leaves `pip` as /usr/bin/pip, and `pip install ultralytics` hits Debian's
+# externally-managed-environment error.
+uv venv --python "$SYS_PY" --system-site-packages --allow-existing --seed "$VENV_DIR"
+if [[ ! -x "${VENV_DIR}/bin/pip" ]]; then
+  uv pip install --python "${VENV_DIR}/bin/python" pip
+fi
 # Keep colcon (if this repo lands in a ROS workspace) out of the venv.
 touch "${VENV_DIR}/COLCON_IGNORE" "${VENV_DIR}/AMENT_IGNORE"
 # shellcheck disable=SC1091

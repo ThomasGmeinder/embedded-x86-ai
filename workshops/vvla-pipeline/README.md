@@ -358,7 +358,7 @@ and export the models as part of setup:
 
 ```bash
 source .venv/bin/activate
-uv pip install ultralytics
+pip install ultralytics
 python scripts/export_yolo26s_pose.py
 python scripts/export_yolo26s_detect.py
 deactivate
