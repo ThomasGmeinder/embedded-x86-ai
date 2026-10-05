@@ -314,7 +314,24 @@ strix-vla-pipeline/
 ```
 
 ## Installation
-Install Ubuntu 24.04.4 and install Ryzen AI once, outside this repository, so the directory contains the wheels and `venv/` from `install_ryzen_ai.sh`. Then:
+Install Ubuntu 24.04.4. Install Ryzen AI 1.8.0 once, outside this repository, by following the [Linux installation instructions](https://ryzenai.docs.amd.com/en/latest/linux.html). Unpack the installer into `~/ryzen_ai-1.8.0` and create its virtual environment inside that directory:
+
+```bash
+mkdir -p ~/ryzen_ai-1.8.0
+cp ~/Downloads/ryzen_ai-1.8.0.tgz ~/ryzen_ai-1.8.0/
+cd ~/ryzen_ai-1.8.0
+tar -xvzf ryzen_ai-1.8.0.tgz
+./install_ryzen_ai.sh -a yes -p $PWD/venv
+```
+
+`$PWD/venv` is `~/ryzen_ai-1.8.0/venv`. After that installer finishes, the same page says to activate this environment and then load XRT:
+
+```bash
+source ~/ryzen_ai-1.8.0/venv/bin/activate
+source /opt/xilinx/xrt/setup.sh
+```
+
+Then clone this repository once and bootstrap the workshop:
 
 ```bash
 git clone https://github.com/amd/embedded-x86-ai
