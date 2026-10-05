@@ -200,22 +200,6 @@ VAIML_KEYS=(
   yolo26s_detect_fp32
 )
 
-adopt_vaiml_caches() {
-  local key src dest nested
-  nested="$REPO_ROOT/aai-vla-pipeline/workshops/vvla-pipeline/cache"
-  for key in "${VAIML_KEYS[@]}"; do
-    dest="$REPO_ROOT/cache/$key/$key.rai"
-    src="$nested/$key/$key.rai"
-    if [[ ! -f "$dest" && -f "$src" ]]; then
-      mkdir -p "$REPO_ROOT/cache"
-      mv "$nested/$key" "$REPO_ROOT/cache/$key"
-      note "moved existing VAIML cache $key into cache/"
-    fi
-  done
-}
-
-adopt_vaiml_caches
-
 run_check "existing VAIML caches are reused" bash -c '
   set -euo pipefail
   root="$1"
