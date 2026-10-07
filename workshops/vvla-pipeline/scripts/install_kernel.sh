@@ -164,7 +164,7 @@ import json, os
 # moment the kernel process starts (kernelspec "env" replaces, so keep it tight).
 keys = [
     "LD_LIBRARY_PATH", "XLNX_VART_FIRMWARE", "HSA_OVERRIDE_GFX_VERSION",
-    "VIRTUAL_ENV",
+    "XILINX_XRT", "PATH", "VIRTUAL_ENV",
     # ROS 2 - present only when a setup.bash was actually sourced above.
     "AMENT_PREFIX_PATH", "AMENT_CURRENT_PREFIX", "COLCON_PREFIX_PATH",
     "CMAKE_PREFIX_PATH", "PKG_CONFIG_PATH", "PYTHONPATH",
@@ -326,12 +326,12 @@ try:
     npu = "VitisAIExecutionProvider" in provs
     print("  onnxruntime   : %s   providers: %s" % (ort.__version__, provs))
     if npu:
-        print("  NPU (VitisAI) : YES - vision will run on the NPU")
+        print("  NPU (VitisAI) : registered (hardware/cache preflight follows)")
     else:
-        print("  NPU (VitisAI) : NO - Ryzen AI wheel not in this venv; vision "
-              "falls back to CPU (see bootstrap.sh section 4c / RYZEN_AI_WHEELS)")
+        print("  NPU (VitisAI) : NO - Ryzen AI wheel not in this venv "
+              "(select CPU in config, or see bootstrap.sh / RYZEN_AI_WHEELS)")
 except ImportError:
-    print("  onnxruntime   : NOT INSTALLED - vision falls back to CPU/simulation")
+    print("  onnxruntime   : NOT INSTALLED")
 try:
     import torch
     ok = torch.cuda.is_available()
@@ -355,6 +355,23 @@ except ImportError:
 print("  xrt-smi       : %s" % (shutil.which("xrt-smi") or
       "not on PATH (NPU telemetry will be simulated in the resource view)"))
 PYEOF
+
+# Registration alone does not prove the native EP can load XRT, firmware, and
+# a compiled model. Warn when any configured component requests NPU and fails.
+NPU_CONFIGURED="$("$PY" - "${REPO_ROOT}/config/pipeline.yaml" <<'PYEOF'
+import sys, yaml
+cfg = yaml.safe_load(open(sys.argv[1]))
+sections = ("whisper", "yolo_pose", "yolo_detect")
+print("1" if any(str(cfg.get(s, {}).get("device", "cpu")).lower() == "npu"
+                 for s in sections) else "0")
+PYEOF
+)"
+if [ "$NPU_CONFIGURED" = "1" ]; then
+    say "Running NPU hardware/cache preflight"
+    "$PY" "${REPO_ROOT}/scripts/verify_npu_stack.py" --preflight ||
+        printf '\033[1;33mWARNING:\033[0m %s\n' \
+            "NPU preflight failed; models configured for the NPU will run on CPU." >&2
+fi
 
 cat <<EOF
 

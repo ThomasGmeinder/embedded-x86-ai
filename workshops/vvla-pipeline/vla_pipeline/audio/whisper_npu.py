@@ -420,7 +420,7 @@ class WhisperNPU:
         encoder_providers = build_provider_opts(enc_opts)
         decoder_providers = build_provider_opts(dec_opts)
         logger.info(
-            "Whisper providers - encoder: %s decoder: %s",
+            "Whisper requested providers - encoder: %s decoder: %s",
             encoder_providers,
             decoder_providers,
         )
@@ -445,6 +445,21 @@ class WhisperNPU:
             tokenizer_id=w.get("tokenizer") or _map_entry.get("tokenizer"),
             english_only=_map_entry.get("english_only", False),
         )
+        enc_active = self.model.encoder.get_providers()
+        dec_active = self.model.decoder.get_providers()
+        logger.info(
+            "Whisper active providers - encoder: %s decoder: %s",
+            enc_active,
+            dec_active,
+        )
+        if self.device == "npu" and (
+            "VitisAIExecutionProvider" not in enc_active
+            or "VitisAIExecutionProvider" not in dec_active
+        ):
+            logger.warning(
+                "Whisper requested the NPU but one or both sessions fell back "
+                "to CPU; run scripts/verify_npu_stack.py --preflight."
+            )
 
     # ------------------------------------------------------------------
 
@@ -582,15 +597,22 @@ class WhisperNPU:
 
 
 def _load_wav(path: str) -> np.ndarray:
-    """Load a WAV file and resample it to SAMPLE_RATE if needed."""
-    import torchaudio
+    """Load a WAV file and resample it to SAMPLE_RATE if needed.
 
-    waveform, sr = torchaudio.load(path)
-    if sr != SAMPLE_RATE:
-        waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=SAMPLE_RATE)(
-            waveform
-        )
-    return waveform.squeeze(0).numpy()
+    soundfile is already a workshop dependency. torchaudio.load() in current
+    torchaudio builds requires the separate torchcodec package, which this
+    environment does not install.
+    """
+    import soundfile as sf
+
+    audio, sr = sf.read(path, dtype="float32", always_2d=True)
+    audio = audio.mean(axis=1)
+    if sr != SAMPLE_RATE and len(audio):
+        new_len = int(round(len(audio) * SAMPLE_RATE / sr))
+        src_x = np.linspace(0.0, 1.0, num=len(audio), endpoint=False)
+        dst_x = np.linspace(0.0, 1.0, num=new_len, endpoint=False)
+        audio = np.interp(dst_x, src_x, audio).astype(np.float32)
+    return audio
 
 
 def _clear_meter_line() -> None:

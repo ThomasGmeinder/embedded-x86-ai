@@ -9,8 +9,8 @@
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-source /opt/ros/jazzy/setup.bash      # if using the ROS 2 transport
+[[ -f /opt/ros/jazzy/setup.bash ]] && source /opt/ros/jazzy/setup.bash
 source "$HERE/.venv/bin/activate"
-source "$HERE/scripts/ryzen_ai_env.sh"        # NPU: puts voe/lib on LD_LIBRARY_PATH
+source "$HERE/scripts/ryzen_ai_env.sh"  # XRT-first NPU runtime environment
 
 #"$HERE/workshop/launch_monitor.sh" &

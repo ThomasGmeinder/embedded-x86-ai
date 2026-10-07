@@ -12,7 +12,7 @@
 #
 # Target system: AMD Ryzen AI APU (arch auto-detected - e.g. Strix Point /
 #                Radeon 890M = gfx1150, Strix Halo = gfx1151) · Ubuntu 24.04
-#                ROCm 7.2.4 (installed if absent) · Ryzen AI SW 1.7.1 (XDNA2
+#                ROCm 7.2.4 (installed if absent) · Ryzen AI SW (XDNA2
 #                NPU) · ROS 2 Jazzy (installed if absent)
 #
 # What it does:
@@ -67,18 +67,19 @@ TORCHAUDIO_SPEC='torchaudio==2.11.0+rocm7.13.0'
 LLAMA_GGUF_REPO="bartowski/Llama-3.2-3B-Instruct-GGUF"
 LLAMA_GGUF_FILE="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
 LLAMA_OUT_DIR="${MODELS_DIR}/llama-3.2-3b"
-# Ryzen AI SW 1.7.1: directory containing (or whose subtree contains) the Linux
-# onnxruntime-vitisai wheels. If unset, auto-detects ./ryzen_ai* in the repo root.
-# Set before running, e.g.:  export RYZEN_AI_WHEELS=/opt/ryzen_ai-1.7.1/wheels
+# Installed Ryzen AI directory (wheels plus venv/). Keep it outside this
+# repository. Set before running, e.g.:
+#   export RYZEN_AI_WHEELS=$HOME/ryzen_ai-1.7.1
+# bootstrap uses $RYZEN_AI_WHEELS/venv when that interpreter exists.
 RYZEN_AI_WHEELS="${RYZEN_AI_WHEELS:-}"
 if [[ -z "$RYZEN_AI_WHEELS" ]]; then
-  for cand in "${REPO_ROOT}"/ryzen_ai*; do
+  for cand in "$HOME"/ryzen_ai* /opt/ryzen_ai*; do
     [[ -d "$cand" ]] && RYZEN_AI_WHEELS="$cand" && break
   done
 fi
-# Resolve to an absolute path - the script changes directories later.
+# Resolve symlinks: GNU find does not follow a symlink used as its start path.
 if [[ -n "$RYZEN_AI_WHEELS" && -d "$RYZEN_AI_WHEELS" ]]; then
-  RYZEN_AI_WHEELS="$(cd "$RYZEN_AI_WHEELS" && pwd)"
+  RYZEN_AI_WHEELS="$(cd "$RYZEN_AI_WHEELS" && pwd -P)"
 fi
 
 SKIP_APT=0; SKIP_LLAMA=0; SKIP_MODELS=0; CPU_ONLY=0; SKIP_COMPILE=0
@@ -93,17 +94,21 @@ for arg in "$@"; do
   esac
 done
 
-# Full Ryzen AI SDK venv used to COMPILE NPU models (whisper + yolo pose/detect). The
-# deployment .venv can only RUN precompiled models. This venv is installed at
-# the repo root (./ryzenai-compile) by bootstrap's compile step, using the
-# install_ryzen_ai.sh shipped in the SDK wheel directory (./ryzen_ai*).
-RYZEN_AI_COMPILE_VENV="${RYZEN_AI_COMPILE_VENV:-${REPO_ROOT}/ryzenai-compile}"
-# Locate the SDK wheel dir (contains install_ryzen_ai.sh) in the repo root.
-RYZEN_AI_SDK_DIR="${RYZEN_AI_SDK_DIR:-}"
-if [[ -z "$RYZEN_AI_SDK_DIR" ]]; then
-  for cand in "${REPO_ROOT}"/ryzen_ai*; do
-    [[ -f "${cand}/install_ryzen_ai.sh" ]] && RYZEN_AI_SDK_DIR="$cand" && break
+# Full SDK venv used only to compile models. bootstrap never installs this
+# multi-GB SDK into the repository. RYZEN_AI_VENV is also consumed by the
+# deployment runtime for native libraries not shipped by the light wheels.
+RYZEN_AI_VENV="${RYZEN_AI_VENV:-${RYZEN_AI_COMPILE_VENV:-}}"
+if [[ -z "$RYZEN_AI_VENV" && -n "$RYZEN_AI_WHEELS" && -x "${RYZEN_AI_WHEELS}/venv/bin/python" ]]; then
+  RYZEN_AI_VENV="${RYZEN_AI_WHEELS}/venv"
+fi
+if [[ -z "$RYZEN_AI_VENV" ]]; then
+  for cand in "$HOME"/ryzen_ai*/venv /opt/ryzen_ai*/venv; do
+    [[ -x "${cand}/bin/python" ]] && RYZEN_AI_VENV="$cand" && break
   done
+fi
+if [[ -n "$RYZEN_AI_VENV" && -d "$RYZEN_AI_VENV" ]]; then
+  RYZEN_AI_VENV="$(cd "$RYZEN_AI_VENV" && pwd -P)"
+  export RYZEN_AI_VENV
 fi
 
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -141,7 +146,9 @@ if [[ "$CPU_ONLY" -eq 0 ]]; then
     warn "NPU device /dev/accel/accel0 not found - XDNA driver / Ryzen AI SW 1.7.1 may not be installed. NPU components will fall back to CPU."
   fi
   if [[ -z "$RYZEN_AI_WHEELS" ]]; then
-    warn "RYZEN_AI_WHEELS not set - the VitisAI onnxruntime wheel will NOT be installed; stock onnxruntime (CPU EP) is used instead. Set RYZEN_AI_WHEELS to the Ryzen AI 1.7.1 wheel directory and rerun to enable the NPU."
+    warn "RYZEN_AI_WHEELS not set - stock onnxruntime (CPU EP) will be installed. Set it to the external Ryzen AI SDK directory to enable the NPU."
+  elif [[ ! -d "$RYZEN_AI_WHEELS" ]]; then
+    die "RYZEN_AI_WHEELS does not exist: $RYZEN_AI_WHEELS"
   fi
 fi
 # (ROS 2 Jazzy presence is handled in section 1d - installed if absent.)
@@ -334,7 +341,13 @@ if [[ -x "${VENV_DIR}/bin/python" ]]; then
     rm -rf "$VENV_DIR"
   fi
 fi
-uv venv --python "$SYS_PY" --system-site-packages --allow-existing "$VENV_DIR"
+# --seed installs pip into the venv. Without it, `source .venv/bin/activate`
+# leaves `pip` as /usr/bin/pip, and `pip install ultralytics` hits Debian's
+# externally-managed-environment error.
+uv venv --python "$SYS_PY" --system-site-packages --allow-existing --seed "$VENV_DIR"
+if [[ ! -x "${VENV_DIR}/bin/pip" ]]; then
+  uv pip install --python "${VENV_DIR}/bin/python" pip
+fi
 # Keep colcon (if this repo lands in a ROS workspace) out of the venv.
 touch "${VENV_DIR}/COLCON_IGNORE" "${VENV_DIR}/AMENT_IGNORE"
 # shellcheck disable=SC1091
@@ -463,32 +476,26 @@ esac
 # site-packages/onnxruntime directory, so a leftover ROCm/stock build shadows
 # or corrupts the VitisAI one. This runs after every other pip action so
 # nothing can clobber the result.
+EXPECT_NPU=0
 if [[ "$CPU_ONLY" -eq 0 && -n "$RYZEN_AI_WHEELS" && -d "$RYZEN_AI_WHEELS" ]]; then
+  EXPECT_NPU=1
   log "Installing Ryzen AI onnxruntime (VitisAI EP) from ${RYZEN_AI_WHEELS}"
-  # Wheels may sit anywhere inside the SDK folder - search the whole subtree.
-  mapfile -t RAI_WHLS < <(find "$RYZEN_AI_WHEELS" -name "*.whl" \
-    \( -iname "*onnxruntime*vitisai*" -o -iname "*voe*" -o -iname "*vitis*" \) | sort -u)
-  if [[ ${#RAI_WHLS[@]} -eq 0 ]]; then
-    # Fall back to every wheel found in the subtree.
-    mapfile -t RAI_WHLS < <(find "$RYZEN_AI_WHEELS" -name "*.whl" | sort -u)
-  fi
-  if [[ ${#RAI_WHLS[@]} -gt 0 ]]; then
-    printf '  %s\n' "${RAI_WHLS[@]}"
-    uv pip uninstall onnxruntime onnxruntime-rocm onnxruntime-gpu onnxruntime-vitisai voe || true
-    uv pip install "${RAI_WHLS[@]}" \
-      || warn "Could not install Ryzen AI wheels from ${RYZEN_AI_WHEELS}"
-  else
-    warn "No .whl files found anywhere under ${RYZEN_AI_WHEELS} - VitisAI EP not installed."
-  fi
+  ORT_WHL="$(find -L "$RYZEN_AI_WHEELS" -type f -iname '*onnxruntime*vitisai*.whl' | sort | head -1)"
+  VOE_WHL="$(find -L "$RYZEN_AI_WHEELS" -type f -iname 'voe-*.whl' | sort | head -1)"
+  FLEXMLRT_WHL="$(find -L "$RYZEN_AI_WHEELS" -type f -iname 'flexmlrt-*.whl' | sort | head -1)"
+  [[ -n "$ORT_WHL" ]] || die "No onnxruntime-vitisai wheel found under $RYZEN_AI_WHEELS"
+  [[ -n "$VOE_WHL" ]] || die "No voe wheel found under $RYZEN_AI_WHEELS"
+  [[ -n "$FLEXMLRT_WHL" ]] || die "No flexmlrt wheel found under $RYZEN_AI_WHEELS"
+  printf '  %s\n' "$ORT_WHL" "$VOE_WHL" "$FLEXMLRT_WHL"
+  uv pip uninstall onnxruntime onnxruntime-rocm onnxruntime-gpu \
+                   onnxruntime-vitisai voe flexmlrt || true
+  uv pip install 'numpy<2' "$ORT_WHL" "$VOE_WHL" "$FLEXMLRT_WHL" \
+    || die "Could not install Ryzen AI runtime wheels from ${RYZEN_AI_WHEELS}"
 else
-  # No SDK (or --cpu-only): make sure the ROCm build isn't what's installed.
-  if python -c 'import onnxruntime' 2>/dev/null && \
-     uv pip list 2>/dev/null | grep -qi 'onnxruntime-rocm'; then
-    log "Replacing onnxruntime-rocm with stock CPU onnxruntime (ROCm is for llama.cpp only)"
-    uv pip uninstall onnxruntime onnxruntime-rocm onnxruntime-gpu || true
-    uv pip install onnxruntime \
-      || warn "Could not install stock onnxruntime - imports may fail."
-  fi
+  log "Installing stock CPU onnxruntime (no Ryzen AI wheels requested)"
+  uv pip uninstall onnxruntime onnxruntime-rocm onnxruntime-gpu \
+                   onnxruntime-vitisai voe flexmlrt || true
+  uv pip install onnxruntime || die "Could not install stock CPU onnxruntime."
 fi
 
 # -----------------------------------------------------------------------------
@@ -545,58 +552,19 @@ fi
 # 5b. Compile NPU models (whisper + yolo pose/detect) using the full Ryzen AI SDK venv
 # -----------------------------------------------------------------------------
 # The deployment .venv can RUN precompiled NPU models but cannot COMPILE them.
-# Compilation needs the full SDK venv. bootstrap installs it at the repo root
-# (./ryzenai-compile) from the SDK wheel dir (./ryzen_ai*), then compiles every
-# exported model into cache/. If the SDK wheels aren't present it prints the
-# steps and continues (the pipeline still runs llama on the iGPU and can fall
-# back to device: cpu for whisper/yolo).
+# Compilation uses an externally installed full SDK venv. bootstrap never
+# copies the multi-GB SDK into this repository.
 if [[ "$SKIP_COMPILE" -eq 0 && "$CPU_ONLY" -eq 0 ]]; then
-  # 1) Install the full SDK venv into the repo root if it isn't there yet.
-  if [[ ! -x "${RYZEN_AI_COMPILE_VENV}/bin/python" ]]; then
-    if [[ -n "$RYZEN_AI_SDK_DIR" && -f "${RYZEN_AI_SDK_DIR}/install_ryzen_ai.sh" ]]; then
-      log "Installing full Ryzen AI SDK (compiler) into ${RYZEN_AI_COMPILE_VENV}"
-      # install_ryzen_ai.sh must run from the wheel dir; it refuses an existing
-      # target, so we point it at our (absent) repo-root path.
-      ( cd "$RYZEN_AI_SDK_DIR" && \
-        bash ./install_ryzen_ai.sh -a yes -p "$RYZEN_AI_COMPILE_VENV" -n ryzenai-compile ) \
-        || warn "SDK install failed - see output above. NPU compile will be skipped."
-    else
-      warn "Ryzen AI SDK wheel dir (./ryzen_ai*) not found - cannot install the compiler.
-       Place the SDK (with install_ryzen_ai.sh) in the repo root, then re-run
-       ./bootstrap.sh --skip-apt --skip-llama --skip-models"
-    fi
-  fi
-
-  # 2) Compile every exported model into cache/ using the SDK venv's python,
-  #    run against THIS repo so cache_dir/cache_key/configs match the runtime.
-  # Ensure the deployment venv is the active one (the SDK installer activates
-  # its own venv in a subshell; re-source ours so uv pip targets .venv).
-  # shellcheck disable=SC1091
-  source "${VENV_DIR}/bin/activate"
-  if [[ -x "${RYZEN_AI_COMPILE_VENV}/bin/python" ]]; then
-    log "Compiling NPU models (whisper + yolo pose + yolo detect) with ${RYZEN_AI_COMPILE_VENV}"
-    # compile_npu_models.py self-sets LD_LIBRARY_PATH from its own venv and
-    # re-execs, so the VitisAI EP loads correctly and a CPU fallback is treated
-    # as a hard error (no silent no-op "compile").
-    if PYTHONPATH="${REPO_ROOT}" "${RYZEN_AI_COMPILE_VENV}/bin/python" \
-         "${REPO_ROOT}/scripts/compile_npu_models.py"; then
-      log "NPU compile complete - artifacts in ${REPO_ROOT}/cache"
-      # The deployment .venv needs flexmlrt at runtime to load compiled models.
-      if [[ -n "$RYZEN_AI_SDK_DIR" ]]; then
-        FLEXMLRT_WHL=$(ls "${RYZEN_AI_SDK_DIR}"/flexmlrt*.whl 2>/dev/null | head -1 || true)
-        if [[ -n "$FLEXMLRT_WHL" ]]; then
-          log "Installing flexmlrt runtime into deployment .venv"
-          uv pip install "$FLEXMLRT_WHL" || warn "flexmlrt install failed - NPU models may not load at runtime."
-        fi
-      fi
-    else
-      warn "NPU compile failed. Retry with:
-       source ${RYZEN_AI_COMPILE_VENV}/bin/activate
-       cd ${REPO_ROOT} && python scripts/compile_npu_models.py"
-    fi
+  if [[ -n "$RYZEN_AI_VENV" && -x "${RYZEN_AI_VENV}/bin/python" ]]; then
+    log "Compiling available NPU models with external SDK venv ${RYZEN_AI_VENV}"
+    RYZEN_AI_VENV="$RYZEN_AI_VENV" "${REPO_ROOT}/scripts/compile_npu_models.sh" \
+      || die "NPU compile failed. Retry with RYZEN_AI_VENV=$RYZEN_AI_VENV scripts/compile_npu_models.sh"
+    log "NPU compile complete - artifacts in ${REPO_ROOT}/cache"
   else
-    warn "No compiler venv at ${RYZEN_AI_COMPILE_VENV} - skipping NPU model compilation.
-       Until compiled, set whisper.device / yolo_pose.device / yolo_detect.device to 'cpu' in config to run."
+    warn "No external Ryzen AI SDK venv found; skipping NPU compilation.
+       Install it outside the repo, for example:
+       ${RYZEN_AI_WHEELS:-/path/to/ryzen_ai}/install_ryzen_ai.sh -a yes -p \$HOME/ryzen_ai/venv
+       Then set RYZEN_AI_VENV and run scripts/compile_npu_models.sh."
   fi
 else
   [[ "$SKIP_COMPILE" -eq 1 ]] && log "Skipping NPU model compilation (--skip-compile)"
@@ -608,6 +576,7 @@ fi
 log "Verifying environment"
 # shellcheck disable=SC1091
 source "${REPO_ROOT}/scripts/ryzen_ai_env.sh"
+export EXPECT_NPU
 python - <<'PY'
 import importlib, sys
 
@@ -641,36 +610,9 @@ except Exception as e:
 import onnxruntime as ort
 eps = ort.get_available_providers()
 print(f"  onnxruntime EPs: {eps}")
-if "VitisAIExecutionProvider" not in eps:
-    print("  [warn] VitisAI EP absent - NPU components will run on CPU (set RYZEN_AI_WHEELS and rerun).")
-else:
-    # Registration != loadable. The native libs (voe/lib) must be on
-    # LD_LIBRARY_PATH or the EP fails at session creation and silently
-    # falls back to CPU. Probe with a tiny model to confirm it really loads.
-    import os, tempfile, numpy as np
-    try:
-        from onnx import helper, TensorProto
-        import onnx
-        X = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2])
-        Y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 2])
-        node = helper.make_node("Identity", ["x"], ["y"])
-        g = helper.make_graph([node], "probe", [X], [Y])
-        m = helper.make_model(g, opset_imports=[helper.make_opsetid("", 17)])
-        # VitisAI ORT supports up to IR v11; newer onnx defaults to v13 and the
-        # probe fails to load. Pin a compatible IR version.
-        m.ir_version = 10
-        f = os.path.join(tempfile.mkdtemp(), "probe.onnx")
-        onnx.save(m, f)
-        sess = ort.InferenceSession(f, providers=["VitisAIExecutionProvider", "CPUExecutionProvider"])
-        used = sess.get_providers()
-        if "VitisAIExecutionProvider" in used:
-            print("  [ok] VitisAI EP loads (NPU runtime libs resolved)")
-        else:
-            print(f"  [warn] VitisAI registered but did not load; active: {used}")
-    except Exception as e:
-        print(f"  [warn] VitisAI EP failed to initialize: {e}")
-        print("         → NPU libs likely missing from LD_LIBRARY_PATH "
-              "(scripts/ryzen_ai_env.sh should add voe/lib).")
+if "VitisAIExecutionProvider" not in eps and int(__import__("os").environ.get("EXPECT_NPU", "0")):
+    ok = False
+    print("  [MISSING] VitisAI EP absent although Ryzen AI wheels were requested.")
 
 try:
     import lerobot
@@ -681,6 +623,11 @@ except Exception as e:
 sys.exit(0 if ok else 1)
 PY
 
+if [[ "$EXPECT_NPU" -eq 1 ]]; then
+  EXPECT_NPU=1 python "${REPO_ROOT}/scripts/verify_npu_stack.py" --preflight \
+    || die "Ryzen AI NPU preflight failed; bootstrap is incomplete."
+fi
+
 cat <<EOF
 
 =============================================================================
@@ -690,13 +637,13 @@ cat <<EOF
 
      source /opt/ros/jazzy/setup.bash      # if using the ROS 2 transport
      source .venv/bin/activate
-     source scripts/ryzen_ai_env.sh        # NPU: puts voe/lib on LD_LIBRARY_PATH
+     source scripts/ryzen_ai_env.sh        # NPU runtime environment
 
  Component tests (each piece is independently verifiable):
 
      python -m vla_pipeline.utils.resource_monitor
      ./workshop/launch_monitor.sh                 # always-on-top CPU%/GPU%/NPU inf/s HUD (open/close anytime)
-     python -m vla_pipeline.audio.whisper_npu --input mic
+     python -m vla_pipeline.audio.whisper_npu --input /tmp/speech.wav --device npu
      python -m vla_pipeline.llm.llama_intent --selftest
      python -m vla_pipeline.vision.yolo_pose_npu
 

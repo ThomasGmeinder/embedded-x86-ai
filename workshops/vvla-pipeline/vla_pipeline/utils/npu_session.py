@@ -9,7 +9,7 @@
 
 All three NPU models (Whisper-base, YOLOv26s-pose, and YOLOv26s object
 detection) build their sessions through :func:`build_session` so the VitisAI
-compiler config, cache directory, and CPU fallback behavior live in exactly one
+compiler config, cache directory, and provider verification live in exactly one
 place.
 
 Notes for Ryzen AI SW 1.7.1 on Linux (Strix Halo / XDNA2):
@@ -37,6 +37,12 @@ def npu_available() -> bool:
     return "VitisAIExecutionProvider" in ort.get_available_providers()
 
 
+def active_provider(session: ort.InferenceSession) -> str:
+    """Return the highest-priority provider active on a session."""
+    providers = session.get_providers()
+    return providers[0] if providers else "none"
+
+
 def build_session(
     onnx_path: str | Path,
     device: str = "npu",
@@ -49,9 +55,8 @@ def build_session(
 
     Args:
         onnx_path: Path to the FP32 ONNX model.
-        device: ``"npu"`` or ``"cpu"``. ``"npu"`` silently falls back to CPU
-            (with a warning) when the VitisAI EP is not present, so every
-            component still runs on machines without the Ryzen AI stack.
+        device: ``"npu"`` or ``"cpu"``. An NPU request falls back to CPU with
+            a warning when VitisAI is unavailable or fails to load.
         vitisai_config: VitisAI compiler pass configuration (JSON).
         cache_dir: NPU compile cache directory.
         cache_key: Unique cache key per model.
@@ -65,8 +70,9 @@ def build_session(
     if device == "npu" and not npu_available():
         logger.warning(
             "VitisAIExecutionProvider not available in this onnxruntime build - "
-            "falling back to CPU. Install the Ryzen AI 1.7.1 onnxruntime wheel "
-            "(see bootstrap.sh / RYZEN_AI_WHEELS) for NPU execution."
+            "running %s on CPU. Install the Ryzen AI onnxruntime-vitisai wheel "
+            "(see bootstrap.sh / RYZEN_AI_WHEELS) to use the NPU.",
+            onnx_path.name,
         )
         device = "cpu"
 
@@ -79,15 +85,33 @@ def build_session(
         "Building NPU session for %s (cache hit ~1s, first compile can take 30-60 min)",
         onnx_path.name,
     )
-    return ort.InferenceSession(
-        str(onnx_path),
-        providers=["VitisAIExecutionProvider"],
-        provider_options=[
-            {
-                "config_file": str(resolve(vitisai_config)),
-                "cache_dir": str(cache),
-                "cache_key": cache_key,
-                "target": "VAIML",
-            }
-        ],
-    )
+    try:
+        session = ort.InferenceSession(
+            str(onnx_path),
+            providers=["VitisAIExecutionProvider"],
+            provider_options=[
+                {
+                    "config_file": str(resolve(vitisai_config)),
+                    "cache_dir": str(cache),
+                    "cache_key": cache_key,
+                    "target": "VAIML",
+                }
+            ],
+        )
+    except Exception as e:
+        logger.warning(
+            "VitisAI session for %s failed (%s) - running on CPU. "
+            "Run scripts/verify_npu_stack.py --preflight.",
+            onnx_path.name,
+            e,
+        )
+        return ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    if "VitisAIExecutionProvider" not in session.get_providers():
+        logger.warning(
+            "VitisAI session for %s fell back to %s - running on CPU. "
+            "Run scripts/verify_npu_stack.py --preflight.",
+            onnx_path.name,
+            session.get_providers(),
+        )
+    logger.info("%s active provider: %s", onnx_path.name, active_provider(session))
+    return session

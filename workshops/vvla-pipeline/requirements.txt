@@ -6,7 +6,11 @@ numpy<2                    # onnxruntime + AMD wheels are built against numpy 1.
 opencv-contrib-python>=4.10  # GUI-enabled (cv2.imshow); bootstrap.sh re-pins this LAST and strips any -headless variant that mediapipe/ultralytics/optimum drag in
 mediapipe==0.10.21   # last release with the legacy mp.solutions API (removed in 0.10.30+)
 onnx>=1.16,<1.18           # VitisAI ORT supports IR <= 11; onnx 1.18+ emits IR 13
-onnxruntime>=1.18          # replaced by the Ryzen AI VitisAI wheel when RYZEN_AI_WHEELS is set
+# Do not list the PyPI distribution "onnxruntime" here. The NPU wheel is
+# named onnxruntime-vitisai and unpacks into the same site-packages/onnxruntime
+# directory. Requiring "onnxruntime" makes `uv pip install -r requirements.txt`
+# install the stock wheel and overwrite the VitisAI build. bootstrap.sh installs
+# onnxruntime-vitisai itself (stock onnxruntime only for --cpu-only).
 transformers>=4.44
 soundfile>=0.13            # audio I/O (AMD ASR demo)
 # optimum / optimum-onnx are only needed for the fallback local export

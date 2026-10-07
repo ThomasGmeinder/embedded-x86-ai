@@ -34,6 +34,20 @@ source "${REPO_ROOT}/scripts/ryzen_ai_env.sh"
 export TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1   # SmolVLA/torch attention on ROCm
 export HSA_OVERRIDE_GFX_VERSION="${HSA_OVERRIDE_GFX_VERSION:-11.5.1}"  # gfx1151 ROCm dispatch fix
 
+NPU_CONFIGURED="$(python - <<'PY'
+from vla_pipeline.utils.config import load_config
+cfg = load_config()
+sections = ("whisper", "yolo_pose", "yolo_detect")
+print("yes" if any(str((cfg.get(s) or {}).get("device", "cpu")).lower() == "npu"
+                   for s in sections) else "no")
+PY
+)"
+if [[ "$NPU_CONFIGURED" == "yes" ]]; then
+  python scripts/verify_npu_stack.py --preflight || {
+    echo "WARNING: NPU preflight failed; models configured for the NPU will run on CPU." >&2
+  }
+fi
+
 USE_ROS2="$(python - <<'PY'
 from vla_pipeline.utils.config import load_config
 cfg = load_config()

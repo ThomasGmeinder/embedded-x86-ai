@@ -121,14 +121,15 @@ if ! "$PY" -c 'import numpy, sys; sys.exit(0 if numpy.__version__[0]=="1" else 1
   pip_install "numpy<2"
 fi
 
-# onnxruntime is installed ONLY if absent, so a Ryzen AI VitisAI build is
-# never overwritten by the stock CPU wheel.
+# ONNX Runtime is deliberately absent from this list. The NPU distribution is
+# named onnxruntime-vitisai but shares the same import tree as stock
+# onnxruntime; installing the stock wheel here would corrupt the NPU runtime.
+# bootstrap.sh installs exactly one ORT flavor.
 CORE=(
   "yaml:pyyaml>=6.0"
   "requests:requests>=2.31"
   "cv2:opencv-python>=4.10"
   "onnx:onnx>=1.16,<1.18"
-  "onnxruntime:onnxruntime>=1.18"
   "matplotlib:matplotlib>=3.7"
   "ipywidgets:ipywidgets>=8.1"
   "jupyter_ui_poll:jupyter-ui-poll>=0.2"
