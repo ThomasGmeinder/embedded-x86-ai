@@ -144,7 +144,7 @@ Llama is constrained by `config/intent.gbnf` so it can only ever emit `{"command
 | Ryzen AI SW | 1.7.1 (VitisAI ONNX Runtime EP) |
 | ROS 2 | Jazzy (optional — only for the ROS 2 transport) |
 | LeRobot | 0.5.2 (source install, `[feetech]`) |
-| PyTorch | 2.11.0+rocm7.13.0 from `repo.amd.com/rocm/whl/gfx1100` |
+| PyTorch | 2.11.0+rocm7.13.0 from `repo.amd.com/rocm/whl/<detected gfx>`. The PyPI wheel is not used; it downloads the NVIDIA CUDA stack. |
 | Robot | LeRobot SO-101 follower arm |
 
 ## Compute placement
@@ -351,8 +351,8 @@ export RYZEN_AI_WHEELS=~/ryzen_ai-1.7.1
 
 1. apt build deps (ffmpeg, cmake, portaudio, libav*, …)
 2. **uv venv at `./.venv`** with `--system-site-packages` (so ROS 2 Jazzy's `rclpy` stays importable)
-3. Python deps from `requirements.txt` (incl. optional `webrtcvad`)
-4. PyTorch `2.11.0+rocm7.13.0` from the AMD `gfx1100` wheel index
+3. PyTorch `2.11.0+rocm7.13.0` from the AMD wheel index for the detected GPU, installed before the other Python deps. The PyPI torch wheel is not installed: it downloads the NVIDIA CUDA stack (`nvidia-cublas`, `nvidia-cudnn-cu13`).
+4. Python deps from `requirements.txt` (incl. optional `webrtcvad`), with that torch build pinned so a later resolver cannot replace it
 5. Ryzen AI onnxruntime (VitisAI EP) from `$RYZEN_AI_WHEELS`
 6. LeRobot 0.5.2 `[feetech]` from source → `third_party/lerobot`
 7. llama.cpp HIP build (`-DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1100`, `llama-server`) → `third_party/llama.cpp`
