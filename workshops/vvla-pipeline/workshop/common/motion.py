@@ -391,11 +391,52 @@ class LeRobotArm(ArmClient):
             self._robot.disconnect()
 
 
+def sim_world(cfg: dict):
+    """The process-wide MuJoCo digital twin, set up for the workshop rig."""
+    from so101_sim import shared_world
+
+    sim = dict(cfg.get("sim") or {})
+    gm = dict(sim.get("gripper_map") or {})
+    gm.setdefault("closed_cal", GRIPPER_CLOSED_FLOOR)
+    sim["gripper_map"] = gm
+    return shared_world({"sim": sim}, rest_pose=REST_POSE)
+
+
+class SimArmClient(LeRobotArm):
+    """:class:`LeRobotArm` driving the MuJoCo digital twin (``robot.backend: sim``).
+
+    Only the LeRobot ``SO101Follower`` is replaced (by ``so101_sim.SimFollower``):
+    the slew clamp, direct-goal profile writes and effort probe all run as on
+    the rig, and like the rig it counts as a live arm for mimic limits.
+    """
+
+    def __init__(self, cfg: dict, world=None):
+        from so101_sim import SimFollower
+
+        r = cfg.get("robot", {})
+        max_relative_target = r.get("max_relative_target", 8.0)
+        self.world = world or sim_world(cfg)
+        self._robot = SimFollower(
+            self.world,
+            max_relative_target=max_relative_target,
+            robot_id=r.get("robot_id", "sim"),
+        )
+        self._robot.config.disable_torque_on_disconnect = False
+        self._robot.connect()
+        self._effort_register = False
+        logger.info("SO101 digital twin connected (MuJoCo)")
+        self._direct_goal = max_relative_target is None
+        if self._direct_goal:
+            self._set_motion_profile(speed=1000, acceleration=50)
+
+
 def make_arm_backend(cfg: dict, dry_run: bool = False) -> ArmClient:
-    """DryRunArm, or the real LeRobot serial arm per ``robot:`` config."""
+    """DryRunArm, the MuJoCo twin, or the real LeRobot serial arm per ``robot:`` config."""
     r = cfg.get("robot", {})
     if dry_run or not r.get("enable_motors", True):
         return DryRunArm()
+    if r.get("backend", "real") == "sim":
+        return SimArmClient(cfg)
     return LeRobotArm(r["motor_port"], r["robot_id"], r.get("max_relative_target", 8.0))
 
 

@@ -29,6 +29,7 @@ never as an automatic fallback:
     python app.py --synthetic            # explicitly skip the camera/hands
     python app.py --dry-run --synthetic --no-llm     # laptop mode, everything faked
     python app.py --dry-run --synthetic --headless --frames 60   # CI-style check
+    python app.py --digital-twin         # no robot hardware: MuJoCo twin of the arm
 
 The app also brings up the ROS 2 server nodes it needs (the arm + mount-camera
 publishers) as child processes and tears them down on exit - so you don't need
@@ -100,7 +101,9 @@ def _start_nodes(cfg, args):
     from ros.node_supervisor import NodeSupervisor
 
     print("-- starting ROS 2 server nodes --")
-    sup = NodeSupervisor(cfg, wanted)
+    sup = NodeSupervisor(
+        cfg, wanted, sim=args.digital_twin and not args.dry_run, config_path=args.config
+    )
     try:
         sup.start()
     except Exception as e:
@@ -146,7 +149,10 @@ def _build_arm(cfg, args):
             from common.motion import make_arm_backend
 
             arm = make_arm_backend(cfg)
-            print("arm: direct serial (sole bus owner!)")
+            if args.digital_twin:
+                print("arm: MuJoCo digital twin (in-process)")
+            else:
+                print("arm: direct serial (sole bus owner!)")
             return arm
         except Exception as e:
             _die(
@@ -282,6 +288,8 @@ def _mode_label(args) -> str:
         flags.append("--no-llm")
     if args.no_nodes:
         flags.append("--no-nodes")
+    if args.digital_twin:
+        flags.append("--digital-twin")
     if args.headless:
         flags.append("--headless")
     if args.frames:
@@ -397,6 +405,11 @@ def main() -> int:
     )
     ap.add_argument("--headless", action="store_true", help="no preview window")
     ap.add_argument(
+        "--digital-twin",
+        action="store_true",
+        help="drive the MuJoCo digital twin (arm + arm camera) instead of the rig",
+    )
+    ap.add_argument(
         "--frames",
         type=int,
         default=0,
@@ -418,6 +431,9 @@ def main() -> int:
     from common.config import PROJECT_ROOT, load_config
 
     cfg = load_config(args.config)
+    if args.digital_twin:
+        cfg.setdefault("robot", {})["backend"] = "sim"
+        cfg.setdefault("cameras", {}).setdefault("arm", {})["source"] = "sim"
 
     # Fail-soft on unfinished work: list the TODOs this run needs instead of
     # crashing on the first stub. Heavy imports come AFTER this, so a fresh
