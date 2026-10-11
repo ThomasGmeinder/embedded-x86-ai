@@ -269,6 +269,15 @@ def make_noise_gate(cfg: dict):
 # =============================================================================
 
 
+def apply_sim_overrides(cfg: dict) -> dict:
+    """Switch ``cfg`` to the digital twin: sim arm + sim arm camera, real mount camera."""
+    cfg.setdefault("robot", {})["backend"] = "sim"
+    cams = cfg.setdefault("cameras", {})
+    cams.setdefault("arm", {})["source"] = "sim"
+    cams.setdefault("mount", {}).setdefault("source", "device")
+    return cfg
+
+
 def build_context(cfg: dict, args) -> PipelineContext:
     """Build the :class:`PipelineContext`, wiring up the arm, cameras, and vision models.
 
@@ -333,9 +342,17 @@ def main() -> None:
         default=None,
         help="override the device for all ONNX models",
     )
+    parser.add_argument(
+        "--digital-twin",
+        action="store_true",
+        help="drive the MuJoCo digital twin instead of the real arm "
+        "(robot.backend=sim, arm camera rendered on the gripper)",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    if args.digital_twin:
+        apply_sim_overrides(cfg)
     ensure_dirs(cfg)
     ctx = build_context(cfg, args)
 

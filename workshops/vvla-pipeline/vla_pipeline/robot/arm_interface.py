@@ -706,6 +706,17 @@ class DirectArm(ArmClient):
             logger.info("Robot disconnected.")
 
 
+def make_bus_arm(cfg: dict) -> ArmClient:
+    """The bus-owning transport: the real Feetech bus, or the digital twin
+    when ``robot.backend: sim``."""
+    r = cfg["robot"]
+    if r.get("backend", "real") == "sim":
+        from vla_pipeline.robot.sim_arm import SimArmClient
+
+        return SimArmClient(cfg)
+    return DirectArm(r["motor_port"], r["robot_id"], r.get("max_relative_target", 8.0))
+
+
 def make_arm(cfg: dict) -> ArmClient:
     """Build the ArmClient described by ``cfg['robot']``."""
     r = cfg["robot"]
@@ -715,7 +726,7 @@ def make_arm(cfg: dict) -> ArmClient:
         from vla_pipeline.robot.robot_node import Ros2ArmClient
 
         return Ros2ArmClient(cfg)
-    return DirectArm(r["motor_port"], r["robot_id"], r.get("max_relative_target", 8.0))
+    return make_bus_arm(cfg)
 
 
 # =============================================================================

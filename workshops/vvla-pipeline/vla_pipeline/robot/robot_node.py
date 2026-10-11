@@ -112,7 +112,7 @@ def _joint_state(node, names, positions, effort=None) -> "JointState":
 class So101ServerNode(Node):
     """Owns the SO-101 Feetech bus; bridges it to ROS 2 topics."""
 
-    def __init__(self, cfg: dict, dry_run: bool = False):
+    def __init__(self, cfg: dict, dry_run: bool = False, arm: ArmClient | None = None):
         _require_ros2()
         super().__init__("so101_server_node")
         r = cfg["robot"]
@@ -128,9 +128,17 @@ class So101ServerNode(Node):
             "False",
         )
 
-        if dry_run or not r.get("enable_motors", True):
-            self._arm: ArmClient = DryRunArm(verbose=False)
+        if arm is not None:
+            self._arm: ArmClient = arm
+            self.get_logger().info(f"Bus transport injected: {type(arm).__name__}")
+        elif dry_run or not r.get("enable_motors", True):
+            self._arm = DryRunArm(verbose=False)
             self.get_logger().warn("Motors DISABLED - dry-run mode")
+        elif r.get("backend", "real") == "sim":
+            from vla_pipeline.robot.sim_arm import SimArmClient
+
+            self._arm = SimArmClient(cfg)
+            self.get_logger().info("Bus: MuJoCo digital twin (robot.backend=sim)")
         else:
             from vla_pipeline.robot.arm_interface import DirectArm, calibration_exists
 

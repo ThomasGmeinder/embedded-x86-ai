@@ -186,6 +186,35 @@ class Ros2Camera(CameraClient):
         self._node.destroy_node()
 
 
+class SimCameraClient(CameraClient):
+    """A camera rendered by the in-process MuJoCo digital twin (``source: sim``).
+
+    Shares the process-wide twin with ``SimArmClient`` so the wrist camera
+    moves with the simulated arm. Over ROS 2 (``use_ros2: true``) the twin's
+    node publishes the same frames on the normal topic instead.
+    """
+
+    def __init__(self, cfg: dict, role: str):
+        from so101_sim import SimCamera
+
+        from vla_pipeline.robot.sim_arm import sim_world
+
+        self.role = role
+        self._cam = SimCamera(sim_world(cfg), role, blocking=True)
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        """Next rendered frame (paced at the camera fps, like a V4L2 read)."""
+        return self._cam.read()
+
+    def ok(self) -> bool:
+        """Return True once the renderer has produced a frame."""
+        return self._cam.ok()
+
+    def close(self) -> None:
+        """Release this view of the twin's renderer."""
+        self._cam.release()
+
+
 def make_camera(cfg: dict, role: str) -> CameraClient:
     """Build the CameraClient for ``cameras.<role>`` from the pipeline config."""
     cams = cfg.get("cameras") or {}
@@ -201,6 +230,8 @@ def make_camera(cfg: dict, role: str) -> CameraClient:
         }
     if c.get("use_ros2", False):
         return Ros2Camera(role, c["topic"], stale_after_s=c.get("stale_after_s", 1.0))
+    if c.get("source", "device") == "sim":
+        return SimCameraClient(cfg, role)
     return DirectCamera(
         role,
         c.get("device", 0),
