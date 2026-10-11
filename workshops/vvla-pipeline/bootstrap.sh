@@ -591,6 +591,18 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# 4c2. SO-101 digital twin (run_pipeline.sh --digital-twin, app.py --digital-twin)
+# -----------------------------------------------------------------------------
+# Editable and --no-deps so the twin can't re-resolve numpy; its deps are
+# installed alongside numpy<2. The STL meshes are fetched (pinned + checksummed)
+# rather than committed.
+log "Installing the SO-101 digital twin (so101_sim, MuJoCo)"
+uv pip install 'mujoco>=3.1.3' 'PyOpenGL>=3.1' 'numpy<2' \
+  && uv pip install --no-deps -e "${REPO_ROOT}/so101_sim" \
+  && python -m so101_sim.assets \
+  || warn "Digital twin install incomplete - --digital-twin will not work. Retry: python -m so101_sim.assets"
+
+# -----------------------------------------------------------------------------
 # 4d. Enforce GUI-enabled OpenCV (LAST pip action, like onnxruntime)
 # -----------------------------------------------------------------------------
 # yolo_pose_npu.py and the mediapipe demo open windows via cv2.imshow(), which
