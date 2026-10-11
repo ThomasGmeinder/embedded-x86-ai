@@ -133,6 +133,8 @@ CORE=(
   "matplotlib:matplotlib>=3.7"
   "ipywidgets:ipywidgets>=8.1"
   "jupyter_ui_poll:jupyter-ui-poll>=0.2"
+  "mujoco:mujoco>=3.1.3"
+  "OpenGL:PyOpenGL>=3.1"
 )
 for entry in "${CORE[@]}"; do
   mod="${entry%%:*}"; spec="${entry#*:}"
@@ -142,6 +144,15 @@ for entry in "${CORE[@]}"; do
     pip_install "$spec"
   fi
 done
+
+# The SO-101 digital twin (03_integration/02_digital_twin.ipynb). --no-deps:
+# its deps are installed above, and pip must not touch the pinned numpy.
+if "$PY" -c 'import so101_sim' 2>/dev/null; then
+  printf '    have %-13s\n' "so101_sim"
+else
+  pip_install --no-deps -e "${REPO_ROOT}/so101_sim"
+fi
+"$PY" -m so101_sim.assets || warn "could not fetch the SO-101 meshes - the digital twin will not load"
 
 # ipykernel is handled separately (NOT in the presence-only loop above): it must
 # stay on the 6.x line. ipykernel 7.x removed Kernel.do_one_iteration(), which
