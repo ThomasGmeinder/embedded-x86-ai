@@ -1,0 +1,90 @@
+<mujoco model="so101 vvla digital twin">
+  <include file="so101.xml"/>
+
+  <statistic center="0.18 0 0.08" extent="0.55"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.35 0.35 0.35" specular="0.1 0.1 0.1"/>
+    <rgba haze="0.12 0.16 0.22 1"/>
+    <!-- offscreen buffer is resized at runtime to fit every tiled view -->
+    <global azimuth="150" elevation="-24" offwidth="1920" offheight="1440"/>
+    <quality shadowsize="2048"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.16 0.22 0.32" rgb2="0.02 0.03 0.05"
+      width="512" height="3072"/>
+    <texture type="2d" name="floor_tex" builtin="checker" mark="edge"
+      rgb1="0.18 0.22 0.28" rgb2="0.1 0.13 0.17" markrgb="0.6 0.6 0.6" width="300" height="300"/>
+    <texture type="2d" name="table_tex" builtin="flat" rgb1="0.55 0.45 0.33" rgb2="0.5 0.4 0.3"
+      mark="random" random="0.02" markrgb="0.45 0.36 0.26" width="512" height="512"/>
+    <material name="floor_mat" texture="floor_tex" texuniform="true" texrepeat="4 4" reflectance="0.1"/>
+    <material name="table_mat" texture="table_tex" texuniform="true" texrepeat="3 3" specular="0.2"/>
+    <material name="cube_mat" rgba="0.95 0.55 0.18 1" specular="0.4" shininess="0.5"/>
+    <material name="ball_mat" rgba="0.85 0.12 0.12 1" specular="0.5" shininess="0.6"/>
+    <material name="cup_mat" rgba="0.25 0.55 0.9 1" specular="0.4" shininess="0.5"/>
+    <material name="pen_mat" rgba="0.1 0.1 0.12 1" specular="0.6" shininess="0.8"/>
+    <material name="stand_mat" rgba="0.35 0.37 0.42 1" specular="0.2"/>
+  </asset>
+
+  <worldbody>
+    <light name="key" pos="0.3 -0.3 1.2" dir="-0.25 0.25 -1" directional="true" castshadow="true"/>
+    <light name="fill" pos="-0.4 0.4 0.9" dir="0.4 -0.4 -1" directional="true" castshadow="false"
+      diffuse="0.25 0.25 0.25"/>
+
+    <geom name="floor" pos="0 0 -0.75" size="0 0 0.05" type="plane" material="floor_mat"/>
+
+    <!-- tabletop: top surface at z=-0.005 (the arm base sits on a 5 mm mounting plate,
+         so the folded rest pose clears the table like on the rig) -->
+    <body name="table" pos="0.2 0 -0.025">
+      <geom name="table_top" type="box" size="0.4 0.45 0.02" material="table_mat"/>
+      <geom name="table_leg" type="box" size="0.03 0.03 0.35" pos="0.3 0 -0.37"
+        material="stand_mat" contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- user-facing mount camera: where the human stands, looking back at the arm -->
+    <body name="mount_look" pos="0.15 0 0.12"/>
+    <camera name="mount_cam" mode="targetbody" target="mount_look" pos="0.85 0 0.42"
+      resolution="640 480" sensorsize="0.0048 0.0036" focal="0.0036 0.0036"/>
+
+    <!-- default 3-D overview camera -->
+    <body name="scene_look" pos="0.17 0 0.08"/>
+    <camera name="scene_cam" mode="targetbody" target="scene_look" pos="0.62 -0.48 0.42"/>
+
+    <!-- mocap pedestals: tests/behaviors raise them to put an object exactly where a
+         configured pose closes its jaws; parked inside the tabletop they are hidden -->
+    <body name="stand_a" mocap="true" pos="0.3 0.3 -0.16">
+      <geom name="stand_a_g" type="box" size="0.01 0.01 0.15" material="stand_mat"/>
+    </body>
+    <body name="stand_b" mocap="true" pos="0.3 -0.3 -0.16">
+      <geom name="stand_b_g" type="box" size="0.01 0.01 0.15" material="stand_mat"/>
+    </body>
+
+    <!-- graspable free bodies -->
+    <body name="cube" pos="0.22 -0.15 0.011">
+      <freejoint name="cube_j"/>
+      <geom name="cube_g" type="box" size="0.016 0.016 0.016" material="cube_mat"
+        mass="0.03" friction="1.2 0.02 0.001"/>
+    </body>
+    <body name="ball" pos="0.28 0.06 0.015">
+      <freejoint name="ball_j"/>
+      <geom name="ball_g" type="sphere" size="0.02" material="ball_mat" condim="6"
+        mass="0.025" friction="1.2 0.02 0.01" solref="0.01 1"/>
+    </body>
+    <body name="cup" pos="0.2 0.2 0.035">
+      <freejoint name="cup_j"/>
+      <geom name="cup_g" type="cylinder" size="0.03 0.04" material="cup_mat"
+        mass="0.06" friction="1.0 0.02 0.001"/>
+    </body>
+    <body name="pen" pos="0.12 -0.24 0.001" euler="0 1.5708 0.4">
+      <freejoint name="pen_j"/>
+      <geom name="pen_g" type="capsule" size="0.006 0.06" material="pen_mat"
+        mass="0.012" friction="1.0 0.02 0.001"/>
+    </body>
+  </worldbody>
+
+  <contact>
+    <!-- the coarse link boxes overlap in the folded rest pose; the real links clear -->
+    <exclude body1="shoulder" body2="lower_arm"/>
+  </contact>
+</mujoco>
