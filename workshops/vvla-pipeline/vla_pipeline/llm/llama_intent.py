@@ -105,6 +105,10 @@ class LlamaIntentParser:
         ]
         if self._cfg.get("no_warmup", False):
             cmd.append("--no-warmup")
+        # Smaller compute ubatches keep each GPU submission short, so a 3-D
+        # render pass sharing the iGPU waits less behind prompt processing.
+        if self._cfg.get("ubatch_size"):
+            cmd += ["--ubatch-size", str(int(self._cfg["ubatch_size"]))]
         cmd += list(self._cfg.get("extra_args", []) or [])
 
         # Deterministic GPU init on Strix Halo (gfx1151): the ROCm runtime can
@@ -114,6 +118,10 @@ class LlamaIntentParser:
         gfx = self._cfg.get("hsa_override_gfx_version", "11.5.1")
         if gfx:
             env.setdefault("HSA_OVERRIDE_GFX_VERSION", str(gfx))
+        # Optional compute-unit fence (e.g. "0:0-31" leaves 8 of 40 CUs to the
+        # graphics queue). Off by default: measure with so101_sim.bench first.
+        if self._cfg.get("cu_mask"):
+            env["HSA_CU_MASK"] = str(self._cfg["cu_mask"])
 
         logger.info("Starting llama-server (ROCm): %s", " ".join(cmd))
         log_dir = resolve(self._log_dir)

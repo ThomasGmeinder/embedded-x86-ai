@@ -56,6 +56,9 @@ llm:
   temperature: 0.0
   parallel: 1
   no_warmup: true             # gfx1151 segfaults on the warmup pass
+  # iGPU sharing with the digital twin's renderer (see so101_sim.bench --contention):
+  #ubatch_size: 256           # shorter GPU submissions -> lower render latency
+  #cu_mask: "0:0-31"          # HSA_CU_MASK: fence llama-server to 32 of 40 CUs
   #hsa_override_gfx_version: "11.5.1"  # Strix Halo
   hsa_override_gfx_version: "11.5.0"  # Strix Point
   #hsa_override_gfx_version: "11.0.0"  # workaround for both
