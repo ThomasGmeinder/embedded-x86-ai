@@ -36,10 +36,8 @@ from __future__ import annotations
 
 import argparse
 import logging
-import queue
 import re
 import threading
-import time
 from dataclasses import dataclass, field
 
 from vla_pipeline.llm.intents import (
@@ -341,18 +339,23 @@ def main() -> None:
     ensure_dirs(cfg)
     ctx = build_context(cfg, args)
 
-    is_noise = make_noise_gate(cfg)
+    from vla_pipeline.dispatch import Dispatcher
+    from vla_pipeline.llm.llama_intent import LlamaIntentParser
+
+    llm = LlamaIntentParser(cfg)
     # Ignore any transcript for a short grace window after launch - the mic goes
     # hot before the user is ready and the first frames are usually room noise
     # that Whisper hallucinates into words. Voice ('stop' included) only starts
     # being honored once the window passes. Tunable via audio.startup_grace_s.
-    startup_grace_s = float((cfg.get("audio", {}) or {}).get("startup_grace_s", 1.5))
-    start_time = time.monotonic()
-
-    from vla_pipeline.llm.llama_intent import LlamaIntentParser
-
-    llm = LlamaIntentParser(cfg)
-    transcripts: queue.Queue[str] = queue.Queue()
+    dispatcher = Dispatcher(
+        ctx,
+        llm.parse,
+        registry,
+        is_stop=is_stop,
+        is_noise=make_noise_gate(cfg),
+        startup_grace_s=float((cfg.get("audio", {}) or {}).get("startup_grace_s", 1.5)),
+    )
+    _on_transcript = dispatcher.on_transcript
     shutdown = threading.Event()
 
     # ---------------- listener thread (always hot) ----------------
@@ -386,69 +389,13 @@ def main() -> None:
 
         threading.Thread(target=_stdin_loop, daemon=True, name="stdin").start()
 
-    def _on_transcript(text: str) -> None:
-        """Handle one transcript: apply the startup grace window, the stop fast-path, and the noise gate, then queue it for dispatch."""
-        logger.info("Heard: %r", text)
-        # Startup grace: swallow the mic's first noisy moments so a hallucinated
-        # transcript can't dispatch a behavior before the user has spoken.
-        if time.monotonic() - start_time < startup_grace_s:
-            logger.info("Ignoring %r (startup grace period).", text)
-            return
-        if is_stop(text):
-            # Safety stop: bypass the LLM entirely and interrupt NOW.
-            ctx.say("Stopping.")
-            ctx.stop_event.set()
-            return
-        # Drop known silence-hallucination phrases before the LLM/grammar can
-        # coerce them into a real command (the spurious-startup-behavior fix).
-        if is_noise(text):
-            logger.info("Ignoring %r (noise/hallucination gate).", text)
-            return
-        transcripts.put(text)
-
     # ---------------- dispatch loop (main thread) ----------------
     ctx.say(
         "Ready. Try: 'copy my movements', 'pick up the ball', 'wave', "
         "'dance', 'hold this', 'go home' - or 'stop' at any time."
     )
     try:
-        while not shutdown.is_set():
-            try:
-                text = transcripts.get(timeout=0.2)
-            except queue.Empty:
-                continue
-            cmd = llm.parse(text)
-            if cmd.intent in (Intent.UNKNOWN, Intent.STOP):
-                if cmd.intent is Intent.UNKNOWN:
-                    ctx.say("I didn't catch a command in that.")
-                continue
-            handler = registry.get(cmd.intent)
-            if handler is None:
-                ctx.say(f"No behavior registered for '{cmd.intent.value}'.")
-                continue
-
-            ctx.stop_event.clear()
-            logger.info("=== %s %s ===", cmd.intent.value, cmd.params or "")
-            try:
-                handler(ctx, cmd)  # runs on the main thread (cv2 previews)
-            except Exception:
-                logger.exception("Behavior %s crashed - arm to rest.", cmd.intent.value)
-                try:
-                    ctx.arm.go_to_rest()
-                except Exception:
-                    pass
-            ctx.stop_event.clear()
-
-            # Seamless switching: drain queued commands except the newest, so
-            # a backlog of utterances doesn't replay stale behaviors.
-            newest = None
-            while True:
-                try:
-                    newest = transcripts.get_nowait()
-                except queue.Empty:
-                    break
-            if newest is not None:
-                transcripts.put(newest)
+        dispatcher.run(shutdown)
     except KeyboardInterrupt:
         pass
     finally:
