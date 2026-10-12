@@ -799,13 +799,16 @@ DANCE_MOVES = {
     ],
 }
 
+# Arm raised forward and up, open jaws turned to face the person like a palm.
+# The hand sits in front of the pan axis, so the pan sweep moves it side to
+# side; the wrist joints can't (flex bends toward/away, roll only twists).
 WAVE_UP = {
     "shoulder_pan": 0.0,
-    "shoulder_lift": -10.0,
-    "elbow_flex": 80.0,
+    "shoulder_lift": 0.0,
+    "elbow_flex": -45.0,
     "wrist_flex": -30.0,
-    "wrist_roll": 0.0,
-    "gripper": 60.0,
+    "wrist_roll": 85.0,
+    "gripper": 90.0,
 }
-WAVE_LEFT = {"wrist_roll": -45.0, "wrist_flex": -10.0}
-WAVE_RIGHT = {"wrist_roll": 45.0, "wrist_flex": -10.0}
+WAVE_LEFT = {"shoulder_pan": -25.0}
+WAVE_RIGHT = {"shoulder_pan": 25.0}

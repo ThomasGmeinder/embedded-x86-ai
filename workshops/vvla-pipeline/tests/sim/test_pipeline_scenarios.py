@@ -58,8 +58,10 @@ def test_wave(pipeline_rig, mock_llm):
     assert rig.event_times("behavior_start", intent="wave")
     assert rig.event_times("behavior_end", intent="wave", ok=True)
 
-    _, roll = rig.trace.series("wrist_roll")
-    assert roll.max() > 35.0 and roll.min() < -35.0, "wrist never swung through +/-45"
+    _, elbow = rig.trace.series("elbow_flex")
+    assert elbow.min() < -35.0, "the forearm was never raised"
+    _, pan = rig.trace.series("shoulder_pan")
+    assert pan.max() > 20.0 and pan.min() < -20.0, "the hand never swept through +/-25"
     _assert_at(rig, _rest())
 
 
@@ -101,11 +103,11 @@ def test_stop_mid_wave(pipeline_rig):
     after = goal[(t > t_stop) & (t < t_stop + 0.15)]
     assert np.any(np.abs(after - before) > 1.0), "goal did not change within 150 ms of 'stop'"
 
-    # no further wave strokes after the stop (wrist_roll goal never hits +/-45)
-    tr, roll_goal = rig.trace.series("wrist_roll", t0=t_stop, goal=True)
-    stroke = np.abs(np.abs(roll_goal) - 45.0) <= 2.0
+    # no further wave strokes after the stop (shoulder_pan goal never hits +/-25)
+    tr, pan_goal = rig.trace.series("shoulder_pan", t0=t_stop, goal=True)
+    stroke = np.abs(np.abs(pan_goal) - 25.0) <= 2.0
     assert not np.any(stroke & (tr > t_stop + 0.15)), (
-        f"wave resumed after stop: +/-45 roll goal at t-t_stop={np.round(tr[stroke] - t_stop, 3)}")
+        f"wave resumed after stop: +/-25 pan goal at t-t_stop={np.round(tr[stroke] - t_stop, 3)}")
     assert rig.event_times("behavior_end", intent="wave", stopped=True)
     _assert_at(rig, _rest())
 
