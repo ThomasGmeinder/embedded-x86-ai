@@ -303,9 +303,12 @@ class TwinConsole:
     def on_level(self, rms: float, speaking: bool) -> None:
         """Microphone block level from :meth:`FastListener.run_forever`."""
         with self._lock:
-            if self._speaking and not speaking:
-                self._asr_pending = True
             self._level, self._speaking, self._level_t = rms, speaking, time.monotonic()
+
+    def note_asr(self, busy: bool) -> None:
+        """True while Whisper is decoding. The meter keeps running either way."""
+        with self._lock:
+            self._asr_pending = busy
 
     def on_event(self, event: str, **data) -> None:
         if event == "heard":

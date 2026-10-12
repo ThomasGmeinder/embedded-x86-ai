@@ -411,6 +411,7 @@ def main() -> None:
                 on_transcript=lambda t: _on_transcript(t),
                 stop_check=shutdown.is_set,
                 on_level=console.on_level if console is not None else None,
+                on_busy=console.note_asr if console is not None else None,
             )
 
         threading.Thread(target=_listen, daemon=True, name="listener").start()

@@ -11,9 +11,9 @@ The real pipeline's speech front end, self-contained for the workshop:
 
 - :class:`Segmenter` cuts a 30 ms block stream into utterances. A pre-roll
   ring keeps the first syllable that arrives while the detector is still
-  deciding; ~0.7 s of silence ends an utterance; anything shorter than
-  ``min_speech_s`` (a click, a cough) is dropped. ``webrtcvad`` decides
-  speech when installed, else an energy detector riding 3x above the
+  deciding; ``hangover_s`` of detector-silence ends an utterance. Anything
+  shorter than ``min_speech_s`` (a click, a cough) is dropped. ``webrtcvad``
+  decides speech when installed, else an energy detector riding 3x above the
   adaptive noise floor.
 - :class:`Whisper` is the ONNX encoder/decoder pair (``whisper:`` in the
   config), greedy-decoded on the CPU.
@@ -202,17 +202,13 @@ class MicListener:
             logger.error("microphone unavailable: %s", e)
             return
         t0 = time.monotonic()
-        with stream:
+        jobs: queue.Queue = queue.Queue()
+
+        def _decode() -> None:
             while not self._stop.is_set():
                 try:
-                    block = blocks.get(timeout=0.2)
+                    audio = jobs.get(timeout=0.2)
                 except queue.Empty:
-                    continue
-                rms = float(np.sqrt(np.mean(np.square(block))))
-                audio = seg.push(block, rms)
-                if self.on_level is not None:
-                    self.on_level(rms, seg.in_speech)
-                if audio is None or time.monotonic() - t0 < self.grace_s:
                     continue
                 self.transcribing = True
                 try:
@@ -231,3 +227,18 @@ class MicListener:
                     self.transcribing = False
                 if text:
                     self.on_text(text)
+
+        threading.Thread(target=_decode, daemon=True, name="asr").start()
+        with stream:
+            while not self._stop.is_set():
+                try:
+                    block = blocks.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                rms = float(np.sqrt(np.mean(np.square(block))))
+                audio = seg.push(block, rms)
+                if self.on_level is not None:
+                    self.on_level(rms, seg.in_speech)
+                if audio is None or time.monotonic() - t0 < self.grace_s:
+                    continue
+                jobs.put(audio)
