@@ -515,8 +515,10 @@ but the other grasps still need geometry-aware planning: the straight descent
 can knock over the bottle, and the book is too large for the current grasp.
 The toothbrush now uses visibility-preserving whole-arm alignment and a slower
 thin-object grasp. After the ball is dropped, its new pose is not reliably
-reacquired for a second pick. These are known manipulation/recovery
-limitations, not object-detection failures.
+reacquired for a second pick. These are known manipulation and recovery
+limitations. A bottle on its side is a separate detection miss: the same YOLO
+scores the upright bottle as bottle and the bottle on its side as banana, so
+the scan says it cannot see a bottle and the grasp never starts.
 
 ## Adding a voice command
 
