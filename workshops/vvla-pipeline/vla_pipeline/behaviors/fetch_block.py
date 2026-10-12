@@ -126,11 +126,21 @@ def run_fetch_block(
     pose: PoseEstimator | None,
     operator_camera,
     stop_check=None,
+    feedback=None,
 ) -> bool:
-    """Execute the fetch sequence. Returns True on (best-effort) success."""
+    """Execute the fetch sequence. Returns True once the block was handed over.
+
+    ``block_pose`` is open loop - nothing looks for the block - so the grasp
+    is checked twice, after closing and after the lift; if the block isn't
+    held, the arm says so and parks instead of handing over empty jaws.
+    """
+    from vla_pipeline.behaviors.grip import close_with_feedback, holding
+
     fb = cfg["behaviors"]["fetch_block"]
+    g = cfg["behaviors"]["grip"]
     block_pose = dict(fb["block_pose"])
     lift_pose = dict(fb["lift_pose"])
+    say = feedback or (lambda m: logger.info("[fetch] %s", m))
 
     def stopped() -> bool:
         """Return True if a stop has been requested."""
@@ -142,12 +152,24 @@ def run_fetch_block(
         return False
 
     logger.info("[fetch] GRASP")
-    arm.go_to({"gripper": float(block_pose.get("gripper", 30.0))}, duration_s=1.2)
+    gripped, hold = close_with_feedback(arm, g, stop_check=stop_check, start_from=70.0)
+    if stopped():
+        return False
     time.sleep(0.3)
+    if not (gripped and holding(arm, g, hold)):
+        say("I couldn't get a grip on the block - is it in its usual spot?")
+        arm.go_to({"gripper": 70.0}, duration_s=0.8)
+        arm.go_to_rest()
+        return False
 
     logger.info("[fetch] LIFT")
-    arm.go_to(lift_pose, duration_s=2.5, stop_check=stop_check)
+    arm.go_to({**lift_pose, "gripper": hold}, duration_s=2.5, stop_check=stop_check)
     if stopped():
+        return False
+    time.sleep(0.3)
+    if not holding(arm, g, hold):
+        say("I dropped the block.")
+        arm.go_to_rest()
         return False
 
     track_person_and_handoff(fb, arm, pose, operator_camera, lift_pose, stop_check)
@@ -190,7 +212,7 @@ def main() -> None:
             )
     try:
         ok = run_fetch_block(cfg, arm, pose, cam)
-        print(f"\nfetch_block {'PASSED' if ok else 'INTERRUPTED'}")
+        print(f"\nfetch_block {'PASSED' if ok else 'FAILED (no block held, or stopped)'}")
     finally:
         if cam is not None:
             cam.close()

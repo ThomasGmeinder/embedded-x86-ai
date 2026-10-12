@@ -119,7 +119,8 @@ class Dispatcher:
         self._emit("behavior_start", intent=cmd.intent.value, params=dict(cmd.params or {}))
         ok = True
         try:
-            handler(self.ctx, cmd)  # main thread (cv2 previews)
+            # a handler that returns False ran but didn't achieve its goal
+            ok = handler(self.ctx, cmd) is not False  # main thread (cv2 previews)
         except Exception as e:
             ok = False
             logger.exception("Behavior %s crashed - arm to rest.", cmd.intent.value)

@@ -14,8 +14,10 @@ The pipeline's remaining voice commands, in the workshop's handler shape
   a position stall), confirm with the arm camera, lock the grip. A following
   gesture_mimic keeps the lock; "grip" again releases.
 - **pick_place** - ground the spoken object name to a COCO class, find it with
-  YOLO detection on the arm camera, center it with the pan joint, grasp, then
-  hand it over.
+  YOLO detection on the arm camera, line it up with the pan joint, locate it
+  on the table from its box and reach it with IK
+  (``so101_sim.kinematics``; the taught poses when that isn't possible),
+  grasp, then hand it over.
 - **fetch_block** - fetch the block from its taught pose, then hand it over.
 
 The handover finds you with YOLO-pose on the operator camera, aims the pan
@@ -50,6 +52,7 @@ PRESENT_POSE = {
 }
 
 TICK_S = 0.05
+GRASP_SETTLE_S = 0.4
 
 
 # ----------------------------------------------------------------------------
@@ -78,7 +81,7 @@ def close_with_feedback(arm, g: dict, stop_check=None, start_from: float | None 
     """Close the gripper until contact. Returns ``(gripped, hold_position)``.
 
     Contact is sustained current above ``load_threshold`` (when the arm reports
-    it) or the measured position lagging the command (a stall). After the
+    it) or a stall: the jaws stopped short of the command. After the
     command reaches the closed floor, sampling continues for ``stall_grace_s``
     so a thin object (a pen) is still caught.
     """
@@ -100,6 +103,7 @@ def close_with_feedback(arm, g: dict, stop_check=None, start_from: float | None 
     stall_count = load_count = 0
     gripped = False
     grace_deadline = None
+    prev = float(arm.get_joints().get("gripper", commanded))
     while True:
         if stop_check and stop_check():
             break
@@ -125,7 +129,10 @@ def close_with_feedback(arm, g: dict, stop_check=None, start_from: float | None 
                 load_count = 0
 
         measured = float(arm.get_joints().get("gripper", commanded))
-        if measured - commanded > eps:
+        # A servo trails a moving goal, so lagging alone isn't contact: the jaws must also have stopped.
+        stopped_moving = prev - measured < eps
+        prev = measured
+        if measured - commanded > eps and stopped_moving:
             stall_count += 1
             if stall_count >= need_ticks:
                 gripped = True
@@ -139,6 +146,16 @@ def close_with_feedback(arm, g: dict, stop_check=None, start_from: float | None 
     hold = max(min(measured, commanded) - extra, floor)  # a little tighter than contact
     arm.send_joints({"gripper": hold})
     return True, hold
+
+
+def holding(arm, g: dict, hold: float) -> bool:
+    """Once the jaws have settled: an object loads the servo or keeps the jaws
+    open past where they were sent (the arm clamps a goal below its floor)."""
+    load = arm.get_gripper_load()
+    if load is not None and load >= float(g.get("load_threshold", 120.0)):
+        return True
+    target = max(hold, GRIPPER_CLOSED_FLOOR)
+    return float(arm.get_joints().get("gripper", target)) - target > float(g["stall_eps_deg"])
 
 
 def run_grip(ctx, cmd=None, wait_s: float = 4.0) -> bool:
@@ -265,8 +282,13 @@ def hand_over(ctx, section: dict, lift_pose: dict) -> None:
 
 
 def run_fetch_block(ctx, cmd=None) -> bool:
-    """Grasp the block at its taught pose, lift it, hand it over."""
-    fb = ctx.cfg["fetch_block"]
+    """Grasp the block at its taught pose, lift it, hand it over.
+
+    The pose is open loop - nothing looks for the block - so the grasp is
+    checked twice, after closing and after the lift; if the block isn't held,
+    the arm says so and parks instead of handing over empty jaws.
+    """
+    fb, g = ctx.cfg["fetch_block"], ctx.cfg["grip"]
     block_pose, lift_pose = dict(fb["block_pose"]), dict(fb["lift_pose"])
 
     logger.info("[fetch] approach the block (jaws open)")
@@ -274,11 +296,23 @@ def run_fetch_block(ctx, cmd=None) -> bool:
     if ctx.stop_check():
         return False
     logger.info("[fetch] grasp")
-    ctx.arm.go_to({"gripper": float(block_pose.get("gripper", GRIPPER_CLOSED_FLOOR))}, duration_s=1.2)
-    time.sleep(0.3)
-    logger.info("[fetch] lift")
-    ctx.arm.go_to(lift_pose, duration_s=2.5, stop_check=ctx.stop_check)
+    gripped, hold = close_with_feedback(ctx.arm, g, stop_check=ctx.stop_check, start_from=70.0)
     if ctx.stop_check():
+        return False
+    time.sleep(0.3)
+    if not (gripped and holding(ctx.arm, g, hold)):
+        ctx.say("I couldn't get a grip on the block - is it in its usual spot?")
+        ctx.arm.go_to({"gripper": 70.0}, duration_s=0.8)
+        ctx.arm.go_to_rest()
+        return False
+    logger.info("[fetch] lift")
+    ctx.arm.go_to({**lift_pose, "gripper": hold}, duration_s=2.5, stop_check=ctx.stop_check)
+    if ctx.stop_check():
+        return False
+    time.sleep(0.3)
+    if not holding(ctx.arm, g, hold):
+        ctx.say("I dropped the block.")
+        ctx.arm.go_to_rest()
         return False
     hand_over(ctx, fb, lift_pose)
     return True
@@ -345,10 +379,85 @@ def run_pick_place(ctx, cmd) -> bool:
         ctx.arm.go_to_rest()
         return False
 
-    # Center the object horizontally: the camera rides on the arm, so pan opposite the error.
+    centered = _servo_pan(ctx, camera, name)
+    if ctx.stop_check():
+        return False
+    if not centered:
+        ctx.say("I couldn't line up on it - grabbing where I last saw it.")
+
+    gripped, hold = False, 0.0
+    attempts = 1 + int(pp.get("retries", 1))
+    for attempt in range(attempts):
+        if ctx.stop_check():
+            return False
+        aligned_pan = ctx.arm.get_joints()["shoulder_pan"]
+        way_up = None
+        if pp.get("reach", "fixed") == "ik" and ctx.arm_camera is not None and camera is ctx.arm_camera:
+            way_up = _reach_ik(ctx, camera, name)
+        if ctx.stop_check():
+            return False
+        if way_up is None:
+            way_up = _reach_fixed(ctx)
+        if ctx.stop_check():
+            return False
+        gripped, hold = close_with_feedback(ctx.arm, g, stop_check=ctx.stop_check, start_from=75.0)
+        if ctx.stop_check():
+            return False
+        if gripped:
+            hold = _settle_grip(ctx.arm, g)
+        if gripped and holding(ctx.arm, g, hold):
+            break
+        gripped = False
+        ctx.arm.go_to({"gripper": 75.0}, duration_s=0.6, stop_check=ctx.stop_check)
+        if attempt + 1 < attempts:
+            ctx.say("The grasp slipped - trying once more.")
+            ctx.arm.go_to({**pp["scan_pose"], "shoulder_pan": aligned_pan}, duration_s=1.5,
+                          stop_check=ctx.stop_check)
+            dets, _ = _detect(ctx, camera, name, duration_s=1.5)
+            if not dets:
+                break
+            _servo_pan(ctx, camera, name)
+    if ctx.stop_check():
+        return False
+    if not gripped:
+        ctx.say(f"I couldn't get a grip on the {resolved}. Giving up for now.")
+        ctx.arm.go_to_rest()
+        return False
+
+    # straight back up the way the jaws came down, so the object isn't dragged
+    for step in way_up:
+        ctx.arm.go_to({**step, "gripper": hold}, duration_s=1.5 / len(way_up), stop_check=ctx.stop_check)
+        if ctx.stop_check():
+            return False
+    lift_pose = {
+        "shoulder_pan": ctx.arm.get_joints()["shoulder_pan"],
+        "shoulder_lift": -80.0,
+        "elbow_flex": 85.0,
+        "wrist_flex": 50.0,
+        "wrist_roll": 0.0,
+        "gripper": hold,
+    }
+    ctx.arm.go_to(lift_pose, duration_s=2.0, stop_check=ctx.stop_check)
+    if ctx.stop_check():
+        return False
+    time.sleep(0.3)
+    if not holding(ctx.arm, g, hold):
+        ctx.say(f"I dropped the {resolved}.")
+        ctx.arm.go_to({"gripper": 75.0}, duration_s=0.6)
+        ctx.arm.go_to_rest()
+        return False
+    ctx.say(f"Got the {resolved} - bringing it to you.")
+    hand_over(ctx, pp, lift_pose)
+    ctx.say("Done.")
+    return True
+
+
+def _servo_pan(ctx, camera, name: str) -> bool:
+    """Turn the base until the object sits at ``servo_target_x`` in the image. True once centered."""
+    pp = ctx.cfg["pick_place"]
     gain, tol = float(pp["servo_gain_pan"]), float(pp["servo_tolerance"])
+    target_x = float(pp.get("servo_target_x", 0.0))
     deadline = time.time() + float(pp["servo_timeout_s"])
-    centered = False
     while time.time() < deadline and not ctx.stop_check():
         ok, frame = camera.read()
         if not ok:
@@ -359,52 +468,93 @@ def run_pick_place(ctx, cmd) -> bool:
         if d is None:
             time.sleep(TICK_S)
             continue
-        err = (d.center[0] / frame.shape[1]) * 2.0 - 1.0
+        # relative to where the object sits in the image when it is between the jaws
+        err = (d.center[0] / frame.shape[1]) * 2.0 - 1.0 - target_x
         if abs(err) <= tol:
-            centered = True
-            break
+            return True
+        # the sign of servo_gain_pan follows how the camera is mounted on the wrist
         ctx.arm.send_joints({"shoulder_pan": ctx.arm.get_joints()["shoulder_pan"] - gain * err})
         time.sleep(0.1)
-    if ctx.stop_check():
-        return False
-    if not centered:
-        ctx.say("I couldn't line up on it - grabbing where I last saw it.")
+    return False
 
-    gripped = False
-    attempts = 1 + int(pp.get("retries", 1))
-    for attempt in range(attempts):
-        if ctx.stop_check():
-            return False
-        ctx.arm.go_to({**pp["approach_pose"], "gripper": 75.0}, duration_s=1.5, stop_check=ctx.stop_check)
-        ctx.arm.go_to({"shoulder_lift": float(pp["descend_lift"])}, duration_s=1.5, stop_check=ctx.stop_check)
-        gripped, _ = close_with_feedback(ctx.arm, g, stop_check=ctx.stop_check, start_from=75.0)
-        if gripped:
-            break
-        if attempt + 1 < attempts:
-            ctx.say("The grasp slipped - trying once more.")
-            ctx.arm.go_to({**pp["scan_pose"]}, duration_s=1.5, stop_check=ctx.stop_check)
-            dets, _ = _detect(ctx, camera, name, duration_s=1.5)
-            if not dets:
-                break
-    if not gripped:
-        ctx.say(f"I couldn't get a grip on the {resolved}. Giving up for now.")
-        ctx.arm.go_to_rest()
-        return False
 
-    ctx.say(f"Got the {resolved} - bringing it to you.")
-    lift_pose = {
-        "shoulder_pan": ctx.arm.get_joints()["shoulder_pan"],
-        "shoulder_lift": -80.0,
-        "elbow_flex": 85.0,
-        "wrist_flex": 50.0,
-        "wrist_roll": 0.0,
-    }
-    ctx.arm.go_to(lift_pose, duration_s=2.0, stop_check=ctx.stop_check)
-    if ctx.stop_check():
-        return False
-    hand_over(ctx, pp, lift_pose)
-    ctx.say("Done.")
-    return True
+def _reach_fixed(ctx) -> list[dict]:
+    """Jaws open over the object at the configured reach, then down onto it.
+    Returns the way back up (poses without the gripper)."""
+    pp = ctx.cfg["pick_place"]
+    above = {**pp["approach_pose"], "shoulder_pan": ctx.arm.get_joints()["shoulder_pan"]}
+    ctx.arm.go_to({**above, "gripper": 75.0}, duration_s=1.5, stop_check=ctx.stop_check)
+    ctx.arm.go_to({"shoulder_lift": float(pp["descend_lift"])}, duration_s=1.5, stop_check=ctx.stop_check)
+    return [above]
+
+
+def _plan_ik_reach(ctx, camera, name: str):
+    """Locate the object on the table from a fresh arm-camera detection and
+    solve the reach: joint poses from the pre-grasp straight down to the
+    grasp, or None."""
+    pp = ctx.cfg["pick_place"]
+    try:
+        from so101_sim.kinematics import ROUND_CLASSES, shared_kinematics
+
+        kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
+    except Exception as e:  # so101_sim / mujoco / model assets missing
+        logger.warning("IK reach unavailable: %s", e)
+        return None
+    time.sleep(0.3)  # let the servo's last pan step settle
+    camera.read()  # drop a frame that may predate it
+    joints = ctx.arm.get_joints()
+    ok, frame = camera.read()
+    if not ok:
+        return None
+    dets, resolved = ctx.detector.find(frame, name)
+    d = _best(dets, frame.shape[0] * frame.shape[1], float(pp["min_box_area_frac"]))
+    if d is None:
+        return None
+    h, w = frame.shape[:2]
+    cam = (ctx.cfg.get("cameras") or {}).get("arm") or {}
+    K, dist = kin.intrinsics(cam.get("intrinsics"), w, h)
+    table_z = float(pp.get("table_z", -0.005))
+    loc = kin.locate_on_table(
+        d.box, joints, K, dist, cam.get("mount"), table_z, (w, h),
+        shape="sphere" if resolved in ROUND_CLASSES else "upright",
+    )
+    if loc is None:
+        logger.info("IK reach: no table fix for the %s box %s", resolved, d.box)
+        return None
+    p = loc["xyz"].copy()
+    p[2] = min(p[2], table_z + float(pp.get("max_grasp_height_m", 0.03)))
+    plan = kin.solve_grasp(p, above_m=float(pp.get("pregrasp_above_m", 0.06)), width=loc["width"], table_z=table_z)
+    logger.info(
+        "IK reach: %s at (%.3f, %.3f, %.3f) m, %.0f mm wide -> %s",
+        resolved, *loc["xyz"], 1000 * loc["width"], "solved" if plan else "out of reach",
+    )
+    if plan is None:
+        return None
+    pregrasp, grasp = plan
+    return [pregrasp, *kin.waypoints(pregrasp, grasp, loc["width"])]
+
+
+def _reach_ik(ctx, camera, name: str):
+    """Jaws open over the located object, then straight down onto it. Returns
+    the way back up (poses without the gripper), or None to use the fixed reach."""
+    down = _plan_ik_reach(ctx, camera, name)
+    if down is None:
+        logger.info("IK reach not possible - using the fixed approach")
+        return None
+    ctx.arm.go_to(down[0], duration_s=1.5, stop_check=ctx.stop_check)
+    for pose in down[1:]:
+        ctx.arm.go_to(pose, duration_s=1.5 / (len(down) - 1), stop_check=ctx.stop_check)
+    return [{k: v for k, v in p.items() if k != "gripper"} for p in reversed(down[:-1])]
+
+
+def _settle_grip(arm, g: dict) -> float:
+    """Contact can register while one jaw is still pushing the object: let the
+    jaws finish closing, then hold a little tighter than where they stopped."""
+    time.sleep(GRASP_SETTLE_S)
+    hold = max(float(arm.get_joints()["gripper"]) - float(g["settle_extra_deg"]), GRIPPER_CLOSED_FLOOR)
+    arm.send_joints({"gripper": hold})
+    time.sleep(0.2)
+    return hold
 
 
 def register_manipulation(registry) -> None:

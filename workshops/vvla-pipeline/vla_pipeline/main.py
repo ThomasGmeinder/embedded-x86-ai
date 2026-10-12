@@ -109,24 +109,29 @@ def _h_gesture_mimic(ctx: PipelineContext, cmd: ParsedCommand) -> None:
 
 
 @registry.register(Intent.FETCH_BLOCK)
-def _h_fetch_block(ctx: PipelineContext, cmd: ParsedCommand) -> None:
+def _h_fetch_block(ctx: PipelineContext, cmd: ParsedCommand) -> bool:
     """Dispatch to :func:`run_fetch_block`."""
     from vla_pipeline.behaviors.fetch_block import run_fetch_block
 
-    run_fetch_block(
-        ctx.cfg, ctx.arm, ctx.pose, ctx.operator_camera, stop_check=ctx.stop_check
+    return run_fetch_block(
+        ctx.cfg,
+        ctx.arm,
+        ctx.pose,
+        ctx.operator_camera,
+        stop_check=ctx.stop_check,
+        feedback=ctx.say,
     )
 
 
 @registry.register(Intent.PICK_PLACE)
-def _h_pick_place(ctx: PipelineContext, cmd: ParsedCommand) -> None:
+def _h_pick_place(ctx: PipelineContext, cmd: ParsedCommand) -> bool:
     """Dispatch to :func:`run_pick_place` for the requested object."""
     from vla_pipeline.behaviors.pick_place import run_pick_place
 
     if ctx.detector is None:
         ctx.say("Object detection isn't available - can't do pick and place.")
-        return
-    run_pick_place(
+        return False
+    return run_pick_place(
         ctx.cfg,
         ctx.arm,
         ctx.detector,

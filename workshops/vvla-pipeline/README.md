@@ -106,8 +106,8 @@ flowchart LR
 
     EARS ==>|"what you said"| BRAIN
     BRAIN ==>|"which behavior"| BODY
-    EYES ==>|"aim &amp; track<br/>(pan + reach)"| BASE
-    EYES ==>|"reach to target<br/>(shoulder/elbow/wrist)"| ELBOW
+    EYES ==>|"aim &amp; track<br/>(pan servo)"| BASE
+    EYES ==>|"IK reach to the located object<br/>(shoulder/elbow/wrist)"| ELBOW
     TOUCH ==>|"how hard to hold<br/>(stop on contact)"| JAW
     JAW -.->|"effort feedback"| TOUCH
 
@@ -117,7 +117,7 @@ flowchart LR
     classDef touch fill:#f8cecc,stroke:#b85450,color:#000,font-size:14px;
 ```
 
-**Ears (Whisper) → Brain (Llama):** the microphone is gated by an always-hot VAD listener; Whisper turns speech to text on the NPU or CPU, and Llama — constrained by a GBNF grammar so it can only emit `{"command", "object"}` — decides which behavior to run. **Eyes (YOLO) → the arm's aim and reach:** YOLO-pose finds *where you are* (drives `shoulder_pan` and the up/down reach for mimicry and handoff), while YOLO-detect finds *what to grab* (grounds "the ball" and servos the base onto it). **Touch (gripper) → the jaws:** the feedback close loop senses contact through servo current and position stall, confirms with the arm camera, and stops squeezing the instant it has the object — which is why a pen no longer slips.
+**Ears (Whisper) → Brain (Llama):** the microphone is gated by an always-hot VAD listener; Whisper turns speech to text on the NPU or CPU, and Llama — constrained by a GBNF grammar so it can only emit `{"command", "object"}` — decides which behavior to run. **Eyes (YOLO) → the arm's aim and reach:** YOLO-pose finds *where you are* (drives `shoulder_pan` and the up/down reach for mimicry and handoff), while YOLO-detect finds *what to grab* (grounds "the ball", servos the base onto it, and its box — the camera ray through the box's bottom meeting the table — gives the object's position for an IK reach). **Touch (gripper) → the jaws:** the feedback close loop senses contact through servo current and position stall, confirms with the arm camera, and stops squeezing the instant it has the object — which is why a pen no longer slips.
 
 ## Voice commands → behaviors
 
@@ -126,7 +126,7 @@ Llama is constrained by `config/intent.gbnf` so it can only ever emit `{"command
 | Say something like | Intent | What happens |
 |---|---|---|
 | "mirror my arm", "copy my movements" | `gesture_mimic` | YOLO-pose tracks your wrist; a direct camera-frame mapping drives the arm joints to follow your hand (depth from MediaPipe hand size). MediaPipe tracks your thumb–index pinch → gripper. |
-| "pick up the ball", "grab the bottle and give it to me" | `pick_place` | YOLO-detect grounds the named object on the arm camera → pan-servo onto it → feedback grasp → find you with YOLO-pose → hand it over. |
+| "pick up the ball", "grab the bottle and give it to me" | `pick_place` | YOLO-detect grounds the named object on the arm camera → pan-servo onto it → locate it on the table from its box → IK reach, straight down onto it → feedback grasp, checked after the lift → find you with YOLO-pose → hand it over. |
 | "fetch the block", "bring me the cube" | `fetch_block` | Approach the block at its taught pose → grasp → lift → find you (YOLO-pose) → extend → release → home. |
 | "hold this", "take this pencil" | `grip` | Closes until contact (current/stall + grace window), confirms with the arm camera, then **locks the grip**. A following `gesture_mimic` keeps the lock — so the arm can mimic you *while holding a pen to write*. Saying "grip" again releases. |
 | "dance", "show me some moves" | `dance` | BPM-paced keyframe choreography. |
@@ -275,6 +275,7 @@ strix-vla-pipeline/
 ├── launch/
 │   └── strix_vla.launch.py       # cameras (operator+arm) + SO-101 server node
 ├── scripts/
+│   ├── calibrate_arm_camera.py   # arm camera intrinsics + mount on the gripper (pick_place IK)
 │   ├── compile_npu_models.py     # compile whisper/yolo ONNX for the NPU (SDK venv)
 │   ├── export_whisper_onnx.py    # Whisper encoder/decoder ONNX export
 │   ├── export_yolo26s_pose.py    # body-keypoint ONNX export
@@ -301,7 +302,7 @@ strix-vla-pipeline/
     │   └── test_ros2_arm_motion.py  # ROS 2 per-joint full-range motion test
     ├── behaviors/
     │   ├── gesture_mimic.py      # camera-frame mapping loop, grip-lock aware, --calibrate-depth/-grip
-    │   ├── pick_place.py         # voice-grounded pick → hand to person
+    │   ├── pick_place.py         # voice-grounded pick (locate on the table + IK reach) → hand to person
     │   ├── fetch_block.py        # taught-pose fetch; exports the handoff helpers
     │   ├── grip.py               # feedback close (current/stall/grace) + camera verify
     │   ├── dance.py              # keyframe moves, BPM pacing
@@ -493,9 +494,21 @@ pause mid-sentence splits it: at 0.35 s, "pick up ... the cube" arrived as
 
 ## Voice pick-and-place
 
-"Pick up the ball" → `{"command": "pick_place", "object": "ball"}` → `vla_pipeline/behaviors/pick_place.py`: scan pose → YOLOv26s-detect on the arm camera grounds the name (synonym table: ball→sports ball, mug→cup, …) → proportional pan servoing centers the box → descend → the same feedback-based close as grip (one retry) → lift → find the person with YOLO-pose on the operator camera → extend → release → home.
+"Pick up the ball" → `{"command": "pick_place", "object": "ball"}` → `vla_pipeline/behaviors/pick_place.py`: scan pose → YOLOv26s-detect on the arm camera grounds the name (synonym table: ball→sports ball, mug→cup, …) → proportional pan servoing turns the base until the box sits where an object between the jaws appears (`servo_target_x`) → **locate** → **IK reach** → the same feedback-based close as grip, a short settle, a holding check (one retry from the servoed pan) → straight back up → lift, holding checked again → find the person with YOLO-pose on the operator camera → extend → release → home.
 
-Failure handling speaks: unknown word ("I don't know what that looks like"), nothing found, ambiguous matches, failed/slipped grasp (retry then give up), missing cameras (arm cam down → operator camera with a warning). Note COCO-80 has no "cube"/"pen" class — fine-tune YOLO26 on your own objects and extend `SYNONYMS` in `vla_pipeline/vision/yolo_detect_npu.py` to ground them. One-time setup: `python scripts/export_yolo26s_detect.py`.
+**Locate:** objects rest on the table, so one camera is enough. Forward kinematics of the SO-101 model (`so101_sim/kinematics.py`) at the current joint angles gives the wrist camera's pose; the ray through the bottom of the YOLO box meets the table plane at the object's front edge, and a ball (or an upright cylinder for other classes) is fitted so its outline matches the box. On the twin this is within 1 mm for the ball and ~6 mm for the cup. **IK reach:** damped least squares over pan/lift/elbow/wrist puts the point between the open jaws on the object with the closing axis horizontal and every part of the arm above the table; the jaws open 6 cm above it and come straight down in 1.5 cm steps, so they don't swing into it. Reach is ~14–30 cm from the base. With no fix (box cut by the image edge) or out of reach, it falls back to the taught `approach_pose` + `descend_lift` (`reach: fixed` uses only those).
+
+**Real arm calibration.** Until calibrated, the camera model is the twin's `wrist_cam` (intrinsics and pose on the gripper), which only matches a camera mounted exactly like the twin's — 1° of mount error moves the fix ~5 mm at 30 cm. With the pipeline stopped:
+
+```bash
+python scripts/calibrate_arm_camera.py intrinsics --board 9x6 --square-mm 24   # printed checkerboard, 12+ views
+python scripts/calibrate_arm_camera.py mount --board 9x6 --square-mm 24        # board taped to the table, ~8 jogged arm poses
+python scripts/calibrate_arm_camera.py check --object ball --at 0.28 0.06      # ball at a measured spot (base frame, m)
+```
+
+Each prints the YAML for `cameras.arm.intrinsics` / `cameras.arm.mount` (the same keys exist in the workshop's `config/workshop.yaml`). `check --sim` runs on the twin.
+
+Failure handling speaks, and a behavior that gives up ends as failed (not "done"): unknown word ("I don't know what that looks like"), nothing found, ambiguous matches, failed/slipped grasp (retry then give up), dropped after the lift, missing cameras (arm cam down → operator camera with a warning, fixed reach only). Limits: the scan looks from pan 0 only, so the object has to be in the arm camera's view from `scan_pose`; an object right behind the fixed jaw in that view (e.g. ~22 cm out, 4 cm right) isn't recognized by YOLO. Note COCO-80 has no "cube"/"pen" class — fine-tune YOLO26 on your own objects and extend `SYNONYMS` in `vla_pipeline/vision/yolo_detect_npu.py` to ground them. That includes the "red cube" in the workshop's `modular_vla_pipeline.gif` animation: the pan-to-aim, IK-to-reach flow it shows works for detectable objects like the ball, not for a cube. One-time setup: `python scripts/export_yolo26s_detect.py`.
 
 ## Adding a voice command
 
@@ -526,6 +539,7 @@ Every component is a standalone module with its own `__main__` self-test.
 | ROS 2 client round-trip | ROS 2 | `python -m vla_pipeline.robot.robot_node --client-test` |
 | Gesture mimic | webcam | `python -m vla_pipeline.behaviors.gesture_mimic --dry-run` |
 | Pick and place | webcam | `python -m vla_pipeline.behaviors.pick_place --object ball --dry-run-arm` |
+| Arm camera localization | arm (`--sim` = twin) | `python scripts/calibrate_arm_camera.py check --sim --object ball --pan -14 --at 0.28 0.06` |
 | Fetch block | no | `python -m vla_pipeline.behaviors.fetch_block --dry-run --no-camera` |
 | Dance | no | `python -m vla_pipeline.behaviors.dance --dry-run` |
 | Grip (simulated object) | no | `python -m vla_pipeline.behaviors.grip --dry-run` (`--thin` = pen, `--load` = effort) |

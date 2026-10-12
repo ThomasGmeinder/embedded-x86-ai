@@ -96,6 +96,9 @@ cameras:
     use_ros2: true
     topic: /cameras/arm/image_raw
     stale_after_s: 1.0
+    # for locating objects (pick_place reach: ik); print with scripts/calibrate_arm_camera.py
+    intrinsics: null                # {fx, fy, cx, cy, dist, width, height}; null = twin camera model
+    mount: null                     # {pos: [x, y, z] m, rpy: [r, p, y] deg} on the gripper; null = twin
 
 robot:
   backend: real                     # real (Feetech bus) | sim (MuJoCo digital twin)
@@ -181,9 +184,14 @@ grip:                               # close until contact, confirm with the arm 
 
 pick_place:                         # "pick up the ball": detect on the arm camera, grasp, hand over
   scan_pose: {shoulder_pan: 0.0, shoulder_lift: -55.0, elbow_flex: 65.0, wrist_flex: 45.0, wrist_roll: 0.0, gripper: 70.0}
-  approach_pose: {shoulder_lift: -35.0, elbow_flex: 45.0, wrist_flex: 35.0}
-  descend_lift: -20.0
-  servo_gain_pan: 18.0              # deg of pan per unit of horizontal image error
+  reach: ik                         # ik: locate on the table + IK (falls back to fixed) | fixed
+  table_z: -0.005                   # table surface height in the arm's base frame (m)
+  pregrasp_above_m: 0.06            # ik: jaws open this far above the grasp, then straight down
+  max_grasp_height_m: 0.03          # ik: grasp tall objects no higher than this
+  approach_pose: {shoulder_lift: -15.0, elbow_flex: 20.0, wrist_flex: 54.0}  # fixed: jaws ~12 cm up
+  descend_lift: 9.0                 # down to a ~4 cm object, closing axis horizontal
+  servo_gain_pan: -10.0             # deg of pan per unit of image error; sign follows the camera mount
+  servo_target_x: -0.24             # image x of an object that sits between the jaws
   servo_tolerance: 0.06
   servo_timeout_s: 6.0
   min_box_area_frac: 0.002

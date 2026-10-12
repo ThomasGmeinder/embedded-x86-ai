@@ -175,6 +175,13 @@ class _Rig:
         self.on_event("stage", object=obj, at=[round(float(v), 3) for v in p])
         return p
 
+    def put(self, obj: str, pos=None) -> np.ndarray:
+        """Put a hidden object back on the table: at its XML spot, or at ``pos``."""
+        p = np.array(self.world.model.body(obj).pos if pos is None else pos, float)
+        self.world.place(obj, p)
+        self.on_event("stage", object=obj, at=[round(float(v), 3) for v in p])
+        return p
+
     def wait_until(self, pred, timeout: float, poll: float = 0.02) -> bool:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -327,19 +334,26 @@ class WorkshopRig(_Rig):
 
     def __init__(self, twin, cfg: dict, llm_base: str, recorder_path=None, title: str = "", arm=None):
         super().__init__(twin, cfg, recorder_path, title)
+        from common.imaging import Detection, resolve_class
         from common.motion import SimArmClient, mapper_from_config
         from integration.dispatch import WorkshopContext, build_registry
         from models.llm import LlamaIntentParser
+        from so101_sim.camera import SimCamera
+        from so101_sim.detect import SegDetector
 
         host, port = _llm_host_port(llm_base)
         self.cfg["llm"].update(host=host, port=port, autostart=False)
         self.cfg["robot"]["backend"] = "sim"
         self.arm = arm if arm is not None else SimArmClient(self.cfg, world=self.world)
+        self.seg_camera = SimCamera(self.world, "arm", renderer=self.renderer, segmentation=True)
+        self._closers.append(self.seg_camera.release)
+        self.detector = SimDetector(SegDetector(self.seg_camera), Detection, resolve_class)
         self.parser = LlamaIntentParser(self.cfg, autostart=False)
         self._closers.append(self.parser.close)
         self.ctx = WorkshopContext(
             cfg=self.cfg, arm=self.arm, pose=self.pose, hands=self.hands, camera=self.operator,
             mapper=mapper_from_config(self.cfg), registry=build_registry(), headless=True,
+            detector=self.detector, arm_camera=self.seg_camera,
         )
         self.ctx.say = self.say
 

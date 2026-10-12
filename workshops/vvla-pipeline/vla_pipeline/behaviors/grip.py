@@ -33,8 +33,8 @@ Saying "grip" again releases.
 
 Independent test
 ----------------
-    python -m vla_pipeline.behaviors.grip --dry-run            # simulated 22° object
-    python -m vla_pipeline.behaviors.grip --dry-run --thin     # simulated 4° pen
+    python -m vla_pipeline.behaviors.grip --dry-run            # simulated object (stalls at 60)
+    python -m vla_pipeline.behaviors.grip --dry-run --thin     # simulated pen (stalls just above closed)
     python -m vla_pipeline.behaviors.grip                      # real arm
 """
 
@@ -46,7 +46,7 @@ import time
 
 import numpy as np
 
-from vla_pipeline.robot.arm_interface import ArmClient, DryRunArm, make_arm
+from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR, ArmClient, DryRunArm, make_arm
 from vla_pipeline.utils.config import load_config
 
 logger = logging.getLogger(__name__)
@@ -109,8 +109,9 @@ def close_with_feedback(
     """Close the gripper until contact. Returns ``(gripped, hold_position)``.
 
     Contact = sustained effort above ``load_threshold`` (when the transport
-    provides effort feedback) OR measured-vs-commanded position stall - with
-    a grace window after full close so thin objects are still detected.
+    provides effort feedback) OR a position stall (the jaws stopped short of
+    the command) - with a grace window after full close so thin objects are
+    still detected.
     """
     step = float(g["close_step_deg"])
     eps = float(g["stall_eps_deg"])
@@ -135,14 +136,16 @@ def close_with_feedback(
     stall_count = load_count = 0
     gripped = False
     grace_deadline: float | None = None
+    floor = GRIPPER_CLOSED_FLOOR  # the arm clamps below this; a lower command would read as a stall
+    prev = float(arm.get_joints().get("gripper", commanded))
 
     while True:
         if stop_check and stop_check():
             break
-        if commanded > 0.0:
-            commanded = max(commanded - step, 0.0)
+        if commanded > floor:
+            commanded = max(commanded - step, floor)
             arm.send_joints({"gripper": commanded})
-            if commanded == 0.0:
+            if commanded == floor:
                 grace_deadline = time.time() + grace_s
         elif grace_deadline is not None and time.time() >= grace_deadline:
             break  # fully closed, grace expired → nothing between the jaws
@@ -161,7 +164,10 @@ def close_with_feedback(
                 load_count = 0
 
         measured = float(arm.get_joints().get("gripper", commanded))
-        if measured - commanded > eps:
+        # A servo trails a moving goal, so lagging alone isn't contact: the jaws must also have stopped.
+        stopped_moving = prev - measured < eps
+        prev = measured
+        if measured - commanded > eps and stopped_moving:
             stall_count += 1
             if stall_count >= need_ticks:
                 gripped = True
@@ -173,9 +179,19 @@ def close_with_feedback(
         return False, 0.0
     # Hold slightly tighter than where contact happened (bounded at closed).
     measured = float(arm.get_joints().get("gripper", commanded))
-    hold = max(min(measured, commanded) - extra, 0.0)
+    hold = max(min(measured, commanded) - extra, floor)
     arm.send_joints({"gripper": hold})
     return True, hold
+
+
+def holding(arm: ArmClient, g: dict, hold: float) -> bool:
+    """Once the jaws have settled: an object loads the servo or keeps the jaws
+    open past where they were sent (the arm clamps a goal below its floor)."""
+    load = arm.get_gripper_load()
+    if load is not None and load >= float(g.get("load_threshold", 120.0)):
+        return True
+    target = max(hold, GRIPPER_CLOSED_FLOOR)
+    return float(arm.get_joints().get("gripper", target)) - target > float(g["stall_eps_deg"])
 
 
 # =============================================================================
@@ -271,7 +287,7 @@ def run_grip(
 class _SimulatedObjectArm(DryRunArm):
     """Dry-run arm whose gripper stalls at ``OBJECT_AT`` - emulates an object."""
 
-    OBJECT_AT = 22.0
+    OBJECT_AT = 60.0
 
     def get_joints(self) -> dict[str, float]:
         """Return simulated joints, with gripper floored at OBJECT_AT to emulate a stalled grasp."""
@@ -281,15 +297,15 @@ class _SimulatedObjectArm(DryRunArm):
 
 
 class _SimulatedThinObjectArm(_SimulatedObjectArm):
-    """A pen: stalls at 4° - the case the old loop-exit logic dropped."""
+    """A pen: stalls just above the closed floor - the case the old loop-exit logic dropped."""
 
-    OBJECT_AT = 4.0
+    OBJECT_AT = GRIPPER_CLOSED_FLOOR + 3.0
 
 
 class _SimulatedLoadArm(_SimulatedObjectArm):
-    """Object at 15° that also reports rising servo current near contact."""
+    """Object at 55 that also reports rising servo current near contact."""
 
-    OBJECT_AT = 15.0
+    OBJECT_AT = 55.0
 
     def get_gripper_load(self) -> float | None:
         """Return a simulated effort reading that rises once the gripper stalls against the object."""
@@ -309,7 +325,7 @@ def main() -> None:
         "--dry-run", action="store_true", help="simulate an object stalling the gripper"
     )
     parser.add_argument(
-        "--thin", action="store_true", help="dry-run: simulate a pen (4° stall)"
+        "--thin", action="store_true", help="dry-run: simulate a pen (stalls just above closed)"
     )
     parser.add_argument(
         "--load", action="store_true", help="dry-run: simulate effort feedback"

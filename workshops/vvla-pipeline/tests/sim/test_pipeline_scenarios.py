@@ -16,6 +16,8 @@ physics: joint traces, gripper current, and whether objects are held.
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import pytest
 
@@ -132,14 +134,11 @@ def _present():
     return PRESENT_POSE
 
 
-@pytest.mark.xfail(reason=(
-    "twin: grip.py locks at the first position stall (~70 deg) and the cube ends "
-    "resting on the fixed jaw only - stall-vs-contact geometry needs calibrating"))
 def test_grip_object_handed_over(pipeline_rig):
     rig = pipeline_rig
     # the "user" puts the cube between the jaws a second after the arm presents
     rig.when_near(_present(), lambda: rig.stage("cube", _present()), delay=1.0)
-    rig.run([(0.3, "hold this for me")], timeout=25)
+    rig.run([(0.3, "hold this for me")], timeout=25, settle=1.5)
 
     assert rig.ctx.shared_state.get("grip_lock"), f"grip not reported; robot said {rig.said}"
     assert rig.world.is_grasped("cube"), f"cube not between both jaws: {rig.world.contact_report('cube')}"
@@ -152,8 +151,6 @@ def test_grip_object_handed_over(pipeline_rig):
 
 
 def test_grip_empty_jaws_reports_nothing(pipeline_rig):
-    # the position-stall check still fires on empty jaws (the close is commanded
-    # below the 43 clamp floor); the arm-camera cross-check is what rejects it
     rig = pipeline_rig
     rig.run([(0.3, "hold this")], timeout=25)
     assert rig.trace.currents().max() < 120.0  # the physics agrees: nothing was squeezed
@@ -172,17 +169,7 @@ def _descend_pose(cfg, pan: float = 0.0) -> dict:
             "wrist_roll": 0.0}
 
 
-@pytest.mark.slow
-@pytest.mark.xfail(reason=(
-    "twin: the ball is centered in the wrist_cam at pan -20 but the pan visual "
-    "servo steers away from it - servo sign vs real arm camera orientation unverified"))
-def test_pick_up_the_ball(pipeline_rig):
-    rig = pipeline_rig
-    rig.pose.keys = [(0.0, [PERSON_LEFT])]
-    rig.stage("ball", _descend_pose(rig.cfg, pan=8.0))
-    z0 = rig.world.body_pos("ball")[2]
-    rig.run([(0.3, "pick up the ball")], timeout=60)
-
+def _assert_picked_and_handed_over(rig, z0: float):
     assert rig.detector.calls > 0, "behavior never looked through the arm camera"
     assert rig.said_any("Got the sports ball"), f"robot said {rig.said}"
     assert rig.trace.heights("ball").max() - z0 > 0.03, "ball never rose 3 cm"
@@ -191,6 +178,40 @@ def test_pick_up_the_ball(pipeline_rig):
     # handed toward the person on the left of the operator camera (mirrored -> +pan)
     _, pan = rig.trace.series("shoulder_pan")
     assert pan.max() > 10.0
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("spot", [
+    None,  # its default spot, in reach of the fixed poses too
+    (0.22, -0.04),  # closer than the fixed descend pose reaches
+    (0.32, 0.0),  # farther than the fixed descend pose reaches
+    (0.25, -0.10),
+], ids=["default", "near", "far", "right"])
+def test_pick_up_the_ball(pipeline_rig, caplog, spot):
+    rig = pipeline_rig
+    rig.pose.keys = [(0.0, [PERSON_LEFT])]
+    z0 = rig.put("ball", None if spot is None else [*spot, 0.015])[2]
+    rig.run([(0.3, "pick up the ball")], timeout=60)
+
+    assert "IK reach: sports ball" in caplog.text and "-> solved" in caplog.text, "IK reach not used"
+    _assert_picked_and_handed_over(rig, z0)
+    assert rig.event_times("behavior_end", intent="pick_place", ok=True)
+
+
+@pytest.mark.slow
+def test_pick_ball_out_of_fixed_reach_says_so(pipeline_rig):
+    rig = pipeline_rig
+    rig.cfg["behaviors"]["pick_place"]["reach"] = "fixed"
+    rig.pose.keys = [(0.0, [PERSON_LEFT])]
+    # in view of the arm camera but ~10 cm closer than the taught descend pose
+    z0 = rig.put("ball", [0.19, 0.0, 0.015])[2]
+    rig.run([(0.3, "pick up the ball")], timeout=60)
+
+    assert rig.said_any("couldn't get a grip on the sports ball"), rig.said
+    assert not rig.said_any("Got the"), rig.said
+    assert rig.trace.heights("ball").max() - z0 < 0.03, "ball was lifted"
+    assert rig.event_times("behavior_end", intent="pick_place", ok=False)
+    _assert_at(rig, _rest())
 
 
 def test_pick_unknown_object_fails_safely(pipeline_rig):
@@ -203,13 +224,13 @@ def test_pick_unknown_object_fails_safely(pipeline_rig):
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(reason=(
-    "twin: the block lifts ~3 mm then drops - same jaw/contact geometry issue "
-    "as test_grip_object_handed_over"))
 def test_fetch_block_hands_to_person(pipeline_rig):
     rig = pipeline_rig
     fb = rig.cfg["behaviors"]["fetch_block"]
     rig.pose.keys = [(0.0, [PERSON_LEFT])]
+    # staged with the arm already there: approaching from rest sweeps a pedestal-staged cube off
+    rig.arm.go_to({**fb["block_pose"], "gripper": 70.0}, duration_s=2.5)
+    time.sleep(0.8)
     rig.stage("cube", fb["block_pose"])
     z0 = rig.world.body_pos("cube")[2]
     rig.run([(0.3, "bring me the block")], timeout=60)
@@ -218,6 +239,17 @@ def test_fetch_block_hands_to_person(pipeline_rig):
     assert rig.trace.heights("cube").max() - z0 > 0.03, "block never lifted"
     assert rig.trace.grasped_seconds("cube") >= 1.0
     assert not rig.world.is_grasped("cube"), "block not released"
+    _assert_at(rig, _rest())
+
+
+@pytest.mark.slow
+def test_fetch_block_without_block_says_so(pipeline_rig):
+    """The cube sits on the table, not at block_pose: the jaws close on air."""
+    rig = pipeline_rig
+    rig.run([(0.3, "bring me the block")], timeout=40)
+
+    assert rig.said_any("couldn't get a grip"), rig.said
+    assert not any(s.grasped.get("cube") for s in rig.trace.samples)
     _assert_at(rig, _rest())
 
 

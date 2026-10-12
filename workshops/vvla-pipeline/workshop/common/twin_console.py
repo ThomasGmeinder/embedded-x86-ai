@@ -264,10 +264,10 @@ class TwinConsole:
 
         def run(ctx, cmd=None):
             self._behavior, self._behavior_t0 = name, time.monotonic()
-            how = "failed"
+            how, result = "failed", None
             try:
-                handler(ctx, cmd)
-                how = "stopped" if ctx.stop_check() else "done"
+                result = handler(ctx, cmd)
+                how = "stopped" if ctx.stop_check() else ("failed" if result is False else "done")
             except Exception as e:
                 self.log(f"  crashed: {e}", RED)
                 raise
@@ -275,6 +275,7 @@ class TwinConsole:
                 took = time.monotonic() - self._behavior_t0
                 self.log(f"  {name} {how} after {took:.1f}s", GRAY)
                 self._behavior = None
+            return result
 
         return run
 
