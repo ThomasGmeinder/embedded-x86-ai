@@ -494,17 +494,18 @@ def run_pick_place(ctx, cmd) -> bool:
         )
         if ctx.stop_check():
             return False
-    if resolved in pp.get("wrist_align_classes", []):
-        lift_pose = {**ctx.arm.get_joints(), "gripper": hold}
-    else:
-        lift_pose = {
-            "shoulder_pan": ctx.arm.get_joints()["shoulder_pan"],
-            "shoulder_lift": -80.0,
-            "elbow_flex": 85.0,
-            "wrist_flex": 50.0,
-            "wrist_roll": ctx.arm.get_joints()["wrist_roll"],
-            "gripper": hold,
-        }
+    lift_pose = {
+        "shoulder_pan": ctx.arm.get_joints()["shoulder_pan"],
+        "shoulder_lift": -80.0,
+        "elbow_flex": 85.0,
+        "wrist_flex": 50.0,
+        "wrist_roll": ctx.arm.get_joints()["wrist_roll"],
+        "gripper": hold,
+    }
+    # The reverse IK path already lifted a thin object 10 cm; folding into the
+    # lift pose twists it loose, so it stays in its top-down hold. The
+    # handover still reaches out from the lift pose, not from that low hold.
+    if resolved not in pp.get("wrist_align_classes", []):
         ctx.arm.go_to(lift_pose, duration_s=2.0, stop_check=ctx.stop_check)
     if ctx.stop_check():
         return False

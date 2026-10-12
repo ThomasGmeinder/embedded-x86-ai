@@ -171,6 +171,11 @@ def _descend_pose(cfg, pan: float = 0.0) -> dict:
             "wrist_roll": 0.0}
 
 
+def _assert_others_in_place(rig, handled: str):
+    moved = rig.disturbed(handled)
+    assert not moved, f"the arm moved objects it was not asked to pick up (m): {moved}"
+
+
 def _assert_picked_and_handed_over(rig, z0: float):
     assert rig.detector.calls > 0, "behavior never looked through the arm camera"
     assert rig.said_any("Got the sports ball"), f"robot said {rig.said}"
@@ -180,11 +185,12 @@ def _assert_picked_and_handed_over(rig, z0: float):
     # handed toward the person on the left of the operator camera (mirrored -> +pan)
     _, pan = rig.trace.series("shoulder_pan")
     assert pan.max() > 10.0
+    _assert_others_in_place(rig, "sports_ball")
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("spot", [
-    None,  # its default spot, in reach of the fixed poses too
+    None,  # its default spot among the other props, in reach of the fixed poses too
     (0.22, -0.04),  # closer than the fixed descend pose reaches
     (0.32, 0.0),  # farther than the fixed descend pose reaches
     (0.25, -0.10),
@@ -192,7 +198,11 @@ def _assert_picked_and_handed_over(rig, z0: float):
 def test_pick_up_the_ball(pipeline_rig, caplog, spot):
     rig = pipeline_rig
     rig.pose.keys = [(0.0, [PERSON_LEFT])]
-    z0 = rig.put("sports_ball", None if spot is None else [*spot, 0.015])[2]
+    if spot is None:
+        rig.default_scene()  # the notebook console's scene: all four props
+        z0 = rig.world.body_pos("sports_ball")[2]
+    else:
+        z0 = rig.put("sports_ball", [*spot, 0.015])[2]
     rig.run([(0.3, "pick up the ball")], timeout=60)
 
     assert "IK reach: sports ball" in caplog.text and "-> solved" in caplog.text, "IK reach not used"
@@ -218,6 +228,7 @@ def test_pick_up_toothbrush_aligns_wrist(pipeline_rig, caplog):
     assert rig.trace.heights("toothbrush").max() - z0 > 0.03
     assert rig.trace.grasped_seconds("toothbrush") >= 1.0
     assert rig.event_times("behavior_end", intent="pick_place", ok=True)
+    _assert_others_in_place(rig, "toothbrush")
 
 
 @pytest.mark.slow
@@ -236,6 +247,7 @@ def test_pick_up_bottle_without_knocking_it_over(pipeline_rig, caplog):
     assert rig.trace.heights("bottle").max() - z0 > 0.03
     assert rig.trace.grasped_seconds("bottle") >= 1.0
     assert rig.event_times("behavior_end", intent="pick_place", ok=True)
+    _assert_others_in_place(rig, "bottle")
 
 
 @pytest.mark.slow
@@ -260,6 +272,7 @@ def test_pick_unknown_object_fails_safely(pipeline_rig):
     rig.run([(0.3, "pick up the pen")], timeout=25)
     assert rig.said_any("don't know what a pen looks like"), rig.said
     assert not any(s.grasped.get("toothbrush") for s in rig.trace.samples)
+    assert not rig.disturbed(), f"the arm moved objects (m): {rig.disturbed()}"
     _assert_at(rig, _rest())
 
 

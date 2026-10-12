@@ -140,6 +140,7 @@ class _Rig:
                 title=title, load_threshold=self._load_threshold(),
             ).start()
         self._closers: list = []
+        self._placed: dict[str, np.ndarray] = {}
 
     # -- hooks ----------------------------------------------------------------
     def _hand_obs_cls(self):
@@ -173,6 +174,7 @@ class _Rig:
     # -- scene ------------------------------------------------------------------
     def stage(self, obj: str, pose: dict, stand: str = "stand_a"):
         p = self.world.stage_object(obj, {k: v for k, v in pose.items() if k != "gripper"}, stand=stand)
+        self._placed[obj] = np.array(p, float)
         self.on_event("stage", object=obj, at=[round(float(v), 3) for v in p])
         return p
 
@@ -201,8 +203,18 @@ class _Rig:
         """Put a hidden object back on the table: at its XML spot, or at ``pos``."""
         p = np.array(self.world.model.body(obj).pos if pos is None else pos, float)
         self.world.place(obj, p)
+        self._placed[obj] = p.copy()
         self.on_event("stage", object=obj, at=[round(float(v), 3) for v in p])
         return p
+
+    def disturbed(self, *handled: str, tol: float = 0.01) -> dict[str, float]:
+        """Props on the table that moved more than ``tol`` (m) from where they
+        were put, ``handled`` (picked up or dropped on purpose) excepted."""
+        moved = {
+            obj: float(np.linalg.norm(self.world.body_pos(obj) - p))
+            for obj, p in self._placed.items() if obj not in handled
+        }
+        return {obj: round(d, 3) for obj, d in moved.items() if d > tol}
 
     def wait_until(self, pred, timeout: float, poll: float = 0.02) -> bool:
         deadline = time.monotonic() + timeout
