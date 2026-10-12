@@ -25,6 +25,7 @@ import numpy as np
 
 from scripted import (
     Clock,
+    CountingDetector,
     ScriptedOperatorCamera,
     ScriptedTranscripts,
     SignalBoard,
@@ -175,6 +176,27 @@ class _Rig:
         self.on_event("stage", object=obj, at=[round(float(v), 3) for v in p])
         return p
 
+    def default_scene(self) -> None:
+        """Every prop back at its XML spot - the scene the notebook console shows."""
+        for obj in self.world.objects:
+            self.put(obj)
+
+    def _eyes(self, detector, detection_cls, resolve_class) -> None:
+        """Arm camera + detector: the real YOLO on the rendered wrist image when
+        ``detector`` is given (as in the notebook), else ground-truth boxes from
+        the twin's segmentation."""
+        from so101_sim.camera import SimCamera
+        from so101_sim.detect import SegDetector
+
+        self.seg_camera = SimCamera(
+            self.world, "arm", renderer=self.renderer, segmentation=detector is None
+        )
+        self._closers.append(self.seg_camera.release)
+        if detector is None:
+            self.detector = SimDetector(SegDetector(self.seg_camera), detection_cls, resolve_class)
+        else:
+            self.detector = CountingDetector(detector, resolve_class)
+
     def put(self, obj: str, pos=None) -> np.ndarray:
         """Put a hidden object back on the table: at its XML spot, or at ``pos``."""
         p = np.array(self.world.model.body(obj).pos if pos is None else pos, float)
@@ -247,11 +269,8 @@ class PipelineRig(_Rig):
         return float(self.cfg["behaviors"]["grip"].get("load_threshold", 120.0))
 
     def __init__(self, twin, cfg: dict, llm_base: str, recorder_path=None, title: str = "",
-                 arm=None, arm_camera=None):
+                 arm=None, arm_camera=None, detector=None):
         super().__init__(twin, cfg, recorder_path, title)
-        from so101_sim.camera import SimCamera
-        from so101_sim.detect import SegDetector
-
         from vla_pipeline.llm.llama_intent import LlamaIntentParser
         from vla_pipeline.main import PipelineContext
         from vla_pipeline.robot.sim_arm import SimArmClient
@@ -261,11 +280,8 @@ class PipelineRig(_Rig):
         self.cfg["llm"].update(host=host, port=port, autostart=False)
         self.cfg["robot"]["backend"] = "sim"
         self.arm = arm if arm is not None else SimArmClient(self.cfg, world=self.world)
-        # the detector always reads the twin's segmentation of the wrist camera
-        self.seg_camera = SimCamera(self.world, "arm", renderer=self.renderer, segmentation=True)
-        self._closers.append(self.seg_camera.release)
+        self._eyes(detector, Detection, resolve_class)
         self.arm_camera = arm_camera if arm_camera is not None else self.seg_camera
-        self.detector = SimDetector(SegDetector(self.seg_camera), Detection, resolve_class)
         self.parser = LlamaIntentParser(self.cfg)
         self._closers.append(self.parser.close)
         self.ctx = PipelineContext(
@@ -332,22 +348,19 @@ class WorkshopRig(_Rig):
 
         return HandObservation
 
-    def __init__(self, twin, cfg: dict, llm_base: str, recorder_path=None, title: str = "", arm=None):
+    def __init__(self, twin, cfg: dict, llm_base: str, recorder_path=None, title: str = "", arm=None,
+                 detector=None):
         super().__init__(twin, cfg, recorder_path, title)
         from common.imaging import Detection, resolve_class
         from common.motion import SimArmClient, mapper_from_config
         from integration.dispatch import WorkshopContext, build_registry
         from models.llm import LlamaIntentParser
-        from so101_sim.camera import SimCamera
-        from so101_sim.detect import SegDetector
 
         host, port = _llm_host_port(llm_base)
         self.cfg["llm"].update(host=host, port=port, autostart=False)
         self.cfg["robot"]["backend"] = "sim"
         self.arm = arm if arm is not None else SimArmClient(self.cfg, world=self.world)
-        self.seg_camera = SimCamera(self.world, "arm", renderer=self.renderer, segmentation=True)
-        self._closers.append(self.seg_camera.release)
-        self.detector = SimDetector(SegDetector(self.seg_camera), Detection, resolve_class)
+        self._eyes(detector, Detection, resolve_class)
         self.parser = LlamaIntentParser(self.cfg, autostart=False)
         self._closers.append(self.parser.close)
         self.ctx = WorkshopContext(

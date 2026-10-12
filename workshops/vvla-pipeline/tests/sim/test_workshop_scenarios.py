@@ -9,8 +9,9 @@
 
 Spoken commands go through the project's ``integration.handle_transcript``
 and the workshop ``LlamaIntentParser`` against the mock llama-server; the
-behaviors run on ``common.motion.SimArmClient`` with ground-truth
-detections from the twin's segmentation.
+behaviors run on ``common.motion.SimArmClient`` and see through the
+workshop's YOLOv26s on the twin's rendered arm camera (``--sim-eyes seg``:
+ground-truth boxes from its segmentation).
 """
 
 from __future__ import annotations

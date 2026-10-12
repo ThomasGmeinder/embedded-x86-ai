@@ -10,6 +10,7 @@
     pytest tests/sim -m "sim and not hw"         # tier 1: in-process, no ROS/NPU/LLM
     pytest tests/sim -m hw                       # tier 2: full ROS graph, iGPU
     pytest tests/sim --sim-video failed          # keep only failing runs' videos
+    pytest tests/sim --sim-eyes seg              # ground-truth boxes instead of YOLO
     PROJECT=project pytest tests/sim -k workshop # students' workshop code
 
 Videos + timelines land in ``_artifacts/sim_tests/<tier>/`` with an
@@ -44,6 +45,11 @@ def pytest_addoption(parser):
                 help="which scenario recordings to keep (default: all)")
     g.addoption("--sim-video-dir", default=str(PIPE_ROOT / "_artifacts" / "sim_tests"),
                 help="where recordings + index.html go")
+    g.addoption("--sim-eyes", choices=("yolo", "seg"), default="yolo",
+                help="arm-camera detector: the stack's YOLOv26s on the rendered frames, as in the "
+                     "notebook (default), or ground-truth boxes from the twin's segmentation")
+    g.addoption("--sim-yolo-device", choices=("cpu", "npu"), default="cpu",
+                help="where the YOLO eyes run (the notebook uses npu)")
 
 
 def pytest_configure(config):
@@ -185,21 +191,52 @@ def _finish(request, rig, tier: str) -> None:
         results[path.stem] = status
 
 
+@pytest.fixture(scope="session")
+def eyes(request, pipeline_cfg, workshop_cfg):
+    """``eyes(target)``: that stack's own YOLOv26s ``ObjectDetector`` (one
+    session each), or ``None`` with ``--sim-eyes seg``."""
+    made: dict[str, object] = {}
+    kind = request.config.getoption("--sim-eyes")
+    device = request.config.getoption("--sim-yolo-device")
+
+    def get(target: str):
+        if kind == "seg":
+            return None
+        if target not in made:
+            if target == "pipeline":
+                from vla_pipeline.vision.yolo_detect_npu import ObjectDetector
+
+                cwd = os.getcwd()
+                os.chdir(PIPE_ROOT)  # the pipeline config's model paths are repo-relative
+                try:
+                    made[target] = ObjectDetector(pipeline_cfg, device=device)
+                finally:
+                    os.chdir(cwd)
+            else:
+                from models.vision import ObjectDetector
+
+                made[target] = ObjectDetector(workshop_cfg, device=device)
+        return made[target]
+
+    return get
+
+
 @pytest.fixture
-def pipeline_rig(request, twins, pipeline_cfg, mock_llm):
+def pipeline_rig(request, twins, pipeline_cfg, mock_llm, eyes):
     from rigs import PipelineRig
 
     mock_llm.requests.clear()
     rig = PipelineRig(
         twins("pipeline", pipeline_cfg), pipeline_cfg, mock_llm.base_url,
         recorder_path=_video_path(request, "tier1"), title=f"pipeline: {request.node.name}",
+        detector=eyes("pipeline"),
     )
     yield rig
     _finish(request, rig, "tier1")
 
 
 @pytest.fixture
-def workshop_rig(request, twins, workshop_cfg, mock_llm):
+def workshop_rig(request, twins, workshop_cfg, mock_llm, eyes):
     from rigs import WorkshopRig
 
     mock_llm.requests.clear()
@@ -207,6 +244,7 @@ def workshop_rig(request, twins, workshop_cfg, mock_llm):
         twins("workshop", workshop_cfg), workshop_cfg, mock_llm.base_url,
         recorder_path=_video_path(request, "tier1"),
         title=f"workshop ({WORKSHOP_PROJECT.name}): {request.node.name}",
+        detector=eyes("workshop"),
     )
     yield rig
     _finish(request, rig, "tier1")

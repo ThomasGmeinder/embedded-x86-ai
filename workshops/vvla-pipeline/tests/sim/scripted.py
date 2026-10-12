@@ -339,6 +339,32 @@ class SimDetector:
         return frame
 
 
+class CountingDetector:
+    """The stack's real ``ObjectDetector`` (YOLOv26s on the rendered frames),
+    counting the frames it was asked about."""
+
+    def __init__(self, detector, resolve_class):
+        self.inner = detector
+        self.resolve_class = resolve_class
+        self.conf_threshold = detector.conf_threshold
+        self.calls = 0
+
+    def infer(self, frame_bgr, conf=None):
+        self.calls += 1
+        return self.inner.infer(frame_bgr, conf)
+
+    def find(self, frame_bgr, spoken_name, conf=None):
+        cls = self.resolve_class(spoken_name)
+        if cls is None:
+            return [], None
+        dets = [d for d in self.infer(frame_bgr, conf) if d.name == cls]
+        dets.sort(key=lambda d: d.score, reverse=True)
+        return dets, cls
+
+    def draw(self, frame, dets):
+        return self.inner.draw(frame, dets)
+
+
 # ---------------------------------------------------------------------------
 # transcripts
 # ---------------------------------------------------------------------------

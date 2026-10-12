@@ -160,7 +160,7 @@ def test_grip_empty_jaws_reports_nothing(pipeline_rig):
 
 
 # ---------------------------------------------------------------------------
-# pick and place / fetch (segmentation detector + scripted person)
+# pick and place / fetch (YOLO on the arm camera + scripted person)
 # ---------------------------------------------------------------------------
 PERSON_LEFT = Person(cx=0.3, wrist=(0.4, 0.45))
 
@@ -207,7 +207,7 @@ def test_pick_ball_out_of_fixed_reach_says_so(pipeline_rig):
     rig.pose.keys = [(0.0, [PERSON_LEFT])]
     # in view of the arm camera but ~10 cm closer than the taught descend pose
     z0 = rig.put("sports_ball", [0.19, 0.0, 0.015])[2]
-    rig.run([(0.3, "pick up the ball")], timeout=60)
+    rig.run([(0.3, "pick up the ball")], timeout=60, settle=2.0)
 
     assert rig.said_any("couldn't get a grip on the sports ball"), rig.said
     assert not rig.said_any("Got the"), rig.said
