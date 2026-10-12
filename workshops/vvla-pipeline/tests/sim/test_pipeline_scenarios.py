@@ -172,8 +172,8 @@ def _descend_pose(cfg, pan: float = 0.0) -> dict:
 
 @pytest.mark.slow
 @pytest.mark.xfail(reason=(
-    "twin: at wrist_roll 0 the wrist_cam image is rotated ~90 deg, so the pan "
-    "visual servo steers on the wrong image axis - verify against the real arm camera"))
+    "twin: the ball is centered in the wrist_cam at pan -20 but the pan visual "
+    "servo steers away from it - servo sign vs real arm camera orientation unverified"))
 def test_pick_up_the_ball(pipeline_rig):
     rig = pipeline_rig
     rig.pose.keys = [(0.0, [PERSON_LEFT])]

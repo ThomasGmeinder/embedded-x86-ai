@@ -201,7 +201,8 @@
                 <site group="3" name="gripperframe" pos="0.012 -0.000218 -0.098127" quat="1 0 1 0"/>
                 <!-- Camera mount -->
                 <body name="camera_mount">
-                  <camera name="wrist_cam" mode="fixed" pos="0.0 0.055 -0.045" euler="-0.57 0 0" resolution="640 480"
+                  <camera name="wrist_cam" mode="fixed" pos="0.0 0.055 -0.045"
+                    xyaxes="0 -0.8419 0.5396 1 0 0" resolution="640 480"
                     sensorsize="0.0048 0.0036" focal="0.0036 0.0036"/>
                   <geom type="mesh" mass="0.012" class="visual" pos="0 -0.000218 0.00095" quat="0 1 0 0"
                     mesh="wrist_roll_follower_so101_camera_mount" material="wrist_roll_follower_so101_v1_material"/>
