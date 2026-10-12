@@ -42,6 +42,7 @@ __all__ = [
     "FLAT_CLASSES",
     "principal_axis_in_box",
     "axis_error_deg",
+    "joint_line",
     "rpy_to_matrix",
     "matrix_to_rpy",
     "solve_mount",
@@ -57,6 +58,7 @@ FLAT_CLASSES = frozenset({"book", "toothbrush"})
 
 _CV_FROM_MJ = np.diag([1.0, -1.0, -1.0])  # MuJoCo cameras look down -z with y up
 _CLEARANCE_BODIES = ("lower_arm", "wrist", "gripper", "camera_mount", "moving_jaw_so101_v1")
+_MIN_HOLD_M = 0.015  # a tall object's grasp point stays at least this far below its top
 _AXIS_WEIGHT = 0.05  # metres of grasp-point error worth one unit of closing-axis tilt
 _SEEDS = ((9.0, 20.0, 54.0), (-15.0, 20.0, 54.0), (30.0, -20.0, 75.0), (-40.0, 60.0, 60.0))
 _VIEW_SEEDS = ((-55.0, 65.0, 45.0), (-20.0, 40.0, 60.0), (-75.0, 85.0, 30.0), (0.0, 20.0, 70.0))
@@ -64,6 +66,7 @@ _VIEW_DOWN_WEIGHT = 0.5  # soft preference; centring and distance take priority
 _VIEW_SMOOTH_WEIGHT = 0.05  # pull toward the seed pose per 90 deg of joint change
 _SQP_TRUST_DEG = 10.0
 _SQP_REG = 2e-6
+_BOX_GRID = np.array(np.meshgrid(*[np.linspace(-1, 1, 5)] * 3)).reshape(3, -1).T  # points through a geom's box
 _RING = np.array([[math.cos(a), math.sin(a)] for a in np.linspace(0, 2 * math.pi, 72, endpoint=False)])
 _golden = math.pi * (3.0 - math.sqrt(5.0))
 _SPHERE = np.array([
@@ -609,6 +612,24 @@ class Kinematics:
                 low = min(low, float(corners[:, 2].min()))
             return low
 
+    def hand_clearance(self, joints: dict, obstacle) -> float:
+        """Closest approach (m) of the arm from the lower arm out to an upright
+        cylinder ``obstacle`` = ``(x, y, radius, top_z)`` standing on the table;
+        negative when they overlap."""
+        x, y, radius, top_z = (float(v) for v in obstacle)
+        with self._lock:
+            d = self.world.fk(dict(joints))
+            m = self.model
+            points = []
+            for g in self._clear_geoms:
+                c, h = m.geom_aabb[g][:3], m.geom_aabb[g][3:]
+                points.append((c + _BOX_GRID * h) @ d.geom_xmat[g].reshape(3, 3).T + d.geom_xpos[g])
+        points = np.vstack(points)
+        radial = np.hypot(points[:, 0] - x, points[:, 1] - y) - radius
+        above = points[:, 2] - top_z
+        outside = np.where((radial > 0) & (above > 0), np.hypot(radial, above), np.maximum(radial, above))
+        return float(outside.min())
+
     def ik(self, target, width: float = 0.04, gripper: float = OPEN_GRIPPER, seed: dict | None = None,
            wrist_roll: float | None = None, iters: int = 80,
            limits: dict | None = None, object_axis=None) -> tuple[dict, float, float]:
@@ -660,6 +681,8 @@ class Kinematics:
         limits: dict | None = None,
         object_axis=None,
         seed: dict | None = None,
+        obstacle=None,
+        obstacle_clearance_m: float = 0.01,
     ) -> tuple[dict, dict] | None:
         """``(pregrasp, grasp)`` joint poses for an object centred at ``p``, or ``None``.
 
@@ -670,12 +693,24 @@ class Kinematics:
         joints are solved together so the jaws close perpendicular to that
         table-plane axis; otherwise ``wrist_roll`` is fixed. ``None`` means
         out of reach (within ``limits``, see :meth:`ik`).
+
+        ``obstacle`` is the object's own volume, an upright cylinder
+        ``(x, y, radius, top_z)`` (see :meth:`hand_clearance`). A tall object
+        is then grasped as low as the hand fits around it, up to
+        ``_MIN_HOLD_M`` below its top, and the pre-grasp is raised until the
+        whole hand is ``obstacle_clearance_m`` above it - so neither jaw nor
+        the moving jaw's root can push it over on the way in.
         """
         p = np.asarray(p, float)
 
         def ok(pose, err, tilt):
             return err <= tol_m and abs(tilt) <= max_tilt and self.lowest_point(pose) >= table_z + clearance_m
 
+        def clear(pose, margin):
+            return obstacle is None or self.hand_clearance(pose, obstacle) >= margin
+
+        if obstacle is not None:
+            max_raise_m = max(max_raise_m, float(obstacle[3]) - _MIN_HOLD_M - p[2])
         grasp = None
         solve_seed = seed
         for raise_m in np.arange(0.0, max_raise_m + 1e-9, 0.003):
@@ -685,18 +720,21 @@ class Kinematics:
             )
             if err <= tol_m and abs(tilt) <= max_tilt:
                 solve_seed = pose
-                if ok(pose, err, tilt):
+                if ok(pose, err, tilt) and clear(pose, 0.0):
                     grasp = pose
                     break
         if grasp is None:
             return None
-        pre, err, tilt = self.ik(
-            self.world.grasp_point(grasp, width) + [0.0, 0.0, above_m], width, gripper, grasp,
-            grasp["wrist_roll"], limits=limits, object_axis=object_axis,
-        )
-        if not ok(pre, err, tilt):
-            return None
-        return pre, grasp
+        top = self.world.grasp_point(grasp, width)
+        rise = 0.0 if obstacle is None else max(0.0, float(obstacle[3]) - top[2])
+        for extra in np.arange(0.0, rise + 1e-9, 0.01) if rise else [0.0]:
+            pre, err, tilt = self.ik(
+                top + [0.0, 0.0, above_m + extra], width, gripper, grasp,
+                grasp["wrist_roll"], limits=limits, object_axis=object_axis,
+            )
+            if ok(pre, err, tilt) and clear(pre, obstacle_clearance_m):
+                return pre, grasp
+        return None
 
     # ------------------------------------------------------------------
     # viewing an oriented object
@@ -862,6 +900,18 @@ class Kinematics:
                 out.append(pose)
                 seed = pose
             return [*out, end]
+
+
+def joint_line(start: dict, end: dict, max_step_deg: float = 8.0) -> list[dict]:
+    """``end`` split into poses along the straight joint-space line from ``start``.
+
+    A single goal lets every servo run its own profile, so the joint with the
+    longest travel arrives last and the hand leaves the line between the two
+    poses; short steps hold it on the line the planner checked.
+    """
+    keys = [k for k in end if k in start]
+    n = max(1, math.ceil(max((abs(end[k] - start[k]) for k in keys), default=0.0) / max_step_deg))
+    return [{**end, **{k: start[k] + (end[k] - start[k]) * i / n for k in keys}} for i in range(1, n + 1)]
 
 
 def solve_mount(gripper_poses, board_poses):

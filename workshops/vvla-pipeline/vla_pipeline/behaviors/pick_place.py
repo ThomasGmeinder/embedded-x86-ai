@@ -524,6 +524,12 @@ def _plan_ik_reach(
         return None
     p = loc["xyz"].copy()
     p[2] = min(p[2], table_z + float(pp.get("max_grasp_height_m", 0.03)))
+    # a standing object's own volume: the hand has to come down around it
+    obstacle = (
+        (*loc["xyz"][:2], 0.5 * loc["width"], table_z + loc["height"])
+        if shape in ("bottle", "upright")
+        else None
+    )
     oriented = resolved_name in pp.get("wrist_align_classes", [])
     if oriented:
         axis = principal_axis_in_box(
@@ -563,8 +569,9 @@ def _plan_ik_reach(
         if oriented
         else pp.get("pregrasp_above_m", 0.06)
     )
-    # the arm clamps any pose; an aligned grasp has to be solved within its limits
-    limits = JOINT_LIMITS if oriented else None
+    # the arm clamps any pose; an aligned grasp, or one that has to clear
+    # the object, is only collision-free if solved within its limits
+    limits = JOINT_LIMITS if oriented or obstacle else None
     wrist_roll = float(arm.get_joints().get("wrist_roll", 0.0)) if oriented else 0.0
     plan = kin.solve_grasp(
         p,
@@ -573,6 +580,7 @@ def _plan_ik_reach(
         table_z=table_z,
         wrist_roll=wrist_roll,
         limits=limits,
+        obstacle=obstacle,
     )
     if plan is not None and oriented and abs(wrist_roll) >= 30.0:
         # Start a thin object against the fixed finger. The moving finger can
@@ -626,7 +634,11 @@ def _reach_ik(
     if down is None:
         logger.info("IK reach not possible - using the fixed approach")
         return None
-    arm.go_to(down[0], duration_s=1.5, stop_check=stop_check)
+    from so101_sim.kinematics import joint_line
+
+    transfer = joint_line(arm.get_joints(), down[0])
+    for pose in transfer:
+        arm.go_to(pose, duration_s=1.5 / len(transfer), stop_check=stop_check)
     for pose in down[1:]:
         arm.go_to(pose, duration_s=1.5 / (len(down) - 1), stop_check=stop_check)
     return [{k: v for k, v in p.items() if k != "gripper"} for p in reversed(down[:-1])]

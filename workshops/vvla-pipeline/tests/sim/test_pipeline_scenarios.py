@@ -221,6 +221,24 @@ def test_pick_up_toothbrush_aligns_wrist(pipeline_rig, caplog):
 
 
 @pytest.mark.slow
+def test_pick_up_bottle_without_knocking_it_over(pipeline_rig, caplog):
+    rig = pipeline_rig
+    rig.pose.keys = [(0.0, [PERSON_LEFT])]
+    rig.default_scene()
+    z0 = rig.world.body_pos("bottle")[2]
+    rig.run([(0.3, "pick up the bottle")], timeout=90)
+
+    assert "IK reach: bottle" in caplog.text and "-> solved" in caplog.text, "IK reach not used"
+    assert rig.said_any("Got the bottle"), (
+        f"robot said {rig.said}; rise={rig.trace.heights('bottle').max() - z0:.3f} m, "
+        f"grasped={rig.trace.grasped_seconds('bottle'):.2f} s"
+    )
+    assert rig.trace.heights("bottle").max() - z0 > 0.03
+    assert rig.trace.grasped_seconds("bottle") >= 1.0
+    assert rig.event_times("behavior_end", intent="pick_place", ok=True)
+
+
+@pytest.mark.slow
 def test_pick_ball_out_of_fixed_reach_says_so(pipeline_rig):
     rig = pipeline_rig
     rig.cfg["behaviors"]["pick_place"]["reach"] = "fixed"
