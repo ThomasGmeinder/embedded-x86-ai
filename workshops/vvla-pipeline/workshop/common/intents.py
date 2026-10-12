@@ -173,9 +173,13 @@ def _normalize_transcript(text: str) -> str:
     return re.sub(r"[\s\.\,\!\?\"\'`]+$", "", (text or "").strip().lower()).strip()
 
 
+# Whisper's non-speech annotations: [BLANK_AUDIO], (sighs), *music*.
+_NON_SPEECH_TAG = re.compile(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*")
+
+
 def is_noise(text: str) -> bool:
     """True for known silence-hallucination phrases and empty transcripts."""
-    norm = _normalize_transcript(text)
+    norm = _normalize_transcript(_NON_SPEECH_TAG.sub(" ", text or ""))
     if not norm:
         return True
     if not any(c.isalpha() for c in norm):

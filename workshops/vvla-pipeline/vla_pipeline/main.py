@@ -234,6 +234,9 @@ DEFAULT_NOISE_PHRASES = (
 )
 
 
+_NON_SPEECH_TAG = re.compile(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*")
+
+
 def _normalize_transcript(text: str) -> str:
     """Lowercase, strip surrounding whitespace and trailing punctuation/quotes."""
     return re.sub(r"[\s\.\,\!\?\"\'`]+$", "", (text or "").strip().lower()).strip()
@@ -254,7 +257,8 @@ def make_noise_gate(cfg: dict):
 
     def is_noise(text: str) -> bool:
         """Return True if text looks like noise/hallucination rather than a real command."""
-        norm = _normalize_transcript(text)
+        # Whisper tags non-speech as "[BLANK_AUDIO]", "(sighs)", "*music*" - drop those.
+        norm = _normalize_transcript(_NON_SPEECH_TAG.sub(" ", text or ""))
         if not norm:
             return True
         if not any(c.isalpha() for c in norm):
