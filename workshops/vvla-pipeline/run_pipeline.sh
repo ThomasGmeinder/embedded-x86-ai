@@ -12,7 +12,8 @@
 #   ./run_pipeline.sh                     # voice control, full hardware
 #   ./run_pipeline.sh --text-commands     # type commands instead of speaking
 #   ./run_pipeline.sh --dry-run           # no robot hardware
-#   ./run_pipeline.sh --digital-twin      # no robot hardware: MuJoCo twin of the arm
+#   ./run_pipeline.sh --digital-twin      # no robot hardware: MuJoCo twin of the arm,
+#                                         #   shown in the twin console window
 #   ./run_pipeline.sh --headless          # no preview windows
 #
 # When robot.use_ros2: true in config/pipeline.yaml, starts the SO-101 server

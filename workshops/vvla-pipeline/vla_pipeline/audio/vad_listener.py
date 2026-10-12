@@ -257,11 +257,12 @@ class FastListener:
                 )
                 return text or None
 
-    def run_forever(self, on_transcript, stop_check=None) -> None:
+    def run_forever(self, on_transcript, stop_check=None, on_level=None) -> None:
         """Continuous loop: every finished utterance → ``on_transcript(text)``.
 
         Used by the orchestrator's listener thread so the mic stays hot while
         behaviors run (lets "stop" interrupt a running behavior).
+        ``on_level(rms, in_speech)``, if given, is called once per audio block.
         """
         seg = SpeechSegmenter(self.vcfg)
         try:
@@ -276,6 +277,8 @@ class FastListener:
                 except queue.Empty:
                     continue
                 audio = seg.push(block)
+                if on_level is not None:
+                    on_level(float(np.sqrt(np.mean(np.square(block)))), seg.in_speech)
                 if audio is None:
                     continue
                 text = (self.transcriber(audio) or "").strip()

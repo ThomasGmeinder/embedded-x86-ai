@@ -352,6 +352,11 @@ def main() -> None:
         help="drive the MuJoCo digital twin instead of the real arm "
         "(robot.backend=sim, arm camera rendered on the gripper)",
     )
+    parser.add_argument(
+        "--no-console",
+        action="store_true",
+        help="with --digital-twin: skip the twin console window",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -359,6 +364,12 @@ def main() -> None:
         apply_sim_overrides(cfg)
     ensure_dirs(cfg)
     ctx = build_context(cfg, args)
+
+    console = None
+    if args.digital_twin and not (args.headless or args.no_console):
+        from vla_pipeline.console import TwinConsole
+
+        console = TwinConsole(ctx, voice="typed" if args.text_commands else "mic")
 
     from vla_pipeline.dispatch import Dispatcher
     from vla_pipeline.llm.llama_intent import LlamaIntentParser
@@ -378,6 +389,8 @@ def main() -> None:
     )
     _on_transcript = dispatcher.on_transcript
     shutdown = threading.Event()
+    if console is not None:
+        console.attach(dispatcher)
 
     # ---------------- listener thread (always hot) ----------------
     if not args.text_commands:
@@ -392,6 +405,7 @@ def main() -> None:
             listener.run_forever(
                 on_transcript=lambda t: _on_transcript(t),
                 stop_check=shutdown.is_set,
+                on_level=console.on_level if console is not None else None,
             )
 
         threading.Thread(target=_listen, daemon=True, name="listener").start()
@@ -410,13 +424,22 @@ def main() -> None:
 
         threading.Thread(target=_stdin_loop, daemon=True, name="stdin").start()
 
-    # ---------------- dispatch loop (main thread) ----------------
+    # ---------------- dispatch loop (main thread, unless the console owns it) ----------------
     ctx.say(
         "Ready. Try: 'copy my movements', 'pick up the ball', 'wave', "
         "'dance', 'hold this', 'go home' - or 'stop' at any time."
     )
     try:
-        dispatcher.run(shutdown)
+        if console is None:
+            dispatcher.run(shutdown)
+        else:
+            worker = threading.Thread(
+                target=dispatcher.run, args=(shutdown,), daemon=True, name="dispatch"
+            )
+            worker.start()
+            console.run(shutdown, on_stop=lambda: _on_transcript("stop"))
+            ctx.stop_event.set()
+            worker.join(timeout=5.0)
     except KeyboardInterrupt:
         pass
     finally:
@@ -435,6 +458,10 @@ def main() -> None:
                 pass
         try:
             ctx.arm.close()
+            if args.digital_twin:
+                from so101_sim import close_shared_world
+
+                close_shared_world()
         finally:
             llm.close()
 
