@@ -14,7 +14,8 @@ the ``--text-commands`` stdin loop calls for every utterance:
 2. stop fast path - a stop keyword sets ``ctx.stop_event`` immediately,
    without an LLM round trip, interrupting whatever behavior is running;
 3. noise / hallucination gate;
-4. queue for the dispatch loop.
+4. queue for the dispatch loop - and, if a behavior is running, set the stop
+   event so it ends gracefully and the new command takes over (switch).
 
 ``Dispatcher.run`` (main thread) parses each queued transcript with the
 grammar-constrained LLM, looks the intent up in the registry, runs the
@@ -91,6 +92,12 @@ class Dispatcher:
             return
         self.transcripts.put(text)
         self._emit("queued", text=text)
+        if self.busy.is_set():
+            # A new command switches behaviors: stop the running one gracefully;
+            # run() then dispatches the newest queued command.
+            logger.info("New command while %s runs - stopping it to switch.",
+                        self.current.intent.value if self.current else "a behavior")
+            self.ctx.stop_event.set()
 
     # ------------------------------------------------------------- dispatch
     def dispatch(self, text: str) -> ParsedCommand | None:
