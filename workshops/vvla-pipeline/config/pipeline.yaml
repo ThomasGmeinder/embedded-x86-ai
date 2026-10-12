@@ -27,7 +27,7 @@ audio:
   vad:                        # NEW: low-latency end-of-utterance detection
     backend: auto             # auto | webrtc | energy  (auto uses webrtcvad if installed)
     aggressiveness: 2         # webrtcvad mode 0 (lenient) .. 3 (aggressive)
-    hangover_s: 0.35          # silence that ends an utterance (was 1.2 s fixed)
+    hangover_s: 0.7           # silence that ends an utterance (0.35 split sentences at natural pauses)
     pre_roll_s: 0.3           # audio kept from before speech onset
     min_speech_s: 0.25        # reject clicks/coughs shorter than this
 

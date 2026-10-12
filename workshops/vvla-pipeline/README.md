@@ -480,10 +480,14 @@ The old close loop exited when the *commanded* position reached 0°. A pen stall
 
 | Stage | Before | After |
 |---|---|---|
-| End-of-utterance detection | 1.2 s fixed silence | **0.35 s** VAD hangover (`audio.vad.hangover_s`) |
+| End-of-utterance detection | 1.2 s fixed silence | **0.7 s** VAD hangover (`audio.vad.hangover_s`) |
 | ASR (whisper-base, NPU, short command) | ~0.2-0.4 s | same (sessions stay warm) |
 | Intent (Llama, GBNF) | ~0.1 s + connect | ~0.1 s (keep-alive HTTP session) |
-| **End-of-speech → behavior** | **~1.5-1.7 s** | **~0.7-0.9 s** |
+| **End-of-speech → behavior** | **~1.5-1.7 s** | **~1.0-1.2 s** |
+
+The hangover is the silence that ends an utterance. Below ~0.6 s a natural
+pause mid-sentence splits it: at 0.35 s, "pick up ... the cube" arrived as
+"pink up" (parsed as dance) and "the cube".
 
 `webrtcvad` is used when installed (`audio.vad.backend: auto`); otherwise an adaptive-noise-floor energy VAD with a 0.3 s pre-roll so onsets aren't clipped. "Stop" additionally skips the LLM entirely. Measure it live: `python -m vla_pipeline.audio.vad_listener --mic`.
 

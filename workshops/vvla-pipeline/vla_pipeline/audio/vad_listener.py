@@ -15,14 +15,15 @@ This module replaces that with a proper VAD front end:
 
 - a **pre-roll ring buffer** (~0.3 s) so the first syllable isn't clipped
   while the detector is still deciding;
-- **end-of-speech hangover of ~0.35 s** (config ``audio.vad.hangover_s``)
-  instead of 1.2 s - transcription starts the moment the user stops talking;
+- **end-of-speech hangover of ~0.7 s** (config ``audio.vad.hangover_s``)
+  instead of 1.2 s - long enough to bridge a natural pause mid-sentence
+  (0.35 s split "pick up ... the cube" into two commands);
 - backend ``webrtcvad`` when installed (config ``audio.vad.backend: auto``),
   else an adaptive-noise-floor energy detector (no new hard dependency);
 - minimum speech length to reject coughs/keyboard clacks.
 
 Latency budget after this change (whisper-base on the NPU, llama on iGPU):
-hangover 0.35 s + ASR ~0.2-0.4 s + intent ~0.1 s ≈ **0.7-0.9 s** from
+hangover 0.7 s + ASR ~0.2-0.4 s + intent ~0.1 s ≈ **1.0-1.2 s** from
 end-of-speech to behavior dispatch.
 
 The detection core (:class:`SpeechSegmenter`) is pure block-in/segment-out so
@@ -56,7 +57,7 @@ class VadConfig:
     backend: str = "auto"  # auto | webrtc | energy
     aggressiveness: int = 2  # webrtcvad mode 0..3
     silence_threshold: float = 0.015  # energy backend floor (RMS)
-    hangover_s: float = 0.35  # end-of-speech silence
+    hangover_s: float = 0.7  # end-of-speech silence
     pre_roll_s: float = 0.3
     min_speech_s: float = 0.25
     max_utterance_s: float = 12.0
@@ -70,7 +71,7 @@ class VadConfig:
             backend=str(v.get("backend", "auto")),
             aggressiveness=int(v.get("aggressiveness", 2)),
             silence_threshold=float(a.get("silence_threshold", 0.015)),
-            hangover_s=float(v.get("hangover_s", 0.35)),
+            hangover_s=float(v.get("hangover_s", 0.7)),
             pre_roll_s=float(v.get("pre_roll_s", 0.3)),
             min_speech_s=float(v.get("min_speech_s", 0.25)),
             max_utterance_s=float(a.get("max_utterance_s", 12.0)),
