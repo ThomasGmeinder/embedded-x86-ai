@@ -432,7 +432,8 @@ def main() -> None:
     # ---------------- dispatch loop (main thread, unless the console owns it) ----------------
     ctx.say(
         "Ready. Try: 'copy my movements', 'pick up the ball', 'wave', "
-        "'dance', 'hold this', 'go home' - or 'stop' at any time."
+        "'dance', 'hold this', 'go home' - or 'stop' at any time. "
+        "In the twin window: space stops, r resets the arm and the table."
     )
     try:
         if console is None:

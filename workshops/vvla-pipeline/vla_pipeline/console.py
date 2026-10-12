@@ -253,7 +253,52 @@ class TwinConsole:
     # ------------------------------------------------------------ inputs
 
     def attach(self, dispatcher) -> None:
+        self._dispatcher = dispatcher
         dispatcher.listeners.append(self.on_event)
+
+    def _restore_twin(self) -> bool:
+        """Park the twin and restore its props. True when this process can."""
+        arm = self.ctx.arm
+        world = getattr(arm, "world", None)
+        if world is not None:
+            parked = {**world.rest_pose, "gripper": 75.0}
+            world.reset(parked)
+            arm.send_joints(parked)
+            return True
+        restore = getattr(arm, "reset_sim", None)
+        return bool(restore and restore())
+
+    def reset_scene(self) -> None:
+        """Stop the behavior, park the arm with the jaws open, and restore the props."""
+        ctx = self.ctx
+        dispatcher = getattr(self, "_dispatcher", None)
+        holding = getattr(dispatcher, "holding", None)
+        if holding is not None:
+            holding.set()
+        ctx.stop_event.set()
+        if dispatcher is not None:
+            dispatcher.discard()
+        deadline = time.time() + 3.0
+        busy = getattr(dispatcher, "busy", None)
+        while busy is not None and busy.is_set() and time.time() < deadline:
+            time.sleep(0.05)
+        if dispatcher is not None:
+            dispatcher.discard()
+        try:
+            state = getattr(ctx, "shared_state", None)
+            if isinstance(state, dict):
+                state.pop("grip_lock", None)
+                state.pop("grip_lock_pos", None)
+            if not self._restore_twin():
+                ctx.say("Reset is only available on the digital twin.")
+                return
+            ctx.say("Reset. Arm parked, objects back on the table.")
+        finally:
+            if dispatcher is not None:
+                dispatcher.discard()
+            ctx.stop_event.clear()
+            if holding is not None:
+                holding.clear()
 
     def on_level(self, rms: float, speaking: bool) -> None:
         """Microphone block level from :meth:`FastListener.run_forever`."""
@@ -370,7 +415,7 @@ class TwinConsole:
             y += 20
 
         self._arm_hud(p, VIEW_H - 92)
-        cv2.putText(p, "space: stop    q: quit", (12, VIEW_H - 12), FONT, 0.45, DIM, 1, cv2.LINE_AA)
+        cv2.putText(p, "space: stop    r: reset    q: quit", (12, VIEW_H - 12), FONT, 0.45, DIM, 1, cv2.LINE_AA)
         return p
 
     def _arm_hud(self, p, y) -> None:
@@ -415,7 +460,11 @@ class TwinConsole:
     # ------------------------------------------------------------ loop
 
     def run(self, shutdown: threading.Event, on_stop) -> None:
-        """Draw until ``shutdown`` is set or the window is closed; space calls ``on_stop()``."""
+        """Draw until ``shutdown`` is set or the window is closed.
+
+        Space calls ``on_stop()``. ``r`` resets the twin: park the arm and put
+        the props back.
+        """
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
         scale = min(1.0, 950 / (TILE_H + VIEW_H))  # fit a 1080p screen; drag to resize
         cv2.resizeWindow(WINDOW, int(TILE_W * 3 * scale), int((TILE_H + VIEW_H) * scale))
@@ -432,6 +481,8 @@ class TwinConsole:
                     break
                 if key == ord(" "):
                     on_stop()
+                elif key in (ord("r"), ord("R")):
+                    self.reset_scene()
                 if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
                     break
         finally:

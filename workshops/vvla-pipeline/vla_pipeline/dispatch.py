@@ -64,6 +64,7 @@ class Dispatcher:
         self.listeners: list = []
         self.current: ParsedCommand | None = None
         self.busy = threading.Event()  # set while a behavior runs
+        self.holding = threading.Event()  # set while the console is resetting the scene
 
     def _emit(self, event: str, **data) -> None:
         for fn in list(self.listeners):
@@ -148,6 +149,14 @@ class Dispatcher:
         if newest is not None:
             self.transcripts.put(newest)
 
+    def discard(self) -> None:
+        """Drop every queued transcript."""
+        while True:
+            try:
+                self.transcripts.get_nowait()
+            except queue.Empty:
+                return
+
     def run(self, shutdown: threading.Event) -> None:
         """Dispatch loop until ``shutdown`` is set."""
         while not shutdown.is_set():
@@ -155,5 +164,10 @@ class Dispatcher:
                 text = self.transcripts.get(timeout=0.2)
             except queue.Empty:
                 continue
+            if self.holding.is_set():
+                continue
             self.dispatch(text)
+            if self.holding.is_set():
+                self.discard()
+                continue
             self.drain_to_newest()

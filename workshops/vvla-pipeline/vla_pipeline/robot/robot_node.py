@@ -160,6 +160,7 @@ class So101ServerNode(Node):
 
         self._target_lock = threading.Lock()
         self._target: dict[str, float] = dict(REST_POSE)
+        self._target_gen = 0
         self._last_cmd_time = 0.0
         self._gripper_load: float = math.nan  # nan = feedback unavailable
         self._tick_count = 0
@@ -174,6 +175,10 @@ class So101ServerNode(Node):
         self.create_subscription(
             JointState, r["command_topic"], self._on_command, _best_effort_qos()
         )
+        if getattr(self._arm, "world", None) is not None:
+            from std_srvs.srv import Trigger
+
+            self.create_service(Trigger, "/so101/reset_scene", self._on_reset_scene)
         self._state_pub = self.create_publisher(
             JointState, r["state_topic"], _best_effort_qos()
         )
@@ -185,6 +190,20 @@ class So101ServerNode(Node):
             f"Ready - cmd: {r['command_topic']}  state: {r['state_topic']}  "
             f"{self._control_fps:.0f} Hz"
         )
+
+    def _on_reset_scene(self, _request, response):
+        """Park the twin and put its props back on their starting spots."""
+        world = self._arm.world
+        parked = {**world.rest_pose, "gripper": 75.0}
+        with self._target_lock:
+            self._target = dict(parked)
+            self._last_cmd_time = time.time()
+            self._last_sent_target = None
+            self._target_gen += 1
+            world.reset(parked)
+        response.success = True
+        response.message = "arm parked, objects back on the table"
+        return response
 
     def _on_command(self, msg: "JointState") -> None:
         """Merge an incoming JointState command into the current target."""
@@ -227,13 +246,17 @@ class So101ServerNode(Node):
             with self._target_lock:
                 target = dict(self._target)
                 fresh = (time.time() - self._last_cmd_time) < 1.0
+                generation = self._target_gen
 
             try:
                 if fresh:  # hold last pose silently when commands stop
+                    with self._target_lock:
+                        if generation != self._target_gen:
+                            fresh = False  # a scene reset replaced this goal
                     # Direct-goal mode: write only when the goal changes so the
                     # servo's onboard profile runs once, uninterrupted. Streaming
                     # mode writes every tick (each tick carries a new setpoint).
-                    if not self._direct_goal or target != self._last_sent_target:
+                    if fresh and (not self._direct_goal or target != self._last_sent_target):
                         _s = time.perf_counter()
                         self._arm.send_joints(target)
                         p_send_s += time.perf_counter() - _s
@@ -379,6 +402,21 @@ class Ros2ArmClient(ArmClient):
         with self._state_lock:
             self._state = state
             self._effort = effort
+
+    def reset_sim(self) -> bool:
+        """Ask the digital-twin server to park the arm and restore the props."""
+        from std_srvs.srv import Trigger
+
+        if not hasattr(self, "_reset_client"):
+            self._reset_client = self._node.create_client(Trigger, "/so101/reset_scene")
+        if not self._reset_client.wait_for_service(timeout_sec=0.5):
+            return False
+        future = self._reset_client.call_async(Trigger.Request())
+        deadline = time.time() + 2.0
+        while not future.done() and time.time() < deadline:
+            time.sleep(0.02)
+        result = future.result() if future.done() else None
+        return bool(result and result.success)
 
     def send_joints(self, joints: dict[str, float]) -> None:
         """Publish joints as a JointState command."""
