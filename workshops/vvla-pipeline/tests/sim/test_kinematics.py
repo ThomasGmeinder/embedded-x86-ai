@@ -69,20 +69,28 @@ def _look(twin, obj, pos, pose):
         cam.release()
 
 
-@pytest.mark.parametrize("obj,xy", [("ball", s) for s in BALL_SPOTS] + [("cup", (0.2, 0.2))])
+@pytest.mark.parametrize(
+    "obj,xy",
+    [("sports_ball", s) for s in BALL_SPOTS]
+    + [("bottle", (0.2, 0.2)), ("book", (0.22, -0.15)), ("toothbrush", (0.12, -0.24))],
+)
 def test_locate_on_table(twins, pipeline_cfg, kin, obj, xy):
-    from so101_sim.kinematics import ROUND_CLASSES
+    from so101_sim.kinematics import FLAT_CLASSES, ROUND_CLASSES
 
     twin = twins("pipeline", pipeline_cfg)
     pos = np.array([xy[0], xy[1], twin.world.model.body(obj).pos[2]])
     pose = _aimed_scan_pose(kin, pipeline_cfg, pos)
     cls, box, size, truth = _look(twin, obj, pos, pose)
 
-    loc = kin.locate_on_table(box, pose, image_size=size, shape="sphere" if cls in ROUND_CLASSES else "upright")
+    shape = "sphere" if cls in ROUND_CLASSES else "flat" if cls in FLAT_CLASSES else "bottle" if cls == "bottle" else "upright"
+    loc = kin.locate_on_table(box, pose, image_size=size, shape=shape)
     assert loc is not None, f"no fix for box {box}"
     err = loc["xyz"] - truth
-    assert np.linalg.norm(err[:2]) < 0.01, f"{obj} at {np.round(truth, 3)} located at {np.round(loc['xyz'], 3)}"
-    if obj == "ball":
+    xy_tol = 0.025 if shape == "flat" else 0.015 if shape == "bottle" else 0.01
+    assert np.linalg.norm(err[:2]) < xy_tol, (
+        f"{obj} at {np.round(truth, 3)} located at {np.round(loc['xyz'], 3)}"
+    )
+    if obj == "sports_ball":
         assert abs(err[2]) < 0.01
         assert abs(loc["width"] - 0.04) < 0.005
 
@@ -138,7 +146,7 @@ def test_default_camera_model_projects_like_the_twin(twins, pipeline_cfg, kin):
     twin = twins("pipeline", pipeline_cfg)
     pos = np.array([0.28, 0.06, 0.015])
     pose = _aimed_scan_pose(kin, pipeline_cfg, pos)
-    _, box, _, truth = _look(twin, "ball", pos, pose)
+    _, box, _, truth = _look(twin, "sports_ball", pos, pose)
     u, v = kin.project(truth, pose)[0]
     assert abs(u - 0.5 * (box[0] + box[2])) < 5 and abs(v - 0.5 * (box[1] + box[3])) < 5
 

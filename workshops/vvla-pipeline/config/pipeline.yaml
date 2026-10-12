@@ -213,6 +213,7 @@ behaviors:
   pick_place:                 # NEW: voice-grounded "pick up the <object>"
     # Joint pose from which the arm camera surveys the workspace.
     scan_pose:   {shoulder_pan: 0.0, shoulder_lift: -55.0, elbow_flex: 65.0, wrist_flex: 45.0, wrist_roll: 0.0, gripper: 70.0}
+    scan_pans: [0.0, -14.0, 39.0, -52.0, 71.0]  # sweep the twin workspace; tune for the real camera/FOV
     # ik: locate the object on the table from its box (camera ray meets the
     # table plane) and solve the reach; fixed: approach_pose + descend_lift.
     # ik falls back to fixed when there is no fix or the object is out of reach.

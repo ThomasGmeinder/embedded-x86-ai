@@ -127,14 +127,18 @@ COCO_NAMES = [
 # Spoken-word → COCO class synonyms (lowercased, applied after exact match).
 SYNONYMS = {
     "ball": "sports ball",
+    "sports_ball": "sports ball",
+    "soccer": "sports ball",
+    "soccer ball": "sports ball",
     "cube": None,
-    "block": None,  # cube/block: see note below
+    "block": None,
     "phone": "cell phone",
     "mobile": "cell phone",
     "glass": "wine glass",
     "mug": "cup",
     "pen": None,
     "pencil": None,
+    "brush": "toothbrush",
     "drink": "bottle",
     "water bottle": "bottle",
     "computer": "laptop",
@@ -144,8 +148,8 @@ SYNONYMS = {
     "controller": "remote",
 }
 # Classes with value None aren't in COCO-80; pick_place reports "can't
-# recognize that object" rather than guessing. Fine-tune YOLO26 on your own
-# objects (cube, pen...) and extend this table to ground them.
+# recognize that object" rather than guessing. The twin uses four real COCO
+# classes: sports ball, book, bottle, and toothbrush.
 
 
 @dataclass

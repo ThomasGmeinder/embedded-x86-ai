@@ -19,10 +19,10 @@ import numpy as np
 
 # twin body -> COCO class name the real detector would report
 DEFAULT_CLASSES = {
-    "ball": "sports ball",
-    "cup": "cup",
-    "cube": "cube",  # not a COCO class: the pipeline says "can't recognize"
-    "pen": "pen",
+    "sports_ball": "sports ball",
+    "book": "book",
+    "bottle": "bottle",
+    "toothbrush": "toothbrush",
 }
 
 

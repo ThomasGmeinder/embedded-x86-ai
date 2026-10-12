@@ -496,19 +496,26 @@ pause mid-sentence splits it: at 0.35 s, "pick up ... the cube" arrived as
 
 "Pick up the ball" → `{"command": "pick_place", "object": "ball"}` → `vla_pipeline/behaviors/pick_place.py`: scan pose → YOLOv26s-detect on the arm camera grounds the name (synonym table: ball→sports ball, mug→cup, …) → proportional pan servoing turns the base until the box sits where an object between the jaws appears (`servo_target_x`) → **locate** → **IK reach** → the same feedback-based close as grip, a short settle, a holding check (one retry from the servoed pan) → straight back up → lift, holding checked again → find the person with YOLO-pose on the operator camera → extend → release → home.
 
-**Locate:** objects rest on the table, so one camera is enough. Forward kinematics of the SO-101 model (`so101_sim/kinematics.py`) at the current joint angles gives the wrist camera's pose; the ray through the bottom of the YOLO box meets the table plane at the object's front edge, and a ball (or an upright cylinder for other classes) is fitted so its outline matches the box. On the twin this is within 1 mm for the ball and ~6 mm for the cup. **IK reach:** damped least squares over pan/lift/elbow/wrist puts the point between the open jaws on the object with the closing axis horizontal and every part of the arm above the table; the jaws open 6 cm above it and come straight down in 1.5 cm steps, so they don't swing into it. Reach is ~14–30 cm from the base. With no fix (box cut by the image edge) or out of reach, it falls back to the taught `approach_pose` + `descend_lift` (`reach: fixed` uses only those).
+**Locate:** objects rest on the table, so one camera is enough. Forward kinematics of the SO-101 model (`so101_sim/kinematics.py`) at the current joint angles gives the wrist camera's pose; rays through the YOLO box meet the table plane, then a class-specific footprint is fitted: sphere for a sports ball, upright bottle, or flat footprint for a book/toothbrush. **IK reach:** damped least squares over pan/lift/elbow/wrist puts the point between the open jaws on the object with the closing axis horizontal and every part of the arm above the table; the jaws open 6 cm above it and come straight down in 1.5 cm steps, so they don't swing into it. Reach is ~14–30 cm from the base. With no fix (box cut by the image edge) or out of reach, it falls back to the taught `approach_pose` + `descend_lift` (`reach: fixed` uses only those).
 
 **Real arm calibration.** Until calibrated, the camera model is the twin's `wrist_cam` (intrinsics and pose on the gripper), which only matches a camera mounted exactly like the twin's — 1° of mount error moves the fix ~5 mm at 30 cm. With the pipeline stopped:
 
 ```bash
 python scripts/calibrate_arm_camera.py intrinsics --board 9x6 --square-mm 24   # printed checkerboard, 12+ views
 python scripts/calibrate_arm_camera.py mount --board 9x6 --square-mm 24        # board taped to the table, ~8 jogged arm poses
-python scripts/calibrate_arm_camera.py check --object ball --at 0.28 0.06      # ball at a measured spot (base frame, m)
+python scripts/calibrate_arm_camera.py check --object sports_ball --at 0.28 0.06  # twin body at a measured spot
 ```
 
 Each prints the YAML for `cameras.arm.intrinsics` / `cameras.arm.mount` (the same keys exist in the workshop's `config/workshop.yaml`). `check --sim` runs on the twin.
 
-Failure handling speaks, and a behavior that gives up ends as failed (not "done"): unknown word ("I don't know what that looks like"), nothing found, ambiguous matches, failed/slipped grasp (retry then give up), dropped after the lift, missing cameras (arm cam down → operator camera with a warning, fixed reach only). Limits: the scan looks from pan 0 only, so the object has to be in the arm camera's view from `scan_pose`; an object right behind the fixed jaw in that view (e.g. ~22 cm out, 4 cm right) isn't recognized by YOLO. Note COCO-80 has no "cube"/"pen" class — fine-tune YOLO26 on your own objects and extend `SYNONYMS` in `vla_pipeline/vision/yolo_detect_npu.py` to ground them. That includes the "red cube" in the workshop's `modular_vla_pipeline.gif` animation: the pan-to-aim, IK-to-reach flow it shows works for detectable objects like the ball, not for a cube. One-time setup: `python scripts/export_yolo26s_detect.py`.
+Failure handling speaks, and a behavior that gives up ends as failed (not "done"): unknown word ("I don't know what that looks like"), nothing found, ambiguous matches, failed/slipped grasp (retry then give up), dropped after the lift, missing cameras (arm cam down → operator camera with a warning, fixed reach only). The arm searches the configured `scan_pans` from `scan_pose`, then servos from the first matching view. The twin scene uses four textured props that are actual COCO-80 classes: sports ball, book, bottle, and toothbrush. COCO still has no `cube` or `pen` class; those names fail safely unless YOLO is fine-tuned and `SYNONYMS` is extended. One-time setup: `python scripts/export_yolo26s_detect.py`.
+
+**Current twin manipulation limits.** Detection and the ball's first pick work,
+but the other grasps still need geometry-aware planning: the straight descent
+can knock over the bottle; the book is too large for the current grasp; and the
+angled toothbrush needs wrist rotation before closing. After the ball is
+dropped, its new pose is not reliably reacquired for a second pick. These are
+known manipulation/recovery limitations, not object-detection failures.
 
 ## Adding a voice command
 
@@ -539,7 +546,7 @@ Every component is a standalone module with its own `__main__` self-test.
 | ROS 2 client round-trip | ROS 2 | `python -m vla_pipeline.robot.robot_node --client-test` |
 | Gesture mimic | webcam | `python -m vla_pipeline.behaviors.gesture_mimic --dry-run` |
 | Pick and place | webcam | `python -m vla_pipeline.behaviors.pick_place --object ball --dry-run-arm` |
-| Arm camera localization | arm (`--sim` = twin) | `python scripts/calibrate_arm_camera.py check --sim --object ball --pan -14 --at 0.28 0.06` |
+| Arm camera localization | arm (`--sim` = twin) | `python scripts/calibrate_arm_camera.py check --sim --object sports_ball --pan -14 --at 0.28 0.06` |
 | Fetch block | no | `python -m vla_pipeline.behaviors.fetch_block --dry-run --no-camera` |
 | Dance | no | `python -m vla_pipeline.behaviors.dance --dry-run` |
 | Grip (simulated object) | no | `python -m vla_pipeline.behaviors.grip --dry-run` (`--thin` = pen, `--load` = effort) |

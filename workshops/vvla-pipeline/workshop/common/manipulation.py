@@ -357,10 +357,21 @@ def run_pick_place(ctx, cmd) -> bool:
         ctx.say("Arm camera is offline - using the operator camera (coarser aim).")
 
     ctx.say(f"Looking for a {name}.")
-    ctx.arm.go_to({**pp["scan_pose"]}, duration_s=2.5, stop_check=ctx.stop_check)
-    if ctx.stop_check():
-        return False
-    dets, resolved = _detect(ctx, camera, name)
+    base_scan = dict(pp["scan_pose"])
+    scan_pans = pp.get("scan_pans") if camera is ctx.arm_camera else None
+    scan_pans = list(scan_pans or [base_scan.get("shoulder_pan", 0.0)])
+    dets, resolved = [], ""
+    for i, pan in enumerate(scan_pans):
+        ctx.arm.go_to(
+            {**base_scan, "shoulder_pan": float(pan)},
+            duration_s=2.5 if i == 0 else 1.2,
+            stop_check=ctx.stop_check,
+        )
+        if ctx.stop_check():
+            return False
+        dets, resolved = _detect(ctx, camera, name, duration_s=0.8)
+        if resolved is None or dets:
+            break
     if resolved is None:
         ctx.say(f"Sorry - I don't know what a {name} looks like.")
         ctx.arm.go_to_rest()
@@ -494,7 +505,7 @@ def _plan_ik_reach(ctx, camera, name: str):
     grasp, or None."""
     pp = ctx.cfg["pick_place"]
     try:
-        from so101_sim.kinematics import ROUND_CLASSES, shared_kinematics
+        from so101_sim.kinematics import FLAT_CLASSES, ROUND_CLASSES, shared_kinematics
 
         kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
     except Exception as e:  # so101_sim / mujoco / model assets missing
@@ -514,9 +525,15 @@ def _plan_ik_reach(ctx, camera, name: str):
     cam = (ctx.cfg.get("cameras") or {}).get("arm") or {}
     K, dist = kin.intrinsics(cam.get("intrinsics"), w, h)
     table_z = float(pp.get("table_z", -0.005))
+    shape = (
+        "sphere" if resolved in ROUND_CLASSES
+        else "flat" if resolved in FLAT_CLASSES
+        else "bottle" if resolved == "bottle"
+        else "upright"
+    )
     loc = kin.locate_on_table(
         d.box, joints, K, dist, cam.get("mount"), table_z, (w, h),
-        shape="sphere" if resolved in ROUND_CLASSES else "upright",
+        shape=shape,
     )
     if loc is None:
         logger.info("IK reach: no table fix for the %s box %s", resolved, d.box)

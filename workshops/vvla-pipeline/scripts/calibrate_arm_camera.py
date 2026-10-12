@@ -21,13 +21,13 @@ the pipeline stopped (the script opens the arm and the camera directly):
 2. ``mount`` - tape the checkerboard flat on the table. Jog the arm (keys
    below) to ~8 poses that see the whole board from different angles,
    SPACE at each, ENTER solves. Paste the printed ``mount``.
-3. ``check`` - put the ball at a spot you measured in the arm's base frame
+3. ``check`` - put the sports ball at a spot you measured in the arm's base frame
    (x forward from the base, y to the left, metres) and compare.
 
     python scripts/calibrate_arm_camera.py intrinsics --board 9x6 --square-mm 24
     python scripts/calibrate_arm_camera.py mount --board 9x6 --square-mm 24
-    python scripts/calibrate_arm_camera.py check --object ball --at 0.28 0.06
-    python scripts/calibrate_arm_camera.py check --object ball --sim   # on the twin
+    python scripts/calibrate_arm_camera.py check --object sports_ball --at 0.28 0.06
+    python scripts/calibrate_arm_camera.py check --object sports_ball --sim   # on the twin
 
 Jog keys (mount): a/d pan, w/s shoulder lift, i/k elbow, j/l wrist flex,
 u/o wrist roll, [ / ] step size; SPACE capture, ENTER solve, q quit.
@@ -339,7 +339,7 @@ def main() -> int:
     p.set_defaults(fn=cmd_mount)
 
     p = sub.add_parser("check", help="locate an object and compare with a measured spot")
-    p.add_argument("--object", default="ball")
+    p.add_argument("--object", default="sports_ball")
     p.add_argument("--at", type=float, nargs=2, metavar=("X", "Y"), help="measured position (m, base frame)")
     p.add_argument("--pan", type=float, default=0.0, help="shoulder_pan for the look (deg)")
     p.add_argument("--device", choices=["npu", "cpu"], default=None)

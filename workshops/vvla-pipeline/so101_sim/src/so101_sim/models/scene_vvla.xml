@@ -18,13 +18,20 @@
       rgb1="0.18 0.22 0.28" rgb2="0.1 0.13 0.17" markrgb="0.6 0.6 0.6" width="300" height="300"/>
     <texture type="2d" name="table_tex" builtin="flat" rgb1="0.55 0.45 0.33" rgb2="0.5 0.4 0.3"
       mark="random" random="0.02" markrgb="0.45 0.36 0.26" width="512" height="512"/>
+    <texture type="2d" name="sports_ball_tex" file="props/sports_ball.png"/>
+    <texture type="2d" name="book_tex" file="props/book.png"/>
+    <texture type="2d" name="bottle_tex" file="props/bottle.png"/>
     <material name="floor_mat" texture="floor_tex" texuniform="true" texrepeat="4 4" reflectance="0.1"/>
     <material name="table_mat" texture="table_tex" texuniform="true" texrepeat="3 3" specular="0.2"/>
-    <material name="cube_mat" rgba="0.95 0.55 0.18 1" specular="0.4" shininess="0.5"/>
-    <material name="ball_mat" rgba="0.85 0.12 0.12 1" specular="0.5" shininess="0.6"/>
-    <material name="cup_mat" rgba="0.25 0.55 0.9 1" specular="0.4" shininess="0.5"/>
-    <material name="pen_mat" rgba="0.1 0.1 0.12 1" specular="0.6" shininess="0.8"/>
+    <material name="sports_ball_mat" texture="sports_ball_tex" specular="0.25" shininess="0.35"/>
+    <material name="book_mat" texture="book_tex" specular="0.15" shininess="0.2"/>
+    <material name="bottle_mat" texture="bottle_tex" specular="0.35" shininess="0.45"/>
+    <material name="toothbrush_mat" rgba="0.08 0.55 0.85 1" specular="0.35" shininess="0.5"/>
     <material name="stand_mat" rgba="0.35 0.37 0.42 1" specular="0.2"/>
+    <mesh name="sports_ball_mesh" file="../props/sports_ball.obj"/>
+    <mesh name="book_mesh" file="../props/book.obj"/>
+    <mesh name="bottle_mesh" file="../props/bottle.obj"/>
+    <mesh name="toothbrush_mesh" file="../props/toothbrush.obj"/>
   </asset>
 
   <worldbody>
@@ -61,25 +68,33 @@
     </body>
 
     <!-- graspable free bodies -->
-    <body name="cube" pos="0.22 -0.15 0.011">
-      <freejoint name="cube_j"/>
-      <geom name="cube_g" type="box" size="0.016 0.016 0.016" material="cube_mat"
-        mass="0.03" friction="1.2 0.02 0.001"/>
+    <body name="book" pos="0.22 -0.15 0.001" euler="0 0 -0.25">
+      <freejoint name="book_j"/>
+      <geom name="book_collision" type="box" size="0.03 0.045 0.006" rgba="0 0 0 0"
+        mass="0.045" friction="1.2 0.02 0.001"/>
+      <geom name="book_visual" type="mesh" mesh="book_mesh" material="book_mat"
+        euler="0 0 1.5708" contype="0" conaffinity="0" group="2" mass="0"/>
     </body>
-    <body name="ball" pos="0.28 0.06 0.015">
-      <freejoint name="ball_j"/>
-      <geom name="ball_g" type="sphere" size="0.02" material="ball_mat" condim="6"
+    <body name="sports_ball" pos="0.28 0.06 0.015">
+      <freejoint name="sports_ball_j"/>
+      <geom name="sports_ball_collision" type="sphere" size="0.02" rgba="0 0 0 0" condim="6"
         mass="0.025" friction="1.2 0.02 0.01" solref="0.01 1"/>
+      <geom name="sports_ball_visual" type="mesh" mesh="sports_ball_mesh" material="sports_ball_mat"
+        contype="0" conaffinity="0" group="2" mass="0"/>
     </body>
-    <body name="cup" pos="0.2 0.2 0.035">
-      <freejoint name="cup_j"/>
-      <geom name="cup_g" type="cylinder" size="0.03 0.04" material="cup_mat"
+    <body name="bottle" pos="0.2 0.2 0.0375">
+      <freejoint name="bottle_j"/>
+      <geom name="bottle_collision" type="cylinder" size="0.02 0.0425" rgba="0 0 0 0"
         mass="0.06" friction="1.0 0.02 0.001"/>
+      <geom name="bottle_visual" type="mesh" mesh="bottle_mesh" material="bottle_mat"
+        contype="0" conaffinity="0" group="2" mass="0"/>
     </body>
-    <body name="pen" pos="0.12 -0.24 0.001" euler="0 1.5708 0.4">
-      <freejoint name="pen_j"/>
-      <geom name="pen_g" type="capsule" size="0.006 0.06" material="pen_mat"
+    <body name="toothbrush" pos="0.12 -0.24 0" euler="0 0 0.4">
+      <freejoint name="toothbrush_j"/>
+      <geom name="toothbrush_collision" type="box" size="0.012 0.06 0.005" rgba="0 0 0 0"
         mass="0.012" friction="1.0 0.02 0.001"/>
+      <geom name="toothbrush_visual" type="mesh" mesh="toothbrush_mesh" material="toothbrush_mat"
+        euler="0 0 1.5708" contype="0" conaffinity="0" group="2" mass="0"/>
     </body>
   </worldbody>
 

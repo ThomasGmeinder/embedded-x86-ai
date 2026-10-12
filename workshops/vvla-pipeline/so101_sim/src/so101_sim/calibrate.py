@@ -44,9 +44,9 @@ PIPELINE_POSES = {
 
 # (object, pose, open gripper value) - how each behavior grasps
 GRASPS = [
-    ("cube", "present", 85.0),  # grip: hand it to the jaws
-    ("cube", "block", 70.0),  # fetch_block
-    ("ball", "descend", 75.0),  # pick_place
+    ("toothbrush", "present", 85.0),  # grip: hand a thin object to the jaws
+    ("book", "block", 70.0),  # fetch_block uses the prop at its taught spot
+    ("sports_ball", "descend", 75.0),  # pick_place
 ]
 
 

@@ -229,6 +229,7 @@ _OBJECT_WORDS = (
     "apple",
     "banana",
     "book",
+    "toothbrush",
     "remote",
     "orange",
     "teddy",

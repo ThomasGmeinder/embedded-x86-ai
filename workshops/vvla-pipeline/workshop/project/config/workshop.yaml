@@ -184,6 +184,7 @@ grip:                               # close until contact, confirm with the arm 
 
 pick_place:                         # "pick up the ball": detect on the arm camera, grasp, hand over
   scan_pose: {shoulder_pan: 0.0, shoulder_lift: -55.0, elbow_flex: 65.0, wrist_flex: 45.0, wrist_roll: 0.0, gripper: 70.0}
+  scan_pans: [0.0, -14.0, 39.0, -52.0, 71.0]  # sweep workspace; tune for the real camera/FOV
   reach: ik                         # ik: locate on the table + IK (falls back to fixed) | fixed
   table_z: -0.005                   # table surface height in the arm's base frame (m)
   pregrasp_above_m: 0.06            # ik: jaws open this far above the grasp, then straight down

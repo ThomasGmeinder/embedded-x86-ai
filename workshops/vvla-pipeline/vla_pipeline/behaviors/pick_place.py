@@ -133,13 +133,23 @@ def run_pick_place(
 
     # ---------------- SCAN ----------------
     say(f"Looking for a {object_name}.")
-    arm.go_to({**pp["scan_pose"]}, duration_s=2.5, stop_check=stop_check)
-    if stopped():
-        return False
-
-    dets, resolved = _detect_with_retry(
-        detector, camera, object_name, stop_check=stop_check
-    )
+    base_scan = dict(pp["scan_pose"])
+    scan_pans = pp.get("scan_pans") if camera is arm_camera else None
+    scan_pans = list(scan_pans or [base_scan.get("shoulder_pan", 0.0)])
+    dets, resolved = [], ""
+    for i, pan in enumerate(scan_pans):
+        arm.go_to(
+            {**base_scan, "shoulder_pan": float(pan)},
+            duration_s=2.5 if i == 0 else 1.2,
+            stop_check=stop_check,
+        )
+        if stopped():
+            return False
+        dets, resolved = _detect_with_retry(
+            detector, camera, object_name, duration_s=0.8, stop_check=stop_check
+        )
+        if resolved is None or dets:
+            break
     if resolved is None:
         say(f"Sorry - I don't know what a {object_name} looks like.")
         arm.go_to_rest()
@@ -291,7 +301,7 @@ def _plan_ik_reach(cfg: dict, arm: ArmClient, detector, camera, object_name: str
     grasp, or None."""
     pp = cfg["behaviors"]["pick_place"]
     try:
-        from so101_sim.kinematics import ROUND_CLASSES, shared_kinematics
+        from so101_sim.kinematics import FLAT_CLASSES, ROUND_CLASSES, shared_kinematics
 
         kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
     except Exception as e:  # so101_sim / mujoco / model assets missing
@@ -311,9 +321,15 @@ def _plan_ik_reach(cfg: dict, arm: ArmClient, detector, camera, object_name: str
     cam = cfg["cameras"]["arm"]
     K, dist = kin.intrinsics(cam.get("intrinsics"), w, h)
     table_z = float(pp.get("table_z", -0.005))
+    shape = (
+        "sphere" if resolved in ROUND_CLASSES
+        else "flat" if resolved in FLAT_CLASSES
+        else "bottle" if resolved == "bottle"
+        else "upright"
+    )
     loc = kin.locate_on_table(
         d.box, joints, K, dist, cam.get("mount"), table_z, (w, h),
-        shape="sphere" if resolved in ROUND_CLASSES else "upright",
+        shape=shape,
     )
     if loc is None:
         logger.info("IK reach: no table fix for the %s box %s", resolved, d.box)

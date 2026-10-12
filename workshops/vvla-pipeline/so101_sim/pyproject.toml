@@ -21,4 +21,12 @@ test = ["pytest"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-so101_sim = ["models/*.xml", "models/*.md", "models/LICENSE", "models/assets/*.stl"]
+so101_sim = [
+    "models/*.xml",
+    "models/*.md",
+    "models/LICENSE",
+    "models/assets/*.stl",
+    "models/props/*.obj",
+    "models/props/*.png",
+    "models/props/*.md",
+]

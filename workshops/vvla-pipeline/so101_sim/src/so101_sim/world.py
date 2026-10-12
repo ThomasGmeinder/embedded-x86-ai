@@ -299,7 +299,7 @@ class SimWorld:
             return self.data.site(name).xpos.copy()
 
     def place(self, name: str, pos, quat=(1.0, 0.0, 0.0, 0.0)) -> None:
-        """Teleport a free body (cube/ball/cup/pen) and zero its velocity."""
+        """Teleport a free prop body and zero its velocity."""
         qadr, dadr = self._free[name]
         with self.lock:
             self.data.qpos[qadr : qadr + 3] = pos

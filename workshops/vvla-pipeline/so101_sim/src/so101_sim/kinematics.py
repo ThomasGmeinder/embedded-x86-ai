@@ -38,6 +38,7 @@ __all__ = [
     "Kinematics",
     "TABLE_Z",
     "ROUND_CLASSES",
+    "FLAT_CLASSES",
     "rpy_to_matrix",
     "matrix_to_rpy",
     "solve_mount",
@@ -46,8 +47,9 @@ __all__ = [
 
 IK_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex")
 OPEN_GRIPPER = 75.0
-# detector classes that rest on the table as a sphere; others are treated as upright
+# Detector classes with geometry that needs a different table-box model.
 ROUND_CLASSES = frozenset({"sports ball", "orange", "apple"})
+FLAT_CLASSES = frozenset({"book", "toothbrush"})
 
 _CV_FROM_MJ = np.diag([1.0, -1.0, -1.0])  # MuJoCo cameras look down -z with y up
 _CLEARANCE_BODIES = ("lower_arm", "wrist", "gripper", "camera_mount", "moving_jaw_so101_v1")
@@ -230,10 +232,11 @@ class Kinematics:
 
         ``box`` is ``(x1, y1, x2, y2)`` pixels in a frame of ``image_size``
         ``(w, h)`` taken at ``joints``. The box bottom's ray meets the table
-        at the object's front edge; from there a resting object - a sphere
-        (``shape="sphere"``) or an upright cylinder (``"upright"``) - is
-        fitted so its projected outline matches the box edges. A box cut by
-        the image's sides or bottom gives ``None``; a cut top edge is ignored.
+        at the object's front edge; from there a resting sphere
+        (``shape="sphere"``), upright cylinder (``"upright"``), or thin
+        table-plane footprint (``"flat"``) is fitted to the box. A box cut by
+        the image's sides or bottom gives ``None``; a cut top edge is ignored
+        only for upright objects.
         """
         x1, y1, x2, y2 = (float(v) for v in box)
         top_cut = False
@@ -243,6 +246,23 @@ class Kinematics:
                 return None
             top_cut = y1 <= 1
         K = self.default_intrinsics(*(image_size or (None, None))) if K is None else np.asarray(K, float)
+        if shape == "flat":
+            if top_cut:
+                return None
+            corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+            o, rays = self.rays(corners, joints, K, dist, mount)
+            height = 0.012
+            top_z = table_z + height
+            if o[2] <= top_z or (rays[:, 2] >= -1e-6).any():
+                return None
+            points = o + rays * ((top_z - o[2]) / rays[:, 2])[:, None]
+            side_a = 0.5 * (np.linalg.norm(points[1] - points[0]) + np.linalg.norm(points[2] - points[3]))
+            side_b = 0.5 * (np.linalg.norm(points[2] - points[1]) + np.linalg.norm(points[3] - points[0]))
+            width = float(np.clip(min(side_a, side_b), 0.008, 0.08))
+            _, centre_ray = self.rays([(0.5 * (x1 + x2), 0.5 * (y1 + y2))], joints, K, dist, mount)
+            centre = o + centre_ray[0] * ((top_z - o[2]) / centre_ray[0, 2])
+            centre[2] = table_z + 0.5 * height
+            return {"xyz": centre, "width": width, "height": height, "shape": shape}
         uc, vc = 0.5 * (x1 + x2), 0.5 * (y1 + y2)
         edges = [(x1, vc), (x2, vc), (uc, y1), (uc, y2)]
         o, d = self.rays(edges, joints, K, dist, mount)
@@ -255,7 +275,39 @@ class Kinematics:
         horiz = np.array([bottom[0], bottom[1], 0.0])
         horiz /= max(np.linalg.norm(horiz), 1e-9)
         c0 = front + horiz * half_w
-        params = np.array([c0[0], c0[1], half_w] if shape == "sphere" else [c0[0], c0[1], half_w, 2 * half_w])
+        if shape == "bottle":
+            radius, height = 0.02, 0.085
+            centre = front + horiz * radius
+            observed = self._normalized(edges, K, dist)
+            target = np.array([observed[0, 0], observed[1, 0], observed[3, 1]])
+
+            def bottle_edges(xy):
+                pc = (self._surface("upright", [xy[0], xy[1], radius, height], table_z) - t) @ R
+                uv = pc[:, :2] / pc[:, 2:3]
+                return np.array([uv[:, 0].min(), uv[:, 0].max(), uv[:, 1].max()])
+
+            xy = centre[:2].copy()
+            for _ in range(12):
+                residual = bottle_edges(xy) - target
+                jac = np.empty((3, 2))
+                for j in range(2):
+                    step = np.zeros(2)
+                    step[j] = 1e-4
+                    jac[:, j] = (bottle_edges(xy + step) - bottle_edges(xy)) / 1e-4
+                delta = -np.linalg.solve(jac.T @ jac + 1e-4 * np.eye(2), jac.T @ residual)
+                xy += delta
+                if np.abs(delta).max() < 1e-6:
+                    break
+            return {
+                "xyz": np.array([xy[0], xy[1], table_z + 0.5 * height]),
+                "width": 2 * radius,
+                "height": height,
+                "shape": shape,
+            }
+        if shape == "sphere":
+            params = np.array([c0[0], c0[1], half_w])
+        else:
+            params = np.array([c0[0], c0[1], half_w, 2 * half_w])
         n = self._normalized(edges, K, dist)
         obs = np.array([n[0, 0], n[1, 0], n[2, 1], n[3, 1]])
         lo = np.array([-np.inf, -np.inf, 0.004] + ([] if shape == "sphere" else [0.004]))

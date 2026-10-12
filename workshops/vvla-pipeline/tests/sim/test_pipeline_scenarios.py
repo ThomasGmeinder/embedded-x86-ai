@@ -136,17 +136,19 @@ def _present():
 
 def test_grip_object_handed_over(pipeline_rig):
     rig = pipeline_rig
-    # the "user" puts the cube between the jaws a second after the arm presents
-    rig.when_near(_present(), lambda: rig.stage("cube", _present()), delay=1.0)
+    # the "user" puts the toothbrush between the jaws after the arm presents
+    rig.when_near(_present(), lambda: rig.stage("toothbrush", _present()), delay=1.0)
     rig.run([(0.3, "hold this for me")], timeout=25, settle=1.5)
 
     assert rig.ctx.shared_state.get("grip_lock"), f"grip not reported; robot said {rig.said}"
-    assert rig.world.is_grasped("cube"), f"cube not between both jaws: {rig.world.contact_report('cube')}"
-    assert rig.trace.grasped_seconds("cube") >= 1.0, "cube not held for 1 s"
+    assert rig.world.is_grasped("toothbrush"), (
+        f"toothbrush not between both jaws: {rig.world.contact_report('toothbrush')}"
+    )
+    assert rig.trace.grasped_seconds("toothbrush") >= 1.0, "toothbrush not held for 1 s"
     # grip.py stops closing at the stall, so the holding current sits below
     # load_threshold - but well clear of the idle current
     cur = rig.trace.currents()
-    assert cur.max() > 5 * np.median(cur[:25]), "squeezing the cube drew no extra current"
+    assert cur.max() > 5 * np.median(cur[:25]), "squeezing the toothbrush drew no extra current"
     assert rig.said_any("Object gripped")
 
 
@@ -172,9 +174,9 @@ def _descend_pose(cfg, pan: float = 0.0) -> dict:
 def _assert_picked_and_handed_over(rig, z0: float):
     assert rig.detector.calls > 0, "behavior never looked through the arm camera"
     assert rig.said_any("Got the sports ball"), f"robot said {rig.said}"
-    assert rig.trace.heights("ball").max() - z0 > 0.03, "ball never rose 3 cm"
-    assert rig.trace.grasped_seconds("ball") >= 1.0, "ball not held for 1 s"
-    assert not rig.world.is_grasped("ball"), "ball was never released at the handoff"
+    assert rig.trace.heights("sports_ball").max() - z0 > 0.03, "ball never rose 3 cm"
+    assert rig.trace.grasped_seconds("sports_ball") >= 1.0, "ball not held for 1 s"
+    assert not rig.world.is_grasped("sports_ball"), "ball was never released at the handoff"
     # handed toward the person on the left of the operator camera (mirrored -> +pan)
     _, pan = rig.trace.series("shoulder_pan")
     assert pan.max() > 10.0
@@ -190,7 +192,7 @@ def _assert_picked_and_handed_over(rig, z0: float):
 def test_pick_up_the_ball(pipeline_rig, caplog, spot):
     rig = pipeline_rig
     rig.pose.keys = [(0.0, [PERSON_LEFT])]
-    z0 = rig.put("ball", None if spot is None else [*spot, 0.015])[2]
+    z0 = rig.put("sports_ball", None if spot is None else [*spot, 0.015])[2]
     rig.run([(0.3, "pick up the ball")], timeout=60)
 
     assert "IK reach: sports ball" in caplog.text and "-> solved" in caplog.text, "IK reach not used"
@@ -204,22 +206,22 @@ def test_pick_ball_out_of_fixed_reach_says_so(pipeline_rig):
     rig.cfg["behaviors"]["pick_place"]["reach"] = "fixed"
     rig.pose.keys = [(0.0, [PERSON_LEFT])]
     # in view of the arm camera but ~10 cm closer than the taught descend pose
-    z0 = rig.put("ball", [0.19, 0.0, 0.015])[2]
+    z0 = rig.put("sports_ball", [0.19, 0.0, 0.015])[2]
     rig.run([(0.3, "pick up the ball")], timeout=60)
 
     assert rig.said_any("couldn't get a grip on the sports ball"), rig.said
     assert not rig.said_any("Got the"), rig.said
-    assert rig.trace.heights("ball").max() - z0 < 0.03, "ball was lifted"
+    assert rig.trace.heights("sports_ball").max() - z0 < 0.03, "ball was lifted"
     assert rig.event_times("behavior_end", intent="pick_place", ok=False)
     _assert_at(rig, _rest())
 
 
 def test_pick_unknown_object_fails_safely(pipeline_rig):
     rig = pipeline_rig
-    rig.stage("pen", _descend_pose(rig.cfg))
+    rig.stage("toothbrush", _descend_pose(rig.cfg))
     rig.run([(0.3, "pick up the pen")], timeout=25)
     assert rig.said_any("don't know what a pen looks like"), rig.said
-    assert not any(s.grasped.get("pen") for s in rig.trace.samples)
+    assert not any(s.grasped.get("toothbrush") for s in rig.trace.samples)
     _assert_at(rig, _rest())
 
 
@@ -228,28 +230,30 @@ def test_fetch_block_hands_to_person(pipeline_rig):
     rig = pipeline_rig
     fb = rig.cfg["behaviors"]["fetch_block"]
     rig.pose.keys = [(0.0, [PERSON_LEFT])]
-    # staged with the arm already there: approaching from rest sweeps a pedestal-staged cube off
+    # Staged with the arm already there: approaching from rest sweeps a
+    # pedestal-staged prop off. The ball provides a stable grasp for this
+    # legacy open-loop handoff; detection-driven object tests run separately.
     rig.arm.go_to({**fb["block_pose"], "gripper": 70.0}, duration_s=2.5)
     time.sleep(0.8)
-    rig.stage("cube", fb["block_pose"])
-    z0 = rig.world.body_pos("cube")[2]
+    rig.stage("sports_ball", fb["block_pose"])
+    z0 = rig.world.body_pos("sports_ball")[2]
     rig.run([(0.3, "bring me the block")], timeout=60)
 
     assert rig.event_times("behavior_end", intent="fetch_block", ok=True)
-    assert rig.trace.heights("cube").max() - z0 > 0.03, "block never lifted"
-    assert rig.trace.grasped_seconds("cube") >= 1.0
-    assert not rig.world.is_grasped("cube"), "block not released"
+    assert rig.trace.heights("sports_ball").max() - z0 > 0.03, "prop never lifted"
+    assert rig.trace.grasped_seconds("sports_ball") >= 1.0
+    assert not rig.world.is_grasped("sports_ball"), "prop not released"
     _assert_at(rig, _rest())
 
 
 @pytest.mark.slow
 def test_fetch_block_without_block_says_so(pipeline_rig):
-    """The cube sits on the table, not at block_pose: the jaws close on air."""
+    """The ball sits on the table, not at block_pose: the jaws close on air."""
     rig = pipeline_rig
     rig.run([(0.3, "bring me the block")], timeout=40)
 
     assert rig.said_any("couldn't get a grip"), rig.said
-    assert not any(s.grasped.get("cube") for s in rig.trace.samples)
+    assert not any(s.grasped.get("sports_ball") for s in rig.trace.samples)
     _assert_at(rig, _rest())
 
 
