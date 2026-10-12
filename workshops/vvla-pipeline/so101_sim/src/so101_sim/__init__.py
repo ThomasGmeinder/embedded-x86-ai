@@ -40,6 +40,7 @@ __all__ = [
     "RenderService",
     "SimRecorder",
     "SegDetector",
+    "Kinematics",
     "shared_world",
     "close_shared_world",
     "load_sim_config",
@@ -66,6 +67,7 @@ _LAZY = {
     "RenderService": "so101_sim.render",
     "SimRecorder": "so101_sim.record",
     "SegDetector": "so101_sim.detect",
+    "Kinematics": "so101_sim.kinematics",
     "load_sim_config": "so101_sim.config",
 }
 
