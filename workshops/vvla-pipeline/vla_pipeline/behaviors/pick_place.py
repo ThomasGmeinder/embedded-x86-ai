@@ -57,7 +57,7 @@ import time
 
 import numpy as np
 
-from vla_pipeline.behaviors.fetch_block import track_person_and_handoff
+from vla_pipeline.behaviors.fetch_block import park_open, track_person_and_handoff
 from vla_pipeline.behaviors.grip import close_with_feedback, holding
 from vla_pipeline.robot.arm_interface import (
     GRIPPER_CLOSED_FLOOR,
@@ -271,7 +271,7 @@ def run_pick_place(
         return False
     if not gripped:
         say(f"I couldn't get a grip on the {resolved}. Giving up for now.")
-        arm.go_to_rest()
+        park_open(arm)
         return False
 
     # ---------------- LIFT + HANDOFF ----------------
@@ -308,8 +308,7 @@ def run_pick_place(
     time.sleep(0.3)
     if not holding(arm, g, hold):
         say(f"I dropped the {resolved}.")
-        arm.go_to({"gripper": 75.0}, duration_s=0.6)
-        arm.go_to_rest()
+        park_open(arm)
         return False
     say(f"Got the {resolved} - bringing it to you.")
     track_person_and_handoff(pp, arm, pose, operator_camera, lift_pose, stop_check)

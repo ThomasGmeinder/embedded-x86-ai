@@ -37,7 +37,7 @@ import numpy as np
 
 from common.imaging import KP
 from common.intents import Intent
-from common.motion import GRIPPER_CLOSED_FLOOR, JOINT_LIMITS
+from common.motion import GRIPPER_CLOSED_FLOOR, JOINT_LIMITS, REST_POSE
 
 logger = logging.getLogger(__name__)
 
@@ -271,9 +271,15 @@ def hand_over(ctx, section: dict, lift_pose: dict) -> None:
     )
     logger.info("[handoff] release - take it!")
     time.sleep(min(float(section["release_timeout_s"]), 6.0) * 0.5)
-    ctx.arm.go_to({"gripper": 75.0}, duration_s=1.0)
+    ctx.arm.go_to({"gripper": JOINT_LIMITS["gripper"][1]}, duration_s=1.0)
     time.sleep(1.0)
-    ctx.arm.go_to_rest()
+    park_open(ctx.arm)
+
+
+def park_open(arm, stop_check=None) -> None:
+    """Go to the rest pose with the jaws wide open. Closing them on the way
+    home can catch the object just let go of and drag it across the table."""
+    arm.go_to({**REST_POSE, "gripper": JOINT_LIMITS["gripper"][1]}, duration_s=3.0, stop_check=stop_check)
 
 
 # ----------------------------------------------------------------------------
@@ -471,7 +477,7 @@ def run_pick_place(ctx, cmd) -> bool:
         return False
     if not gripped:
         ctx.say(f"I couldn't get a grip on the {resolved}. Giving up for now.")
-        ctx.arm.go_to_rest()
+        park_open(ctx.arm)
         return False
 
     # straight back up the way the jaws came down, so the object isn't dragged
@@ -505,8 +511,7 @@ def run_pick_place(ctx, cmd) -> bool:
     time.sleep(0.3)
     if not holding(ctx.arm, g, hold):
         ctx.say(f"I dropped the {resolved}.")
-        ctx.arm.go_to({"gripper": 75.0}, duration_s=0.6)
-        ctx.arm.go_to_rest()
+        park_open(ctx.arm)
         return False
     ctx.say(f"Got the {resolved} - bringing it to you.")
     hand_over(ctx, pp, lift_pose)

@@ -32,7 +32,7 @@ import time
 
 import numpy as np
 
-from vla_pipeline.robot.arm_interface import ArmClient, DryRunArm, make_arm
+from vla_pipeline.robot.arm_interface import JOINT_LIMITS, REST_POSE, ArmClient, DryRunArm, make_arm
 from vla_pipeline.utils.config import load_config
 from vla_pipeline.vision.yolo_pose_npu import KP, PoseEstimator
 
@@ -113,11 +113,17 @@ def track_person_and_handoff(
 
     logger.info("[handoff] RELEASE - take it!")
     time.sleep(min(float(cfg_section["release_timeout_s"]), 6.0) * 0.5)
-    arm.go_to({"gripper": 75.0}, duration_s=1.0)
+    arm.go_to({"gripper": JOINT_LIMITS["gripper"][1]}, duration_s=1.0)
     time.sleep(1.0)
 
     logger.info("[handoff] HOME")
-    arm.go_to_rest()
+    park_open(arm)
+
+
+def park_open(arm: ArmClient, stop_check=None) -> None:
+    """Go to the rest pose with the jaws wide open. Closing them on the way
+    home can catch the object just let go of and drag it across the table."""
+    arm.go_to({**REST_POSE, "gripper": JOINT_LIMITS["gripper"][1]}, duration_s=3.0, stop_check=stop_check)
 
 
 def run_fetch_block(
