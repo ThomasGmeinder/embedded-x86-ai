@@ -91,8 +91,8 @@
     </body>
     <body name="toothbrush" pos="0.12 -0.24 0" euler="0 0 0.4">
       <freejoint name="toothbrush_j"/>
-      <geom name="toothbrush_collision" type="box" size="0.012 0.06 0.005" rgba="0 0 0 0"
-        mass="0.012" friction="1.0 0.02 0.001"/>
+      <geom name="toothbrush_collision" type="box" size="0.012 0.06 0.01" rgba="0 0 0 0"
+        mass="0.008" condim="6" friction="2.0 0.03 0.003" solref="0.01 1"/>
       <geom name="toothbrush_visual" type="mesh" mesh="toothbrush_mesh" material="toothbrush_mat"
         euler="0 0 1.5708" contype="0" conaffinity="0" group="2" mass="0"/>
     </body>

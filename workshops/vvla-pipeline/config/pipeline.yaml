@@ -214,6 +214,9 @@ behaviors:
     # Joint pose from which the arm camera surveys the workspace.
     scan_pose:   {shoulder_pan: 0.0, shoulder_lift: -55.0, elbow_flex: 65.0, wrist_flex: 45.0, wrist_roll: 0.0, gripper: 70.0}
     scan_pans: [0.0, -14.0, 39.0, -52.0, 71.0]  # sweep the twin workspace; tune for the real camera/FOV
+    # Fallback view of the near-base table, normally hidden behind the jaws.
+    scan_near_pose: {shoulder_pan: 0.0, shoulder_lift: -57.3, elbow_flex: 63.2, wrist_flex: 67.5, wrist_roll: 0.0, gripper: 70.0}
+    scan_near_pans: [0.0, -14.0, 14.0]
     # ik: locate the object on the table from its box (camera ray meets the
     # table plane) and solve the reach; fixed: approach_pose + descend_lift.
     # ik falls back to fixed when there is no fix or the object is out of reach.
@@ -233,6 +236,21 @@ behaviors:
     servo_target_x: -0.24     # image x (normalized) of an object that sits between the jaws
     servo_tolerance: 0.06     # |normalized error| considered centered
     servo_timeout_s: 6.0
+    wrist_align_classes: [toothbrush]
+    wrist_align_pregrasp_above_m: 0.10  # pre-grasp height above a thin object
+    wrist_align_grasp_width_m: 0.024     # toothbrush handle width across the aligned jaws
+    wrist_align_center_offset_m: 0.018   # shift from silhouette midpoint toward the narrow handle end
+    wrist_align_fixed_jaw_bias_m: 0.024  # moving finger presses the handle into the fixed finger
+    wrist_align_settle_extra_deg: 8.0    # extra squeeze for the thin handle before lifting
+    wrist_align_lift_duration_s: 4.0     # slow vertical withdrawal so the thin handle does not slip
+    wrist_axis_tolerance_deg: 6.0        # converged when a fresh view asks for less roll than this
+    wrist_axis_max_rounds: 4             # measure-and-move rounds before giving up
+    wrist_axis_min_elongation: 1.6
+    # While the wrist rolls, the whole arm keeps the camera aimed at the object
+    wrist_view_distance_m: 0.17          # camera-to-object distance
+    wrist_view_look_down: 0.85           # downward component of the camera axis (1 = straight down)
+    wrist_view_roll_step_deg: 15.0       # roll per look-at waypoint
+    wrist_view_step_s: 0.5               # seconds per waypoint
     min_box_area_frac: 0.002  # detections smaller than this are noise
     ambiguous_ratio: 1.25     # top-2 score ratio below this = "which one?"
     handoff_reach: 55.0       # same semantics as fetch_block

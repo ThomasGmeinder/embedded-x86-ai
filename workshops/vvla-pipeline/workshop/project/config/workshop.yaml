@@ -185,6 +185,8 @@ grip:                               # close until contact, confirm with the arm 
 pick_place:                         # "pick up the ball": detect on the arm camera, grasp, hand over
   scan_pose: {shoulder_pan: 0.0, shoulder_lift: -55.0, elbow_flex: 65.0, wrist_flex: 45.0, wrist_roll: 0.0, gripper: 70.0}
   scan_pans: [0.0, -14.0, 39.0, -52.0, 71.0]  # sweep workspace; tune for the real camera/FOV
+  scan_near_pose: {shoulder_pan: 0.0, shoulder_lift: -57.3, elbow_flex: 63.2, wrist_flex: 67.5, wrist_roll: 0.0, gripper: 70.0}
+  scan_near_pans: [0.0, -14.0, 14.0]  # fallback for near objects hidden behind the jaws
   reach: ik                         # ik: locate on the table + IK (falls back to fixed) | fixed
   table_z: -0.005                   # table surface height in the arm's base frame (m)
   pregrasp_above_m: 0.06            # ik: jaws open this far above the grasp, then straight down
@@ -195,6 +197,20 @@ pick_place:                         # "pick up the ball": detect on the arm came
   servo_target_x: -0.24             # image x of an object that sits between the jaws
   servo_tolerance: 0.06
   servo_timeout_s: 6.0
+  wrist_align_classes: [toothbrush]
+  wrist_align_pregrasp_above_m: 0.10
+  wrist_align_grasp_width_m: 0.024
+  wrist_align_center_offset_m: 0.018
+  wrist_align_fixed_jaw_bias_m: 0.024
+  wrist_align_settle_extra_deg: 8.0
+  wrist_align_lift_duration_s: 4.0
+  wrist_axis_tolerance_deg: 6.0
+  wrist_axis_max_rounds: 4
+  wrist_axis_min_elongation: 1.6
+  wrist_view_distance_m: 0.17       # whole arm keeps the camera aimed while the wrist rolls
+  wrist_view_look_down: 0.85
+  wrist_view_roll_step_deg: 15.0
+  wrist_view_step_s: 0.5
   min_box_area_frac: 0.002
   ambiguous_ratio: 1.25
   handoff_reach: 55.0

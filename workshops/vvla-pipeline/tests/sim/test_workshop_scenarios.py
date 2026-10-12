@@ -45,6 +45,21 @@ def test_workshop_pick_up_the_ball(workshop_rig, caplog, spot):
     assert not rig.world.is_grasped("sports_ball"), "ball was never released at the handoff"
 
 
+def test_workshop_pick_up_toothbrush_aligns_wrist(workshop_rig, caplog):
+    rig = workshop_rig
+    rig.pose.keys = [(0.0, [PERSON_LEFT])]
+    rig.default_scene()  # the notebook console's scene: all four props
+    z0 = rig.world.body_pos("toothbrush")[2]
+    rig.run([(0.3, "pick up the toothbrush")], timeout=90, settle=1.0)
+
+    assert "wrist alignment:" in caplog.text
+    _, roll = rig.trace.series("wrist_roll")
+    assert abs(roll).max() > 60.0, "wrist never turned across the toothbrush"
+    assert rig.said_any("Got the toothbrush"), f"robot said {rig.said}"
+    assert rig.trace.heights("toothbrush").max() - z0 > 0.03
+    assert rig.trace.grasped_seconds("toothbrush") >= 1.0
+
+
 def test_workshop_pick_ball_out_of_fixed_reach_says_so(workshop_rig):
     rig = workshop_rig
     rig.cfg["pick_place"]["reach"] = "fixed"

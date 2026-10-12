@@ -37,7 +37,7 @@ import numpy as np
 
 from common.imaging import KP
 from common.intents import Intent
-from common.motion import GRIPPER_CLOSED_FLOOR
+from common.motion import GRIPPER_CLOSED_FLOOR, JOINT_LIMITS
 
 logger = logging.getLogger(__name__)
 
@@ -324,7 +324,7 @@ def _best(dets, frame_area: float, min_area_frac: float):
 
 
 def _detect(ctx, camera, name: str, duration_s: float = 2.0):
-    """Sample frames for up to ``duration_s``: ``(matches, class)``; class None = unknown name."""
+    """Sample frames: ``(matches, class, frame)``; class None = unknown name."""
     deadline = time.time() + duration_s
     resolved = ""
     while time.time() < deadline and not ctx.stop_check():
@@ -334,9 +334,9 @@ def _detect(ctx, camera, name: str, duration_s: float = 2.0):
             continue
         dets, resolved = ctx.detector.find(frame, name)
         if resolved is None or dets:
-            return dets, resolved
+            return dets, resolved, frame
         time.sleep(0.1)
-    return [], resolved
+    return [], resolved, None
 
 
 def run_pick_place(ctx, cmd) -> bool:
@@ -360,16 +360,23 @@ def run_pick_place(ctx, cmd) -> bool:
     base_scan = dict(pp["scan_pose"])
     scan_pans = pp.get("scan_pans") if camera is ctx.arm_camera else None
     scan_pans = list(scan_pans or [base_scan.get("shoulder_pan", 0.0)])
-    dets, resolved = [], ""
-    for i, pan in enumerate(scan_pans):
-        ctx.arm.go_to(
-            {**base_scan, "shoulder_pan": float(pan)},
-            duration_s=2.5 if i == 0 else 1.2,
-            stop_check=ctx.stop_check,
-        )
-        if ctx.stop_check():
-            return False
-        dets, resolved = _detect(ctx, camera, name, duration_s=0.8)
+    scan_sets = [(base_scan, scan_pans)]
+    if camera is ctx.arm_camera and pp.get("scan_near_pose"):
+        near = dict(pp["scan_near_pose"])
+        scan_sets.append((near, list(pp.get("scan_near_pans") or [near.get("shoulder_pan", 0.0)])))
+    dets, resolved, detection_frame = [], "", None
+    for scan_index, (scan_pose, pans) in enumerate(scan_sets):
+        for i, pan in enumerate(pans):
+            ctx.arm.go_to(
+                {**scan_pose, "shoulder_pan": float(pan)},
+                duration_s=2.5 if scan_index == 0 and i == 0 else 1.2,
+                stop_check=ctx.stop_check,
+            )
+            if ctx.stop_check():
+                return False
+            dets, resolved, detection_frame = _detect(ctx, camera, name, duration_s=0.8)
+            if resolved is None or dets:
+                break
         if resolved is None or dets:
             break
     if resolved is None:
@@ -390,11 +397,29 @@ def run_pick_place(ctx, cmd) -> bool:
         ctx.arm.go_to_rest()
         return False
 
+    # A visible off-centre detection is already enough for calibrated IK.
+    # Plan before pan servoing can move a small/far object behind the jaws.
+    initial_ik = None
+    if (
+        pp.get("reach", "fixed") == "ik"
+        and ctx.arm_camera is not None
+        and camera is ctx.arm_camera
+        and resolved not in pp.get("wrist_align_classes", [])
+    ):
+        initial_ik = _plan_ik_reach(
+            ctx, camera, name, resolved,
+            observation=(detection_frame, dets, resolved, ctx.arm.get_joints()),
+        )
     centered = _servo_pan(ctx, camera, name)
     if ctx.stop_check():
         return False
     if not centered:
         ctx.say("I couldn't line up on it - grabbing where I last saw it.")
+    first_ik = initial_ik
+    if initial_ik is not None and centered:
+        # Prefer the less-oblique centred observation, but retain the scan-view
+        # plan when a small/far object becomes hidden by the jaws.
+        first_ik = _plan_ik_reach(ctx, camera, name, resolved) or initial_ik
 
     gripped, hold = False, 0.0
     attempts = 1 + int(pp.get("retries", 1))
@@ -404,8 +429,15 @@ def run_pick_place(ctx, cmd) -> bool:
         aligned_pan = ctx.arm.get_joints()["shoulder_pan"]
         way_up = None
         if pp.get("reach", "fixed") == "ik" and ctx.arm_camera is not None and camera is ctx.arm_camera:
-            way_up = _reach_ik(ctx, camera, name)
+            way_up = _reach_ik(
+                ctx, camera, name, resolved,
+                down=first_ik if attempt == 0 else None,
+            )
         if ctx.stop_check():
+            return False
+        if way_up is None and resolved in pp.get("wrist_align_classes", []):
+            ctx.say(f"I couldn't align my gripper with the {resolved}.")
+            ctx.arm.go_to_rest()
             return False
         if way_up is None:
             way_up = _reach_fixed(ctx)
@@ -416,6 +448,13 @@ def run_pick_place(ctx, cmd) -> bool:
             return False
         if gripped:
             hold = _settle_grip(ctx.arm, g)
+            if resolved in pp.get("wrist_align_classes", []):
+                hold = max(
+                    hold - float(pp.get("wrist_align_settle_extra_deg", 8.0)),
+                    GRIPPER_CLOSED_FLOOR,
+                )
+                ctx.arm.send_joints({"gripper": hold})
+                time.sleep(0.2)
         if gripped and holding(ctx.arm, g, hold):
             break
         gripped = False
@@ -424,7 +463,7 @@ def run_pick_place(ctx, cmd) -> bool:
             ctx.say("The grasp slipped - trying once more.")
             ctx.arm.go_to({**pp["scan_pose"], "shoulder_pan": aligned_pan}, duration_s=1.5,
                           stop_check=ctx.stop_check)
-            dets, _ = _detect(ctx, camera, name, duration_s=1.5)
+            dets, _, _ = _detect(ctx, camera, name, duration_s=1.5)
             if not dets:
                 break
             _servo_pan(ctx, camera, name)
@@ -436,19 +475,31 @@ def run_pick_place(ctx, cmd) -> bool:
         return False
 
     # straight back up the way the jaws came down, so the object isn't dragged
+    lift_duration = (
+        float(pp.get("wrist_align_lift_duration_s", 4.0))
+        if resolved in pp.get("wrist_align_classes", [])
+        else 1.5
+    )
     for step in way_up:
-        ctx.arm.go_to({**step, "gripper": hold}, duration_s=1.5 / len(way_up), stop_check=ctx.stop_check)
+        ctx.arm.go_to(
+            {**step, "gripper": hold},
+            duration_s=lift_duration / len(way_up),
+            stop_check=ctx.stop_check,
+        )
         if ctx.stop_check():
             return False
-    lift_pose = {
-        "shoulder_pan": ctx.arm.get_joints()["shoulder_pan"],
-        "shoulder_lift": -80.0,
-        "elbow_flex": 85.0,
-        "wrist_flex": 50.0,
-        "wrist_roll": 0.0,
-        "gripper": hold,
-    }
-    ctx.arm.go_to(lift_pose, duration_s=2.0, stop_check=ctx.stop_check)
+    if resolved in pp.get("wrist_align_classes", []):
+        lift_pose = {**ctx.arm.get_joints(), "gripper": hold}
+    else:
+        lift_pose = {
+            "shoulder_pan": ctx.arm.get_joints()["shoulder_pan"],
+            "shoulder_lift": -80.0,
+            "elbow_flex": 85.0,
+            "wrist_flex": 50.0,
+            "wrist_roll": ctx.arm.get_joints()["wrist_roll"],
+            "gripper": hold,
+        }
+        ctx.arm.go_to(lift_pose, duration_s=2.0, stop_check=ctx.stop_check)
     if ctx.stop_check():
         return False
     time.sleep(0.3)
@@ -489,6 +540,104 @@ def _servo_pan(ctx, camera, name: str) -> bool:
     return False
 
 
+def _axis_observation(ctx, camera, name: str):
+    """Fresh ``(principal-axis, (width, height))`` for an elongated object."""
+    from so101_sim.kinematics import principal_axis_in_box
+
+    pp = ctx.cfg["pick_place"]
+    camera.read()
+    ok, frame = camera.read()
+    if not ok:
+        return None
+    dets, _ = ctx.detector.find(frame, name)
+    d = _best(dets, frame.shape[0] * frame.shape[1], float(pp["min_box_area_frac"]))
+    if d is None:
+        return None
+    axis = principal_axis_in_box(
+        frame,
+        d.box,
+        min_elongation=float(pp.get("wrist_axis_min_elongation", 1.6)),
+    )
+    return None if axis is None else (axis, (frame.shape[1], frame.shape[0]))
+
+
+def _align_view(ctx, camera, name: str) -> bool:
+    """Turn the jaws across an elongated object while the camera keeps it in view.
+
+    The camera rides on the gripper, so rolling the wrist alone swings the
+    object out of the image. Each round measures the object's long axis
+    (PCA inside the box, carried onto the table plane by camera rays),
+    solves the wrist roll that closes the jaws across it, and moves the whole
+    arm there in roll steps along look-at poses that keep the object centred.
+    Converged once a fresh view asks for less than
+    ``wrist_axis_tolerance_deg`` more roll.
+    """
+    from so101_sim.kinematics import shared_kinematics
+
+    pp = ctx.cfg["pick_place"]
+    cam = (ctx.cfg.get("cameras") or {}).get("arm") or {}
+    kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
+    table_z = float(pp.get("table_z", -0.005))
+    width = float(pp.get("wrist_align_grasp_width_m", 0.024))
+    tolerance = float(pp.get("wrist_axis_tolerance_deg", 6.0))
+    distance = float(pp.get("wrist_view_distance_m", 0.17))
+    look_down = float(pp.get("wrist_view_look_down", 0.85))
+    roll_step = float(pp.get("wrist_view_roll_step_deg", 15.0))
+    step_s = float(pp.get("wrist_view_step_s", 0.5))
+    above_m = float(pp.get("wrist_align_pregrasp_above_m", 0.10))
+    for round_ in range(int(pp.get("wrist_axis_max_rounds", 4))):
+        if ctx.stop_check():
+            return False
+        time.sleep(0.2)
+        joints = ctx.arm.get_joints()
+        obs = _axis_observation(ctx, camera, name)
+        if obs is None:
+            logger.info("wrist alignment: lost sight of the %s", name)
+            return False
+        axis, size = obs
+        K, dist = kin.intrinsics(cam.get("intrinsics"), *size)
+        found = kin.table_axis(
+            axis["center"], axis["direction"], axis["length_px"], joints, K, dist,
+            cam.get("mount"), table_z + 0.006,
+        )
+        if found is None:
+            return False
+        p, world_axis = found
+        grasp_p = np.array([p[0], p[1], table_z + 0.011])
+        roll_now = float(joints.get("wrist_roll", 0.0))
+        grasp_plan = kin.solve_grasp(
+            grasp_p, above_m=above_m, width=width, table_z=table_z,
+            wrist_roll=roll_now, limits=JOINT_LIMITS, object_axis=world_axis,
+            seed=joints,
+        )
+        if grasp_plan is None:
+            logger.info("wrist alignment: no reachable roll for the %s", name)
+            return False
+        target = float(grasp_plan[1]["wrist_roll"])
+        change = target - roll_now
+        logger.info(
+            "wrist alignment: %.1f deg roll, %.1f deg to go, %.1f deg image axis",
+            roll_now, change, axis["angle_deg"],
+        )
+        if round_ > 0 and abs(change) <= tolerance:
+            return True
+        start, centre_err = kin.look_at(
+            p, roll_now, distance, look_down, joints, cam.get("mount"), limits=JOINT_LIMITS
+        )
+        path = kin.view_path(
+            p, start, target, distance, look_down, roll_step, cam.get("mount"), limits=JOINT_LIMITS
+        )
+        if centre_err > 0.05 or path is None:
+            logger.info("wrist alignment: no view-keeping path to %.1f deg", target)
+            return False
+        gripper = joints.get("gripper", 75.0)
+        for pose in [start, *path]:
+            ctx.arm.go_to({**pose, "gripper": gripper}, duration_s=step_s, stop_check=ctx.stop_check)
+            if ctx.stop_check():
+                return False
+    return False
+
+
 def _reach_fixed(ctx) -> list[dict]:
     """Jaws open over the object at the configured reach, then down onto it.
     Returns the way back up (poses without the gripper)."""
@@ -499,26 +648,47 @@ def _reach_fixed(ctx) -> list[dict]:
     return [above]
 
 
-def _plan_ik_reach(ctx, camera, name: str):
+def _plan_ik_reach(ctx, camera, name: str, resolved_name: str, observation=None):
     """Locate the object on the table from a fresh arm-camera detection and
     solve the reach: joint poses from the pre-grasp straight down to the
     grasp, or None."""
     pp = ctx.cfg["pick_place"]
     try:
-        from so101_sim.kinematics import FLAT_CLASSES, ROUND_CLASSES, shared_kinematics
+        from so101_sim.kinematics import (
+            FLAT_CLASSES,
+            ROUND_CLASSES,
+            principal_axis_in_box,
+            shared_kinematics,
+        )
 
         kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
     except Exception as e:  # so101_sim / mujoco / model assets missing
         logger.warning("IK reach unavailable: %s", e)
         return None
-    time.sleep(0.3)  # let the servo's last pan step settle
-    camera.read()  # drop a frame that may predate it
-    joints = ctx.arm.get_joints()
-    ok, frame = camera.read()
-    if not ok:
-        return None
-    dets, resolved = ctx.detector.find(frame, name)
-    d = _best(dets, frame.shape[0] * frame.shape[1], float(pp["min_box_area_frac"]))
+    if observation is not None:
+        frame, dets, resolved, joints = observation
+        d = None if frame is None else _best(
+            dets, frame.shape[0] * frame.shape[1], float(pp["min_box_area_frac"])
+        )
+    else:
+        time.sleep(0.3)  # let the servo's last pan step settle
+        camera.read()  # drop a frame that may predate it
+        joints = ctx.arm.get_joints()
+        deadline = time.time() + 0.8
+        frame = d = resolved = None
+        while time.time() < deadline:
+            ok, candidate = camera.read()
+            if ok:
+                dets, resolved = ctx.detector.find(candidate, name)
+                best = _best(
+                    dets,
+                    candidate.shape[0] * candidate.shape[1],
+                    float(pp["min_box_area_frac"]),
+                )
+                if best is not None:
+                    frame, d = candidate, best
+                    break
+            time.sleep(0.05)
     if d is None:
         return None
     h, w = frame.shape[:2]
@@ -540,21 +710,90 @@ def _plan_ik_reach(ctx, camera, name: str):
         return None
     p = loc["xyz"].copy()
     p[2] = min(p[2], table_z + float(pp.get("max_grasp_height_m", 0.03)))
-    plan = kin.solve_grasp(p, above_m=float(pp.get("pregrasp_above_m", 0.06)), width=loc["width"], table_z=table_z)
+    oriented = resolved_name in pp.get("wrist_align_classes", [])
+    if oriented:
+        axis = principal_axis_in_box(
+            frame,
+            d.box,
+            min_elongation=float(pp.get("wrist_axis_min_elongation", 1.6)),
+        )
+        if axis is not None:
+            centre_px = np.asarray(axis["center"])
+            along_px = centre_px + (
+                np.asarray(axis["direction"]) * axis["length_px"] * 0.25
+            )
+            origin, rays = kin.rays(
+                [centre_px, along_px], joints, K, dist, cam.get("mount")
+            )
+            top_z = table_z + 0.010
+            if origin[2] > top_z and (rays[:, 2] < -1e-6).all():
+                points = origin + rays * ((top_z - origin[2]) / rays[:, 2])[:, None]
+                direction = points[1, :2] - points[0, :2]
+                direction /= max(float(np.linalg.norm(direction)), 1e-9)
+                offset_m = (
+                    float(pp.get("wrist_align_center_offset_m", 0.018))
+                    if abs(float(joints.get("wrist_roll", 0.0))) < 30.0
+                    else 0.0
+                )
+                p[:2] = points[0, :2] + direction * offset_m
+        p[2] = max(p[2], table_z + 0.011)
+    grasp_width = (
+        float(pp.get("wrist_align_grasp_width_m", 0.024))
+        if oriented
+        else loc["width"]
+    )
+    above_m = float(
+        pp.get("wrist_align_pregrasp_above_m", 0.10)
+        if oriented
+        else pp.get("pregrasp_above_m", 0.06)
+    )
+    # the arm clamps any pose; an aligned grasp has to be solved within its limits
+    limits = JOINT_LIMITS if oriented else None
+    wrist_roll = float(ctx.arm.get_joints().get("wrist_roll", 0.0)) if oriented else 0.0
+    plan = kin.solve_grasp(
+        p,
+        above_m=above_m,
+        width=grasp_width,
+        table_z=table_z,
+        wrist_roll=wrist_roll,
+        limits=limits,
+    )
+    if plan is not None and oriented and abs(wrist_roll) >= 30.0:
+        jaw = kin.world.jaw_axis(plan[1])
+        p = p + jaw * float(pp.get("wrist_align_fixed_jaw_bias_m", 0.024))
+        plan = kin.solve_grasp(
+            p,
+            above_m=above_m,
+            width=grasp_width,
+            table_z=table_z,
+            wrist_roll=wrist_roll,
+            limits=limits,
+        )
     logger.info(
         "IK reach: %s at (%.3f, %.3f, %.3f) m, %.0f mm wide -> %s",
-        resolved, *loc["xyz"], 1000 * loc["width"], "solved" if plan else "out of reach",
+        resolved, *p, 1000 * grasp_width, "solved" if plan else "out of reach",
     )
     if plan is None:
         return None
     pregrasp, grasp = plan
-    return [pregrasp, *kin.waypoints(pregrasp, grasp, loc["width"])]
+    step_m = 0.005 if oriented else 0.015
+    return [
+        pregrasp,
+        *kin.waypoints(pregrasp, grasp, grasp_width, step_m=step_m, limits=limits),
+    ]
 
 
-def _reach_ik(ctx, camera, name: str):
+def _reach_ik(ctx, camera, name: str, resolved_name: str, down=None):
     """Jaws open over the located object, then straight down onto it. Returns
     the way back up (poses without the gripper), or None to use the fixed reach."""
-    down = _plan_ik_reach(ctx, camera, name)
+    pp = ctx.cfg["pick_place"]
+    if resolved_name in pp.get("wrist_align_classes", []):
+        if not _align_view(ctx, camera, name):
+            logger.info("wrist alignment: no confident solution")
+            return None
+    # an aligned object is re-localized from the centred view, keeping its roll
+    if down is None:
+        down = _plan_ik_reach(ctx, camera, name, resolved_name)
     if down is None:
         logger.info("IK reach not possible - using the fixed approach")
         return None

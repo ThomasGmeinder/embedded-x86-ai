@@ -15,9 +15,10 @@ units the LeRobot follower reports), so this module is not twin-only:
 * :meth:`Kinematics.locate_on_table` - an object detector box turned into a
   3D position: the camera rays through the box's pixels are intersected with
   the table plane (objects rest on the table, so one camera is enough).
-* :meth:`Kinematics.solve_grasp` - damped least-squares IK for a top-down
-  grasp: the point between the jaws on the object, the closing axis
-  horizontal, every arm part above the table.
+* :meth:`Kinematics.solve_grasp` - bounded five-joint SQP for a top-down
+  grasp, using MuJoCo's analytic Jacobians: the point between the jaws on
+  the object, the closing axis horizontal, every arm part above the table.
+  An elongated-object axis also constrains the jaws to close across it.
 
 Camera frames follow OpenCV (x right, y down, z forward); a mount is the
 camera frame in the ``gripper`` body frame - what ``cv2.calibrateHandEye``
@@ -39,6 +40,8 @@ __all__ = [
     "TABLE_Z",
     "ROUND_CLASSES",
     "FLAT_CLASSES",
+    "principal_axis_in_box",
+    "axis_error_deg",
     "rpy_to_matrix",
     "matrix_to_rpy",
     "solve_mount",
@@ -46,6 +49,7 @@ __all__ = [
 ]
 
 IK_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex")
+IK5_JOINTS = (*IK_JOINTS, "wrist_roll")
 OPEN_GRIPPER = 75.0
 # Detector classes with geometry that needs a different table-box model.
 ROUND_CLASSES = frozenset({"sports ball", "orange", "apple"})
@@ -55,12 +59,85 @@ _CV_FROM_MJ = np.diag([1.0, -1.0, -1.0])  # MuJoCo cameras look down -z with y u
 _CLEARANCE_BODIES = ("lower_arm", "wrist", "gripper", "camera_mount", "moving_jaw_so101_v1")
 _AXIS_WEIGHT = 0.05  # metres of grasp-point error worth one unit of closing-axis tilt
 _SEEDS = ((9.0, 20.0, 54.0), (-15.0, 20.0, 54.0), (30.0, -20.0, 75.0), (-40.0, 60.0, 60.0))
+_VIEW_SEEDS = ((-55.0, 65.0, 45.0), (-20.0, 40.0, 60.0), (-75.0, 85.0, 30.0), (0.0, 20.0, 70.0))
+_VIEW_DOWN_WEIGHT = 0.5  # soft preference; centring and distance take priority
+_VIEW_SMOOTH_WEIGHT = 0.05  # pull toward the seed pose per 90 deg of joint change
+_SQP_TRUST_DEG = 10.0
+_SQP_REG = 2e-6
 _RING = np.array([[math.cos(a), math.sin(a)] for a in np.linspace(0, 2 * math.pi, 72, endpoint=False)])
 _golden = math.pi * (3.0 - math.sqrt(5.0))
 _SPHERE = np.array([
     [math.cos(_golden * i) * math.sqrt(1 - z * z), math.sin(_golden * i) * math.sqrt(1 - z * z), z]
     for i, z in enumerate(np.linspace(-1, 1, 600))
 ])
+
+
+def axis_error_deg(angle: float, target: float) -> float:
+    """Shortest signed error between two unoriented image axes (degrees)."""
+    return (float(angle) - float(target) + 90.0) % 180.0 - 90.0
+
+
+def principal_axis_in_box(
+    frame,
+    box,
+    *,
+    colour_threshold: float = 35.0,
+    min_pixels: int = 40,
+    min_elongation: float = 1.6,
+) -> dict | None:
+    """Long image axis of an elongated object inside an axis-aligned box.
+
+    YOLO supplies only ``xyxy``.  The object's silhouette is approximated by
+    pixels that differ from the crop's border colour, then PCA supplies an
+    unoriented angle in ``[-90, 90)``.  ``None`` is returned when the box is
+    clipped, too small, or not convincingly elongated.
+    """
+    image = np.asarray(frame)
+    if image.ndim != 3 or image.shape[2] < 3:
+        return None
+    height, width = image.shape[:2]
+    x1f, y1f, x2f, y2f = (float(v) for v in box)
+    if x1f <= 1 or y1f <= 1 or x2f >= width - 1 or y2f >= height - 1:
+        return None
+    x1, y1 = max(0, int(math.floor(x1f))), max(0, int(math.floor(y1f)))
+    x2, y2 = min(width, int(math.ceil(x2f))), min(height, int(math.ceil(y2f)))
+    if x2 - x1 < 8 or y2 - y1 < 8:
+        return None
+    crop = image[y1:y2, x1:x2, :3].astype(float)
+    border = np.concatenate([crop[0], crop[-1], crop[:, 0], crop[:, -1]], axis=0)
+    background = np.median(border, axis=0)
+    ys, xs = np.nonzero(np.linalg.norm(crop - background, axis=2) >= float(colour_threshold))
+    if len(xs) < int(min_pixels):
+        return None
+    pixels = np.column_stack([xs, ys]).astype(float)
+    centre = pixels.mean(axis=0)
+    _, singular, axes = np.linalg.svd(pixels - centre, full_matrices=False)
+    if len(singular) < 2 or singular[1] <= 1e-9:
+        return None
+    elongation = float(singular[0] / singular[1])
+    if elongation < float(min_elongation):
+        return None
+    direction = axes[0]
+    along = (pixels - centre) @ direction
+    lo, hi = np.percentile(along, [5, 95])
+    span = float(hi - lo)
+    end_band = 0.2 * span
+    low_count = int((along <= lo + end_band).sum())
+    high_count = int((along >= hi - end_band).sum())
+    if high_count > low_count:
+        direction = -direction
+        along = -along
+        lo, hi = -hi, -lo
+    centre = centre + direction * 0.5 * (lo + hi)
+    angle = axis_error_deg(math.degrees(math.atan2(direction[1], direction[0])), 0.0)
+    return {
+        "angle_deg": angle,
+        "elongation": elongation,
+        "center": (float(centre[0] + x1), float(centre[1] + y1)),
+        "direction": (float(direction[0]), float(direction[1])),
+        "length_px": span,
+        "pixels": int(len(xs)),
+    }
 
 
 def rpy_to_matrix(rpy_deg) -> np.ndarray:
@@ -115,6 +192,13 @@ class Kinematics:
         for i, name in enumerate(IK_JOINTS):  # the first four of MOTOR_NAMES
             lo, hi = (world.jmap.to_cal(name, v) for v in world._jrange[i])
             self._limits[name] = (min(lo, hi), max(lo, hi))
+        lo, hi = (world.jmap.to_cal("wrist_roll", v) for v in world._jrange[4])
+        self._limits["wrist_roll"] = (min(lo, hi), max(lo, hi))
+        self._dofs = np.array([m.joint(name).dofadr[0] for name in IK5_JOINTS], int)
+        # MuJoCo Jacobians are per radian. Public poses are calibrated degrees.
+        self._rad_per_cal = np.array(
+            [world.jmap.to_rad(name, 1.0) - world.jmap.to_rad(name, 0.0) for name in IK5_JOINTS]
+        )
         self._clear_geoms = [
             g for g in range(m.ngeom)
             if (m.geom_contype[g] or m.geom_conaffinity[g])
@@ -362,13 +446,155 @@ class Kinematics:
     # IK
     # ------------------------------------------------------------------
     def _pose(self, q, gripper: float) -> dict:
-        return {**dict(zip(IK_JOINTS, (float(v) for v in q))), "wrist_roll": 0.0, "gripper": float(gripper)}
+        return {**dict(zip(IK5_JOINTS, map(float, np.asarray(q, float)))), "gripper": float(gripper)}
 
-    def _eval(self, q, target, width: float, gripper: float):
+    def _bounds5(self, limits: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
+        lo = np.array([self._limits[k][0] for k in IK5_JOINTS])
+        hi = np.array([self._limits[k][1] for k in IK5_JOINTS])
+        for i, k in enumerate(IK5_JOINTS):
+            if limits and k in limits:
+                lo[i], hi[i] = max(lo[i], float(limits[k][0])), min(hi[i], float(limits[k][1]))
+        return lo, hi
+
+    def _point_jacobian(self, d, point, body: str) -> tuple[np.ndarray, np.ndarray]:
+        """Translational/angular Jacobians per calibrated degree for ``point``."""
+        import mujoco
+
+        # world.fk() intentionally runs only mj_kinematics; Jacobians also
+        # require the composite body/dof transforms produced by mj_comPos.
+        mujoco.mj_comPos(self.model, d)
+        jp = np.zeros((3, self.model.nv))
+        jr = np.zeros((3, self.model.nv))
+        mujoco.mj_jac(self.model, d, jp, jr, np.asarray(point, float), self.model.body(body).id)
+        scale = self._rad_per_cal
+        return jp[:, self._dofs] * scale, jr[:, self._dofs] * scale
+
+    def _grasp_state(self, q, width: float, gripper: float):
         pose = self._pose(q, gripper)
         p = self.world.grasp_point(pose, width)
-        axis_z = float(self.world.jaw_axis(pose)[2])
-        return np.append(p - target, _AXIS_WEIGHT * axis_z)
+        d = self.world.fk(pose)
+        axis = d.body("gripper").xmat.reshape(3, 3)[:, 0].copy()
+        jp, jw = self._point_jacobian(d, p, "gripper")
+        # d(axis)/dq = omega/dq cross axis.
+        ja = np.column_stack([np.cross(jw[:, i], axis) for i in range(5)])
+        return pose, p, axis, jp, ja
+
+    @staticmethod
+    def _bounded_step(H, g, lower, upper) -> np.ndarray:
+        """Deterministic active-set solve for a tiny box-constrained QP."""
+        n = len(g)
+        x = np.zeros(n)
+        free = np.ones(n, bool)
+        for _ in range(n + 1):
+            if free.any():
+                idx = np.flatnonzero(free)
+                rhs = -g[idx] - H[np.ix_(idx, ~free)] @ x[~free]
+                try:
+                    x[idx] = np.linalg.solve(H[np.ix_(idx, idx)], rhs)
+                except np.linalg.LinAlgError:
+                    x[idx] = np.linalg.lstsq(H[np.ix_(idx, idx)], rhs, rcond=None)[0]
+            bad_lo = free & (x < lower)
+            bad_hi = free & (x > upper)
+            if not (bad_lo | bad_hi).any():
+                break
+            # Activate the most violated bound, then re-solve the free variables.
+            violation = np.maximum(lower - x, x - upper)
+            j = int(np.argmax(np.where(bad_lo | bad_hi, violation, -np.inf)))
+            x[j] = lower[j] if bad_lo[j] else upper[j]
+            free[j] = False
+        return np.clip(x, lower, upper)
+
+    def _sqp(self, evaluate, seeds, lo, hi, iters=60):
+        """Bounded damped Gauss-Newton SQP with trust region and line search."""
+        best = None
+        for initial in seeds:
+            q = np.clip(np.asarray(initial, float), lo, hi)
+            damping = _SQP_REG
+            r, J, metrics = evaluate(q)
+            cost = float(r @ r)
+            for _ in range(iters):
+                if metrics["converged"]:
+                    break
+                H = J.T @ J + damping * np.eye(5)
+                g = J.T @ r
+                lower = np.maximum(lo - q, -_SQP_TRUST_DEG)
+                upper = np.minimum(hi - q, _SQP_TRUST_DEG)
+                step = self._bounded_step(H, g, lower, upper)
+                accepted = False
+                for alpha in (1.0, 0.5, 0.25, 0.125):
+                    qn = np.clip(q + alpha * step, lo, hi)
+                    rn, Jn, mn = evaluate(qn)
+                    cn = float(rn @ rn)
+                    if cn < cost - 1e-12:
+                        q, r, J, metrics, cost = qn, rn, Jn, mn, cn
+                        damping = max(damping * 0.4, 1e-9)
+                        accepted = True
+                        break
+                if not accepted:
+                    damping *= 10.0
+                    if damping > 1e3 or np.linalg.norm(step, ord=np.inf) < 1e-5:
+                        break
+            cand = (not metrics["converged"], cost, q.copy(), metrics)
+            if best is None or cand[:2] < best[:2]:
+                best = cand
+        return best[2], best[3]
+
+    def _grasp_eval(self, q, target, width, gripper, object_axis, reference):
+        _pose, p, jaw, jp, ja = self._grasp_state(q, width, gripper)
+        rows = [p - target, [_AXIS_WEIGHT * jaw[2]]]
+        jac = [jp, _AXIS_WEIGHT * ja[2:3]]
+        yaw_err = 0.0
+        if object_axis is not None:
+            axis = np.asarray(object_axis, float)
+            axis = axis / max(np.linalg.norm(axis), 1e-12)
+            yaw_err = float(jaw @ axis)
+            rows.append([_AXIS_WEIGHT * yaw_err])
+            jac.append(_AXIS_WEIGHT * (axis @ ja)[None, :])
+        # Null-space preference: continuity and distance from joint stops.
+        rows.append(1e-5 * (q - reference))
+        jac.append(1e-5 * np.eye(5))
+        r = np.concatenate([np.ravel(v) for v in rows])
+        J = np.vstack(jac)
+        pos_err = float(np.linalg.norm(p - target))
+        metrics = {
+            "pos_err": pos_err,
+            "tilt": float(jaw[2]),
+            "yaw_err": yaw_err,
+            "converged": pos_err < 3e-4 and abs(jaw[2]) < 0.005
+                         and (object_axis is None or abs(yaw_err) < 0.01),
+        }
+        return r, J, metrics
+
+    def _geometric_seeds(self, target, roll, seed=None):
+        """SO-101 elbow branches, initialized by planar triangle geometry.
+
+        The exact calibrated offsets are model-specific, so these closed-form
+        candidates are only seeds; MuJoCo FK and SQP produce the final answer.
+        """
+        target = np.asarray(target, float)
+        d0 = self.world.fk({})
+        shoulder = d0.body("upper_arm").xpos
+        elbow = d0.body("lower_arm").xpos
+        wrist = d0.body("wrist").xpos
+        l1 = float(np.linalg.norm(elbow - shoulder))
+        l2 = float(np.linalg.norm(wrist - elbow))
+        radial = float(np.linalg.norm(target[:2] - shoulder[:2]))
+        dz = float(target[2] - shoulder[2])
+        D = np.clip(math.hypot(radial, dz), abs(l1 - l2) + 1e-6, l1 + l2 - 1e-6)
+        interior = math.degrees(math.acos(np.clip((l1*l1 + l2*l2 - D*D) / (2*l1*l2), -1, 1)))
+        gamma = math.degrees(math.acos(np.clip((l1*l1 + D*D - l2*l2) / (2*l1*D), -1, 1)))
+        line = math.degrees(math.atan2(radial, dz))
+        pan = -math.degrees(math.atan2(target[1] - shoulder[1], target[0] - shoulder[0]))
+        out = []
+        if seed:
+            out.append([seed[k] for k in IK5_JOINTS])
+        for elbow_sign in (1.0, -1.0):
+            lift = line - elbow_sign * gamma
+            flex = elbow_sign * (180.0 - interior)
+            wrist_flex = 180.0 - lift - flex
+            out.append([pan, lift, flex, wrist_flex, roll])
+        out.extend([[pan, *s, roll] for s in _SEEDS])
+        return out
 
     def lowest_point(self, joints: dict) -> float:
         """Lowest z (m) of the arm's collision geometry from the lower arm out."""
@@ -384,46 +610,40 @@ class Kinematics:
             return low
 
     def ik(self, target, width: float = 0.04, gripper: float = OPEN_GRIPPER, seed: dict | None = None,
-           iters: int = 80) -> tuple[dict, float, float]:
-        """Best top-down pose for grasp point ``target``: ``(pose, pos_err_m, axis_z)``."""
+           wrist_roll: float | None = None, iters: int = 80,
+           limits: dict | None = None, object_axis=None) -> tuple[dict, float, float]:
+        """Best top-down pose for grasp point ``target``: ``(pose, pos_err_m, axis_z)``.
+
+        ``wrist_roll`` stays fixed (it spins the jaws without changing the
+        arm's reach). It defaults to the seed pose's roll. ``limits``
+        (``{joint: (lo, hi)}``) narrows the model's joint range to the arm's.
+        """
         target = np.asarray(target, float)
+        roll = float((seed or {}).get("wrist_roll", 0.0) if wrist_roll is None else wrist_roll)
+        lo, hi = self._bounds5(limits)
+        if object_axis is None:
+            # Backwards-compatible fixed-roll solve.
+            lo[4] = hi[4] = float(np.clip(roll, lo[4], hi[4]))
+        roll0 = float(np.clip(roll, lo[4], hi[4]))
+        roll_candidates = [roll0]
+        if object_axis is not None:
+            roll_candidates += [
+                float(np.clip(roll0 + d, lo[4], hi[4]))
+                for d in (-180.0, -90.0, 90.0, 180.0)
+            ]
+        seeds = []
+        for candidate in dict.fromkeys(round(v, 8) for v in roll_candidates):
+            seeds.extend(self._geometric_seeds(target, candidate, seed if candidate == roll0 else None))
+        reference = np.array(
+            [float((seed or {}).get(k, 0.0)) for k in IK5_JOINTS], float
+        )
+        reference[4] = roll0
         with self._lock:
-            sx, sy = self.world.fk({}).body("shoulder").xpos[:2]
-            pan0 = -math.degrees(math.atan2(target[1] - sy, target[0] - sx))
-            seeds = [tuple(seed[k] for k in IK_JOINTS)] if seed else []
-            seeds += [(pan0, *s) for s in _SEEDS]
-            lo = np.array([self._limits[k][0] for k in IK_JOINTS])
-            hi = np.array([self._limits[k][1] for k in IK_JOINTS])
-            best = None
-            for s in seeds:
-                q = np.clip(np.array(s, float), lo, hi)
-                lam = 0.01
-                r = self._eval(q, target, width, gripper)
-                for _ in range(iters):
-                    if np.linalg.norm(r[:3]) < 3e-4 and abs(r[3]) < 0.005 * _AXIS_WEIGHT:
-                        break
-                    J = np.empty((4, 4))
-                    for j in range(4):
-                        dq = np.zeros(4)
-                        dq[j] = 0.25
-                        J[:, j] = (self._eval(q + dq, target, width, gripper) - r) / 0.25
-                    step = -J.T @ np.linalg.solve(J @ J.T + lam**2 * np.eye(4), r)
-                    step *= min(1.0, 8.0 / max(np.abs(step).max(), 1e-9))
-                    q_new = np.clip(q + step, lo, hi)
-                    r_new = self._eval(q_new, target, width, gripper)
-                    if r_new @ r_new < r @ r:
-                        q, r, lam = q_new, r_new, max(lam * 0.5, 1e-4)
-                    else:
-                        lam *= 4.0
-                        if lam > 10.0:
-                            break
-                cand = (float(r @ r), q.copy(), r.copy())
-                if best is None or cand[0] < best[0]:
-                    best = cand
-                if np.linalg.norm(r[:3]) < 1e-3 and abs(r[3]) < 0.02 * _AXIS_WEIGHT:
-                    break
-            _, q, r = best
-            return self._pose(q, gripper), float(np.linalg.norm(r[:3])), float(r[3] / _AXIS_WEIGHT)
+            q, metrics = self._sqp(
+                lambda x: self._grasp_eval(x, target, width, gripper, object_axis, reference),
+                seeds, lo, hi, iters,
+            )
+        return self._pose(q, gripper), metrics["pos_err"], metrics["tilt"]
 
     def solve_grasp(
         self,
@@ -436,13 +656,20 @@ class Kinematics:
         max_tilt: float = 0.3,
         max_raise_m: float = 0.015,
         gripper: float = OPEN_GRIPPER,
+        wrist_roll: float = 0.0,
+        limits: dict | None = None,
+        object_axis=None,
+        seed: dict | None = None,
     ) -> tuple[dict, dict] | None:
         """``(pregrasp, grasp)`` joint poses for an object centred at ``p``, or ``None``.
 
         The grasp puts ``p`` between the open jaws with the closing axis
         horizontal (within ``max_tilt``); if the jaw tips would touch the
         table it grasps up to ``max_raise_m`` higher. The pre-grasp is the
-        same grasp ``above_m`` straight above. ``None`` means out of reach.
+        same grasp ``above_m`` straight above. With ``object_axis`` all five
+        joints are solved together so the jaws close perpendicular to that
+        table-plane axis; otherwise ``wrist_roll`` is fixed. ``None`` means
+        out of reach (within ``limits``, see :meth:`ik`).
         """
         p = np.asarray(p, float)
 
@@ -450,22 +677,174 @@ class Kinematics:
             return err <= tol_m and abs(tilt) <= max_tilt and self.lowest_point(pose) >= table_z + clearance_m
 
         grasp = None
-        seed = None
+        solve_seed = seed
         for raise_m in np.arange(0.0, max_raise_m + 1e-9, 0.003):
-            pose, err, tilt = self.ik(p + [0.0, 0.0, raise_m], width, gripper, seed)
+            pose, err, tilt = self.ik(
+                p + [0.0, 0.0, raise_m], width, gripper, solve_seed, wrist_roll,
+                limits=limits, object_axis=object_axis,
+            )
             if err <= tol_m and abs(tilt) <= max_tilt:
-                seed = pose
+                solve_seed = pose
                 if ok(pose, err, tilt):
                     grasp = pose
                     break
         if grasp is None:
             return None
-        pre, err, tilt = self.ik(self.world.grasp_point(grasp, width) + [0.0, 0.0, above_m], width, gripper, grasp)
+        pre, err, tilt = self.ik(
+            self.world.grasp_point(grasp, width) + [0.0, 0.0, above_m], width, gripper, grasp,
+            grasp["wrist_roll"], limits=limits, object_axis=object_axis,
+        )
         if not ok(pre, err, tilt):
             return None
         return pre, grasp
 
-    def waypoints(self, start: dict, end: dict, width: float = 0.04, step_m: float = 0.015) -> list[dict]:
+    # ------------------------------------------------------------------
+    # viewing an oriented object
+    # ------------------------------------------------------------------
+    def table_axis(self, center_px, direction_px, length_px: float, joints: dict, K=None, dist=None,
+                   mount=None, z: float = TABLE_Z) -> tuple[np.ndarray, np.ndarray] | None:
+        """World ``(centre, unit_axis)`` of an image segment on the plane ``z``.
+
+        ``center_px``/``direction_px``/``length_px`` come from
+        :func:`principal_axis_in_box`. ``None`` if a ray misses the plane.
+        """
+        c = np.asarray(center_px, float)
+        u = np.asarray(direction_px, float)
+        half = 0.5 * max(float(length_px), 4.0)
+        o, d = self.rays([c, c - u * half, c + u * half], joints, K, dist, mount)
+        if (d[:, 2] >= -1e-6).any():
+            return None
+        pts = o + d * ((z - o[2]) / d[:, 2])[:, None]
+        axis = pts[2] - pts[1]
+        axis[2] = 0.0
+        n = float(np.linalg.norm(axis))
+        if n < 1e-6:
+            return None
+        return pts[0], axis / n
+
+    def _camera_eval(self, q, target, distance, look_down, mount, reference):
+        pose = self._pose(q, OPEN_GRIPPER)
+        d = self.world.fk(pose)
+        Rm, tm = self.mount(mount)
+        b = d.body("gripper")
+        Rg, tg = b.xmat.reshape(3, 3), b.xpos
+        R, t = Rg @ Rm, tg + Rg @ tm
+        jp, jw = self._point_jacobian(d, t, "gripper")
+        v = np.asarray(target, float) - t
+        pc = R.T @ v
+        # d(R.T v) = R.T (v cross omega - dt).
+        jpc = np.column_stack([R.T @ (np.cross(v, jw[:, i]) - jp[:, i]) for i in range(5)])
+        z = max(float(pc[2]), 1e-4)
+        centre = pc[:2] / z
+        jc = np.vstack([
+            (jpc[0] * z - pc[0] * jpc[2]) / (z*z),
+            (jpc[1] * z - pc[1] * jpc[2]) / (z*z),
+        ])
+        radius = max(float(np.linalg.norm(v)), 1e-9)
+        # Lexicographic approximation: keeping the target in-frame is the
+        # primary task; distance and camera pitch are soft preferences.
+        centre_weight = 4.0
+        distance_scale = 0.15
+        jdist = -(v / radius) @ jp / distance_scale
+        forward = R[:, 2]
+        jf = np.column_stack([np.cross(jw[:, i], forward) for i in range(5)])
+        down = float(-forward[2])
+        rows = [
+            centre_weight * centre,
+            [(radius - distance) / distance_scale],
+            [_VIEW_DOWN_WEIGHT * (down - look_down)],
+        ]
+        jac = [centre_weight * jc, jdist[None, :], -_VIEW_DOWN_WEIGHT * jf[2:3]]
+        if pc[2] < 0.03:
+            rows.append([10.0 * (0.03 - pc[2])])
+            jac.append(-10.0 * jpc[2:3])
+        rows.append(_VIEW_SMOOTH_WEIGHT * (q - reference) / 90.0)
+        jac.append((_VIEW_SMOOTH_WEIGHT / 90.0) * np.eye(5))
+        r = np.concatenate([np.ravel(vv) for vv in rows])
+        J = np.vstack(jac)
+        metrics = {
+            "centre_err": float(np.linalg.norm(centre)),
+            "distance_err": abs(radius - distance),
+            "look_down_err": abs(down - look_down),
+            "in_front": bool(pc[2] > 0.03),
+            "converged": bool(np.max(np.abs(centre)) < 0.005
+                              and abs(radius - distance) < 0.08 and pc[2] > 0.03),
+        }
+        return r, J, metrics
+
+    def look_at(self, target, wrist_roll: float, distance: float = 0.17, look_down: float = 0.85,
+                seed: dict | None = None, mount=None, iters: int = 60,
+                limits: dict | None = None) -> tuple[dict, float]:
+        """Arm pose with the camera centred on ``target`` at ``wrist_roll``.
+
+        The camera rides on the gripper off the roll axis, so turning the wrist
+        alone swings the object out of view. All four other arm joints are
+        solved (damped least squares) so that the camera points at ``target``
+        from ``distance`` metres, looking down by ``look_down`` (the camera
+        axis' downward z component). A ``seed`` pose also anchors the spare
+        degree of freedom, so successive rolls give a continuous arm path.
+        ``limits`` narrows the joint range as in :meth:`ik`. Returns
+        ``(pose, centring_error)`` in normalized image units.
+        """
+        target = np.asarray(target, float)
+        lo, hi = self._bounds5(limits)
+        roll = float(np.clip(wrist_roll, lo[4], hi[4]))
+        lo[4] = hi[4] = roll
+        with self._lock:
+            sx, sy = self.world.fk({}).body("shoulder").xpos[:2]
+            pan0 = -math.degrees(math.atan2(target[1] - sy, target[0] - sx))
+            seeds = [[seed[k] for k in IK5_JOINTS]] if seed else []
+            seeds += [[pan0, *s, roll] for s in _VIEW_SEEDS]
+            reference = np.clip(
+                np.array(seeds[0] if seed else [pan0, *_VIEW_SEEDS[0], roll], float), lo, hi
+            )
+            q, metrics = self._sqp(
+                lambda x: self._camera_eval(x, target, distance, look_down, mount, reference),
+                seeds, lo, hi, iters,
+            )
+            return self._pose(q, OPEN_GRIPPER), metrics["centre_err"]
+
+    def _centre_error(self, pose: dict, target, mount=None) -> float:
+        R, t = self.camera_pose(pose, mount)
+        pc = (np.asarray(target, float) - t) @ R
+        if pc[2] <= 1e-3:
+            return math.inf
+        return float(np.hypot(pc[0], pc[1]) / pc[2])
+
+    def view_path(self, target, start: dict, wrist_roll: float, distance: float = 0.17,
+                  look_down: float = 0.85, step_deg: float = 15.0, mount=None,
+                  max_centre_err: float = 0.05, limits: dict | None = None) -> list[dict] | None:
+        """:meth:`look_at` poses from ``start`` to ``wrist_roll`` in roll steps of ``step_deg``.
+
+        Joint-space moves between distant poses swing the camera off the
+        object; short steps along the look-at solutions keep it in view.
+        ``None`` if any step loses the object.
+        """
+        r0 = float(start.get("wrist_roll", 0.0))
+        if abs(float(wrist_roll) - r0) > 120.0:
+            return None  # opposite 180-degree symmetry branch
+        n = max(1, int(math.ceil(abs(float(wrist_roll) - r0) / step_deg)))
+        out, seed = [], start
+        for i in range(1, n + 1):
+            pose, cerr = self.look_at(target, r0 + (float(wrist_roll) - r0) * i / n, distance, look_down, seed,
+                                      mount, limits=limits)
+            if cerr > max_centre_err or self.lowest_point(pose) < TABLE_Z + 0.01:
+                return None
+            # The servo interpolates joints, not task space. Validate the
+            # segment rather than only its endpoints.
+            for a in (0.25, 0.5, 0.75):
+                mid = {k: seed[k] + a * (pose[k] - seed[k]) for k in IK5_JOINTS}
+                mid["gripper"] = pose["gripper"]
+                if self._centre_error(mid, target, mount) > 2.0 * max_centre_err:
+                    return None
+                if self.lowest_point(mid) < TABLE_Z + 0.01:
+                    return None
+            out.append(pose)
+            seed = pose
+        return out
+
+    def waypoints(self, start: dict, end: dict, width: float = 0.04, step_m: float = 0.015,
+                  limits: dict | None = None) -> list[dict]:
         """Poses that move the grasp point along the straight line from
         ``start``'s to ``end``'s, ``end`` included.
 
@@ -477,7 +856,7 @@ class Kinematics:
             n = max(1, math.ceil(float(np.linalg.norm(b - a)) / step_m))
             out, seed = [], start
             for i in range(1, n):
-                pose, err, _ = self.ik(a + (b - a) * (i / n), width, end["gripper"], seed)
+                pose, err, _ = self.ik(a + (b - a) * (i / n), width, end["gripper"], seed, limits=limits)
                 if err > 0.003:
                     return [end]
                 out.append(pose)

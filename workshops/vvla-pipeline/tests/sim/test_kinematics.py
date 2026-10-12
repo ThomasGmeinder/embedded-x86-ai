@@ -33,6 +33,36 @@ def kin():
     return Kinematics()
 
 
+@pytest.mark.parametrize("angle", [-70.0, -35.0, 0.0, 28.0, 72.0])
+def test_principal_axis_in_box(angle):
+    from so101_sim.kinematics import axis_error_deg, principal_axis_in_box
+
+    frame = np.full((240, 320, 3), [115, 145, 175], np.uint8)
+    yy, xx = np.indices(frame.shape[:2])
+    a = math.radians(angle)
+    along = (xx - 160) * math.cos(a) + (yy - 120) * math.sin(a)
+    across = -(xx - 160) * math.sin(a) + (yy - 120) * math.cos(a)
+    mask = (np.abs(along) <= 65) & (np.abs(across) <= 8)
+    frame[mask] = [220, 120, 25]
+    ys, xs = np.nonzero(mask)
+    box = (xs.min() - 5, ys.min() - 5, xs.max() + 6, ys.max() + 6)
+
+    axis = principal_axis_in_box(frame, box)
+
+    assert axis is not None
+    assert abs(axis_error_deg(axis["angle_deg"], angle)) < 1.0
+    assert axis["elongation"] > 4.0
+
+
+def test_principal_axis_rejects_square_or_clipped_crop():
+    from so101_sim.kinematics import principal_axis_in_box
+
+    frame = np.full((120, 160, 3), 100, np.uint8)
+    frame[40:80, 60:100] = 220
+    assert principal_axis_in_box(frame, (55, 35, 105, 85)) is None
+    assert principal_axis_in_box(frame, (0, 35, 105, 85)) is None
+
+
 def _aimed_scan_pose(kin, cfg, p) -> dict:
     """scan_pose with the pan that puts ``p`` where the servo would (servo_target_x)."""
     pp = cfg["behaviors"]["pick_place"]
@@ -126,6 +156,94 @@ def test_descent_waypoints_stay_on_the_vertical(kin):
     for pose in path:
         q = kin.world.grasp_point(pose, 0.04)
         assert np.linalg.norm(q[:2] - top[:2]) < 0.003, "descent leaves the vertical line"
+
+
+@pytest.mark.parametrize("yaw", [20.0, 60.0, 112.9, 160.0])
+def test_ik_closes_across_the_axis(kin, yaw):
+    from vla_pipeline.robot.arm_interface import JOINT_LIMITS
+
+    p = np.array([0.12, -0.24, 0.011])
+    axis = np.array([math.cos(math.radians(yaw)), math.sin(math.radians(yaw)), 0.0])
+    pose, err, _ = kin.ik(p, 0.024, wrist_roll=0.0, limits=JOINT_LIMITS, object_axis=axis)
+    lo, hi = JOINT_LIMITS["wrist_roll"]
+    assert lo <= pose["wrist_roll"] <= hi, "no roll inside the arm's wrist range"
+    assert err < 0.003
+    assert abs(float(kin.world.jaw_axis(pose) @ axis)) < 0.02, "jaws don't close across the axis"
+
+
+def test_analytic_grasp_jacobian_matches_forward_difference(kin):
+    q = np.array([23.0, -41.0, 62.0, 37.0, -54.0])
+    target = np.array([0.22, -0.08, 0.025])
+    reference = q.copy()
+    residual, jac, _ = kin._grasp_eval(q, target, 0.032, 75.0, [0.4, 0.9165, 0.0], reference)
+    for j in range(5):
+        dq = np.zeros(5)
+        dq[j] = 1e-3
+        moved, _, _ = kin._grasp_eval(q + dq, target, 0.032, 75.0, [0.4, 0.9165, 0.0], reference)
+        numeric = (moved[:5] - residual[:5]) / dq[j]
+        assert np.allclose(jac[:5, j], numeric, atol=1e-6)
+
+
+def test_oriented_sqp_is_deterministic_and_does_not_flip_roll_branch(kin):
+    from vla_pipeline.robot.arm_interface import JOINT_LIMITS
+
+    rng = np.random.default_rng(17)
+    for _ in range(12):
+        p = np.array([rng.uniform(0.16, 0.28), rng.uniform(-0.16, 0.14), 0.011])
+        yaw = rng.uniform(0.0, math.pi)
+        axis = np.array([math.cos(yaw), math.sin(yaw), 0.0])
+        a = kin.solve_grasp(p, width=0.024, wrist_roll=0.0, object_axis=axis, limits=JOINT_LIMITS)
+        b = kin.solve_grasp(p, width=0.024, wrist_roll=0.0, object_axis=axis, limits=JOINT_LIMITS)
+        assert (a is None) == (b is None)
+        if a is None:
+            continue
+        for pa, pb in zip(a, b):
+            assert np.allclose([pa[k] for k in ("shoulder_pan", "shoulder_lift", "elbow_flex",
+                                                "wrist_flex", "wrist_roll")],
+                               [pb[k] for k in ("shoulder_pan", "shoulder_lift", "elbow_flex",
+                                                "wrist_flex", "wrist_roll")], atol=1e-8)
+            assert abs(float(kin.world.jaw_axis(pa) @ axis)) < 0.02
+        assert abs(a[0]["wrist_roll"] - a[1]["wrist_roll"]) < 5.0
+
+
+def test_view_path_keeps_the_object_in_view(kin):
+    """Rolling the wrist alone over the pre-grasp swings the eye-in-hand
+    camera so the toothbrush runs off the image; the look-at path moves the
+    other joints so all of it stays in view, also between waypoints where
+    the servos interpolate each joint."""
+    from vla_pipeline.robot.arm_interface import JOINT_LIMITS
+
+    p = np.array([0.12, -0.24, 0.006])
+    yaw = math.radians(112.9)
+    axis = np.array([math.cos(yaw), math.sin(yaw), 0.0])
+    ends = np.array([p - axis * 0.06, p + axis * 0.06])
+    K = kin.default_intrinsics(640, 480)
+    roll = kin.ik(p + [0, 0, 0.005], 0.024, wrist_roll=0.0, limits=JOINT_LIMITS, object_axis=axis)[0]["wrist_roll"]
+
+    def in_view(pose, margin):
+        uv = kin.project(ends, pose, K)
+        return bool(((uv >= margin) & (uv <= [640 - margin, 480 - margin])).all())
+
+    pre, _ = kin.solve_grasp(p + [0, 0, 0.005], above_m=0.10, width=0.024, limits=JOINT_LIMITS)
+    assert not in_view({**pre, "wrist_roll": roll}, 0), "roll-only should lose the object"
+
+    scan = {"shoulder_pan": 71.0, "shoulder_lift": -55.0, "elbow_flex": 65.0, "wrist_flex": 45.0, "wrist_roll": 0.0}
+    start, err = kin.look_at(p, 0.0, seed=scan, limits=JOINT_LIMITS)
+    assert err < 0.01
+    path = kin.view_path(p, start, roll, limits=JOINT_LIMITS)
+    assert path is not None and abs(path[-1]["wrist_roll"] - roll) < 1e-6
+    assert max(abs(pose["wrist_roll"] - start["wrist_roll"]) for pose in path) < 120.0
+    prev = start
+    for pose in path:
+        for k, (lo, hi) in JOINT_LIMITS.items():
+            if k in pose and k != "gripper":
+                assert lo - 1e-6 <= pose[k] <= hi + 1e-6, f"{k} {pose[k]:.1f} outside the arm's limits"
+        assert kin._centre_error(pose, p) < 0.01
+        assert kin.lowest_point(pose) > 0.02
+        for a in (0.25, 0.5, 0.75):
+            mid = {k: prev[k] + a * (pose[k] - prev[k]) for k in pose}
+            assert in_view(mid, 10), "object leaves the image between waypoints"
+        prev = pose
 
 
 def test_ik_out_of_reach(kin):
