@@ -27,6 +27,9 @@ The signals (all per frame)
 - **MediaPipe directed thumb→index vector** (with the knuckle-line reference and
   the wrist→knuckle angle as fallbacks, all unwrapped for continuity) →
   robot **wrist_roll**.
+- **Wrist bend** - the MediaPipe hand direction (wrist→knuckle) measured
+  against the YOLO forearm (elbow→wrist) → robot **wrist_flex**. Without an
+  elbow in frame the forearm is assumed vertical.
 - **MediaPipe thumb↔index distance** (``pinch``, calibrated min..max) →
   **gripper**, as a *continuous* ramp: closed for the first ``grip_close_frac``
   of the range, then opening linearly up to ``grip_open_pos`` (≈90 %).
@@ -34,37 +37,34 @@ The signals (all per frame)
 How those become joints (the SO-101 mechanics, per the arm's behavior)
 ----------------------------------------------------------------------
 Everything is an offset from a neutral "ready" pose (hand centered, mid-depth,
-palm forward, hand open). Four normalized axes in ``[-1, 1]`` drive the offsets:
+palm forward, hand open). Five normalized axes in ``[-1, 1]`` drive the offsets:
 
     shoulder_pan  = pan0  + pan_gain * lr
-    shoulder_lift = lift0 + sl_up_gain * up + sl_fwd_gain * fwd
-    elbow_flex    = elb0  + ef_up_gain * up + ef_fwd_gain * fwd      (ef_fwd < 0)
-    wrist_flex    = wf0   + wf_up_gain * up
-    wrist_roll    = roll0 + roll_gain * roll                          (roll0 = 0)
+    shoulder_lift = lift0 + sl_up_gain * up + sl_fwd_gain * fwd   (sl_fwd_away_gain when fwd < 0)
+    elbow_flex    = elb0  + ef_up_gain * up + ef_fwd_gain * fwd   (both < 0)
+    wrist_flex    = wf0   + wf_up_gain * wf                       (wf = wrist bend)
+    wrist_roll    = roll0 + roll_gain * roll                      (roll0 = 0)
     gripper       = pinch → closed below grip_close_frac, then linear to ~90
 
-so that, matching the described arm:
+The gains are the workshop rig's (``mimic:`` in
+``workshop/solution/config/workshop.yaml``), so the pipeline and the workshop
+command the same joints from the same frame:
 
 - **shoulder_pan** alone is left/right (x).
-- **up/down (y)** is carried by **elbow_flex at full authority (100 %)**,
-  **shoulder_lift at reduced authority (its lower ~50 %)**, and **wrist_flex** as
-  a fine-tune that counter-rotates to keep the gripper roughly level - wrist_flex
-  is essentially an extension of elbow_flex. ``ef_up_gain`` is therefore the
-  largest of the three up/down gains and ``sl_up_gain`` the smallest.
-- **forward/back (z)** drives **shoulder_lift the rest of the way** - once
-  up/down has used its lower half, reaching forward extends shoulder_lift through
-  its upper half (50 %→100 %) while **elbow_flex goes negative** to reach out;
-  pulling back reverses it. ``shoulder_lift``'s forward gain is therefore its
-  largest term. shoulder_lift and elbow_flex carry both contributions, summed.
+- **up/down (y)** moves **shoulder_lift and elbow_flex as a locked pair** -
+  a raised hand lifts the shoulder and opens the elbow, so the arm reaches up.
+- **forward/back (z)** drives **shoulder_lift** as its largest term, with
+  **elbow_flex going negative** to reach out; moving the hand away from the
+  camera uses the stronger ``sl_fwd_away_gain``.
+- **wrist_flex** follows the operator's own wrist bend, not the hand height.
 - **wrist_roll**'s forward-most pose is the calibration midpoint (``0``); it
   follows the **directed thumb→index vector**, falling back to the steady
   knuckle-line reference (then wrist→knuckle) when the fingers are pinched too
   close to read the line, and is unwrapped so it only moves on a real rotation.
 
-The default gains are sized so the full input envelope stays inside
-:data:`JOINT_LIMITS` with margin (see the ``--selftest`` range check); they are
-all exposed under ``behaviors.gesture_mimic`` in ``config/pipeline.yaml`` for
-on-hardware tuning.
+Every command is clamped to :data:`MIMIC_LIMITS`; the gains are all exposed
+under ``behaviors.gesture_mimic`` in ``config/pipeline.yaml`` for on-hardware
+tuning.
 
 Independent test (pure math - no camera, no hardware)
 -----------------------------------------------------
@@ -81,7 +81,27 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from vla_pipeline.robot.arm_interface import JOINT_LIMITS, clamp_joints
+from vla_pipeline.robot.arm_interface import JOINT_LIMITS
+
+# Live gesture-mimic envelope. Keep equal to LIVE_MIMIC_LIMITS in
+# workshop/common/motion.py (the workshop's base limits +25%, capped at
+# JOINT_LIMITS) so both stacks clamp mimic identically.
+MIMIC_LIMITS = {
+    "shoulder_pan": (-107.5, 107.5),
+    "shoulder_lift": (-120.0, 103.125),
+    "elbow_flex": (-93.75, 120.0),
+    "wrist_flex": (-103.125, 84.375),
+    "wrist_roll": (-93.75, 100.0),
+    "gripper": JOINT_LIMITS["gripper"],
+}
+
+
+def clamp_joints(joints: dict[str, float]) -> dict[str, float]:
+    """Clamp each joint to :data:`MIMIC_LIMITS`."""
+    return {
+        n: float(min(max(v, MIMIC_LIMITS[n][0]), MIMIC_LIMITS[n][1]))
+        for n, v in joints.items()
+    }
 
 
 # =============================================================================
@@ -193,19 +213,19 @@ class MimicGains:
     # left/right: shoulder_pan alone overshoots the ±115 limit so it saturates.
     pan_gain: float = 150.0
 
-    # forward/back (z): shoulder_lift is the PRIMARY driver - a near hand reaches
-    # it to its +110 limit on depth alone (neutral -5 + 110), a far hand pushes
-    # past -120 - with elbow_flex going negative to reach out.
+    # forward/back (z): shoulder_lift is the PRIMARY driver, with elbow_flex
+    # going negative to reach out. Moving AWAY from the camera (fwd < 0) uses
+    # the stronger sl_fwd_away_gain.
     sl_fwd_gain: float = 110.0
+    sl_fwd_away_gain: float = 165.0
     ef_fwd_gain: float = -75.0
 
-    # up/down (y): elbow_flex at FULL authority leads (ef_up the largest up term);
-    # shoulder_lift adds more up travel; wrist_flex counter-rotates and over-swings
-    # to reach both its limits. Each pair's sum overshoots the half-span so the
-    # corners saturate at the clamp rather than falling short.
+    # up/down (y): shoulder_lift and elbow_flex move as a locked pair - a raised
+    # hand lifts the shoulder and opens the elbow so the arm reaches up.
     sl_up_gain: float = 58.0
-    ef_up_gain: float = 78.0
-    wf_up_gain: float = -135.0  # overshoots ±100 about the -10 neutral
+    ef_up_gain: float = -55.0
+    # wrist_flex follows the operator's wrist BEND (wf axis), not hand height.
+    wf_up_gain: float = 135.0
 
     # wrist roll (about the auto-centered midpoint): overshoots the ±100 limit.
     roll_gain: float = 128.0
@@ -218,9 +238,9 @@ class MimicNorm:
     # Wrist position within the frame. center/half define the window that maps
     # to the full [-1, 1]; e.g. x_half=0.35 means the central 70% of the width.
     x_center: float = 0.5
-    x_half: float = 0.35
+    x_half: float = 0.384
     y_center: float = 0.5
-    y_half: float = 0.30
+    y_half: float = 0.336
     deadzone: float = 0.05  # |axis| below this snaps to 0 (kills jitter)
     mirror: bool = True  # operator camera faces the user → mirror L/R
 
@@ -228,8 +248,11 @@ class MimicNorm:
     # ``depth_baseline_frames`` valid readings. depth_rel_span = fractional size
     # change that reaches the full forward/back travel (0.4 → +40% size = +1).
     hand_size_neutral: float = 0.0
-    depth_rel_span: float = 0.40
+    depth_rel_span: float = 0.30
     depth_baseline_frames: int = 8
+
+    # Wrist bend (hand direction vs forearm) that reaches the full wrist_flex.
+    wrist_half_deg: float = 45.0
 
     # Roll. The primary cue is the DIRECTED thumb→index vector (degrees in
     # (-180,180]). The roll is measured RELATIVE to a center that AUTO-CALIBRATES
@@ -309,7 +332,7 @@ class CameraMimicMapper:
     auto depth calibration, One Euro smoothing, and the gripper.
     """
 
-    AXES = ("lr", "up", "fwd", "roll")
+    AXES = ("lr", "up", "fwd", "roll", "wf")
 
     def __init__(
         self,
@@ -356,18 +379,40 @@ class CameraMimicMapper:
 
     # ------------------------------------------------------------------ pure
     def joints_from_axes(
-        self, lr: float, up: float, fwd: float, roll: float
+        self, lr: float, up: float, fwd: float, roll: float, wf: float = 0.0
     ) -> dict[str, float]:
-        """The mapping table → joint targets (deg), clamped to JOINT_LIMITS."""
+        """The mapping table → joint targets (deg), clamped to MIMIC_LIMITS."""
         g = self.g
+        sl_fwd = g.sl_fwd_away_gain if fwd < 0.0 else g.sl_fwd_gain
         joints = {
             "shoulder_pan": g.shoulder_pan0 + g.pan_gain * lr,
-            "shoulder_lift": g.shoulder_lift0 + g.sl_up_gain * up + g.sl_fwd_gain * fwd,
+            "shoulder_lift": g.shoulder_lift0 + g.sl_up_gain * up + sl_fwd * fwd,
             "elbow_flex": g.elbow_flex0 + g.ef_up_gain * up + g.ef_fwd_gain * fwd,
-            "wrist_flex": g.wrist_flex0 + g.wf_up_gain * up,
+            "wrist_flex": g.wrist_flex0 + g.wf_up_gain * wf,
             "wrist_roll": g.wrist_roll0 + g.roll_gain * roll,
         }
         return clamp_joints(joints)
+
+    # ------------------------------------------------------- wrist-bend helper
+    def _wrist_flex_axis(self, wrist_xy, elbow_xy, hand_dir_deg) -> float | None:
+        """Operator's wrist bend (hand vs forearm, image plane) → axis in [-1,1].
+
+        ``hand_dir_deg`` is MediaPipe's wrist→middle-knuckle angle from
+        vertical (``HandObservation.roll``: 0 = hand up, +90 = screen-right).
+        Hand in line with the elbow→wrist forearm = 0. Without an elbow the
+        forearm is assumed vertical. None = no hand seen (hold last).
+        """
+        if hand_dir_deg is None:
+            return None
+        hand_ang = 90.0 - float(hand_dir_deg)  # 0 = right, 90 = up
+        if wrist_xy is not None and elbow_xy is not None:
+            dx = float(wrist_xy[0]) - float(elbow_xy[0])
+            dy = float(elbow_xy[1]) - float(wrist_xy[1])  # +up (image y grows down)
+            forearm_ang = math.degrees(math.atan2(dy, dx))
+        else:
+            forearm_ang = 90.0
+        flex = (hand_ang - forearm_ang + 180.0) % 360.0 - 180.0
+        return float(np.clip(flex / max(self.n.wrist_half_deg, 1e-6), -1.0, 1.0))
 
     # ------------------------------------------------------------ depth helper
     def _depth_axis(self, hand_size: float | None) -> float | None:
@@ -376,9 +421,10 @@ class CameraMimicMapper:
             return None
         if self._size_neutral is None:
             self._size_buf.append(hand_size)
-            if len(self._size_buf) < self._size_buf.maxlen:
-                return 0.0  # still building the baseline → no forward command yet
-            self._size_neutral = float(np.median(self._size_buf))
+            if len(self._size_buf) == self._size_buf.maxlen:
+                s = sorted(self._size_buf)
+                self._size_neutral = float(s[len(s) // 2])
+            return 0.0  # still building the baseline → no forward command yet
         rel = hand_size / max(self._size_neutral, 1e-6) - 1.0
         return float(np.clip(rel / max(self.n.depth_rel_span, 1e-6), -1.0, 1.0))
 
@@ -396,6 +442,7 @@ class CameraMimicMapper:
         pinch: float | None = None,
         gripper_override: float | None = None,
         t: float | None = None,
+        elbow_xy: tuple[float, float] | None = None,
     ) -> dict[str, float]:
         """Map one frame's signals to joint targets.
 
@@ -404,6 +451,8 @@ class CameraMimicMapper:
         keeps following the YOLO wrist (``wrist_xy``) for x/y while depth, roll
         and the gripper freeze at their last commanded value. ``gripper_override``
         forces the gripper (used by the grip-lock so a held object stays gripped).
+        wrist_flex follows the hand direction (``hand_roll_deg``) measured
+        against the forearm from the YOLO elbow (``elbow_xy``) to the wrist.
 
         Wrist roll uses the directed thumb→index vector (``roll_ti_deg``) as the
         primary cue and the knuckle-line reference (``roll_ref_deg``, then the
@@ -439,6 +488,10 @@ class CameraMimicMapper:
             if n.roll_invert:
                 roll_axis = -roll_axis
             self._raw["roll"] = roll_axis
+
+        wf = self._wrist_flex_axis(wrist_xy, elbow_xy, hand_roll_deg)
+        if wf is not None:
+            self._raw["wf"] = wf
 
         smoothed = self._filt(self._raw, t)
         joints = self.joints_from_axes(**smoothed)
@@ -561,6 +614,9 @@ def mapper_from_config(cfg: dict) -> CameraMimicMapper:
         wrist_roll0=gf("wrist_roll0", MimicGains.wrist_roll0),
         pan_gain=gf("pan_gain", MimicGains.pan_gain),
         sl_fwd_gain=gf("sl_fwd_gain", MimicGains.sl_fwd_gain),
+        sl_fwd_away_gain=gf(
+            "sl_fwd_away_gain", g.get("sl_fwd_gain", MimicGains.sl_fwd_away_gain)
+        ),
         ef_fwd_gain=gf("ef_fwd_gain", MimicGains.ef_fwd_gain),
         sl_up_gain=gf("sl_up_gain", MimicGains.sl_up_gain),
         ef_up_gain=gf("ef_up_gain", MimicGains.ef_up_gain),
@@ -576,6 +632,7 @@ def mapper_from_config(cfg: dict) -> CameraMimicMapper:
         mirror=bool(g.get("mirror", MimicNorm.mirror)),
         hand_size_neutral=gf("hand_size_neutral", MimicNorm.hand_size_neutral),
         depth_rel_span=gf("depth_rel_span", MimicNorm.depth_rel_span),
+        wrist_half_deg=gf("wrist_half_deg", MimicNorm.wrist_half_deg),
         depth_baseline_frames=int(
             g.get("depth_baseline_frames", MimicNorm.depth_baseline_frames)
         ),
@@ -614,7 +671,7 @@ def _selftest() -> int:
     m = CameraMimicMapper()
     g = m.g
 
-    # 1. Range safety: the whole input cube stays inside JOINT_LIMITS.
+    # 1. Range safety: the whole input cube stays inside MIMIC_LIMITS.
     grid = np.linspace(-1.0, 1.0, 9)
     worst = {}
     out_of_range = 0
@@ -622,18 +679,19 @@ def _selftest() -> int:
         for up in grid:
             for fwd in grid:
                 for roll in grid:
-                    j = m.joints_from_axes(lr, up, fwd, roll)
-                    for name, v in j.items():
-                        lo, hi = JOINT_LIMITS[name]
-                        margin = min(v - lo, hi - v)
-                        if name not in worst or margin < worst[name]:
-                            worst[name] = margin
-                        if v < lo - 1e-6 or v > hi + 1e-6:
-                            out_of_range += 1
+                    for wf in grid:
+                        j = m.joints_from_axes(lr, up, fwd, roll, wf)
+                        for name, v in j.items():
+                            lo, hi = MIMIC_LIMITS[name]
+                            margin = min(v - lo, hi - v)
+                            if name not in worst or margin < worst[name]:
+                                worst[name] = margin
+                            if v < lo - 1e-6 or v > hi + 1e-6:
+                                out_of_range += 1
     ok = out_of_range == 0
     print(
         f"  [{'PASS' if ok else 'FAIL'}] range safety: {out_of_range} of "
-        f"{grid.size**4} cube samples outside JOINT_LIMITS"
+        f"{grid.size**5} cube samples outside MIMIC_LIMITS"
     )
     print(
         "           tightest margins (deg): "
@@ -672,22 +730,30 @@ def _selftest() -> int:
     )
     failures += not ok
 
-    # 4. Up/down: elbow_flex is the PRIMARY driver (largest authority); all three
-    #    joints move together and the wrist counter-rotates to stay level.
+    # 4. Up/down: a raised hand lifts the shoulder and opens the elbow (locked
+    #    pair); the hand height does not move the wrist.
     ju = m.joints_from_axes(0.0, +1.0, 0.0, 0.0)
     ok = (
-        math.copysign(1, ju["shoulder_lift"] - g.shoulder_lift0)
-        == math.copysign(1, g.sl_up_gain)
-        and math.copysign(1, ju["elbow_flex"] - g.elbow_flex0)
-        == math.copysign(1, g.ef_up_gain)
-        and math.copysign(1, ju["wrist_flex"] - g.wrist_flex0)
-        == math.copysign(1, g.wf_up_gain)
-        and abs(g.ef_up_gain) > abs(g.sl_up_gain)
-    )  # elbow leads, shoulder reduced
+        ju["shoulder_lift"] > g.shoulder_lift0
+        and ju["elbow_flex"] < g.elbow_flex0
+        and abs(ju["wrist_flex"] - g.wrist_flex0) < 1e-6
+    )
     print(
         f"  [{'PASS' if ok else 'FAIL'}] up → SL{ju['shoulder_lift']-g.shoulder_lift0:+.0f} "
-        f"EF{ju['elbow_flex']-g.elbow_flex0:+.0f} WF{ju['wrist_flex']-g.wrist_flex0:+.0f} "
-        f"(elbow leads: |ef|={abs(g.ef_up_gain):.0f} > |sl|={abs(g.sl_up_gain):.0f})"
+        f"EF{ju['elbow_flex']-g.elbow_flex0:+.0f} WF{ju['wrist_flex']-g.wrist_flex0:+.0f}"
+    )
+    failures += not ok
+
+    # 4a. Wrist bend: hand in line with the forearm → neutral wrist_flex; bent
+    #     either way → wrist_flex moves either way.
+    mw = CameraMimicMapper()
+    straight = mw._wrist_flex_axis((320, 200), (320, 300), 0.0)  # forearm + hand vertical
+    bent = mw._wrist_flex_axis((320, 200), (320, 300), 45.0)  # hand tipped right
+    no_elbow = mw._wrist_flex_axis((320, 200), None, -45.0)  # forearm assumed vertical
+    ok = abs(straight) < 1e-6 and bent < -0.9 and no_elbow > 0.9
+    print(
+        f"  [{'PASS' if ok else 'FAIL'}] wrist bend: straight → {straight:+.2f}, "
+        f"tipped right → {bent:+.2f}, tipped left (no elbow) → {no_elbow:+.2f}"
     )
     failures += not ok
 
@@ -713,9 +779,10 @@ def _selftest() -> int:
     # 6. Wrist roll about the forward-most midpoint (0).
     jp = m.joints_from_axes(0.0, 0.0, 0.0, +1.0)
     jn = m.joints_from_axes(0.0, 0.0, 0.0, -1.0)
+    roll_lo, roll_hi = MIMIC_LIMITS["wrist_roll"]
     ok = (
-        abs(jp["wrist_roll"] - g.roll_gain) < 1e-6
-        and abs(jn["wrist_roll"] + g.roll_gain) < 1e-6
+        abs(jp["wrist_roll"] - min(g.roll_gain, roll_hi)) < 1e-6
+        and abs(jn["wrist_roll"] - max(-g.roll_gain, roll_lo)) < 1e-6
     )
     print(
         f"  [{'PASS' if ok else 'FAIL'}] wrist_roll: roll±1 → {jp['wrist_roll']:+.0f}/{jn['wrist_roll']:+.0f} about 0"
@@ -869,25 +936,26 @@ def _selftest() -> int:
     failures += not ok
 
     # 9e. Reach-all-limits: each joint's commanded value gets within 10° of BOTH
-    #     its JOINT_LIMITS somewhere in the input cube (the "hit all limits" goal).
+    #     its MIMIC_LIMITS somewhere in the input cube (the "hit all limits" goal).
     reach = {
         name: [float("inf"), float("-inf")]
-        for name in JOINT_LIMITS
+        for name in MIMIC_LIMITS
         if name != "gripper"
     }
     for lr in (-1.0, 1.0):
         for up in (-1.0, 1.0):
             for fwd in (-1.0, 1.0):
                 for roll in (-1.0, 1.0):
-                    j = m.joints_from_axes(lr, up, fwd, roll)
-                    for nme, v in j.items():
-                        if nme == "gripper":
-                            continue
-                        reach[nme][0] = min(reach[nme][0], v)
-                        reach[nme][1] = max(reach[nme][1], v)
+                    for wf in (-1.0, 1.0):
+                        j = m.joints_from_axes(lr, up, fwd, roll, wf)
+                        for nme, v in j.items():
+                            if nme == "gripper":
+                                continue
+                            reach[nme][0] = min(reach[nme][0], v)
+                            reach[nme][1] = max(reach[nme][1], v)
     near = 10.0
     unreached = []
-    for nme, (lo_lim, hi_lim) in JOINT_LIMITS.items():
+    for nme, (lo_lim, hi_lim) in MIMIC_LIMITS.items():
         if nme == "gripper":
             continue
         rmin, rmax = reach[nme]

@@ -134,35 +134,37 @@ behaviors:
     elbow_flex0: 10.0
     wrist_flex0: -10.0
     wrist_roll0: 0.0
-    # --- Per-axis gains (deg per unit of the normalized [-1,1] axis). OVER-DRIVEN
-    #     (~30%+ past each joint's half-span) so every limit is reachable with an
-    #     easy single/two-axis motion; the excess saturates at the safety clamp.
-    pan_gain: 150.0            # left/right (x) → shoulder_pan (overshoots ±115)
-    # forward/back (z): shoulder_lift is the PRIMARY driver - a near hand reaches
-    # its +110 limit on depth alone; elbow_flex goes negative to reach out.
-    sl_fwd_gain: 110.0         # forward/back → shoulder_lift (+ forward, largest term)
-    ef_fwd_gain: -75.0         #              → elbow_flex   (- forward)
-    # up/down (y): elbow_flex at FULL authority leads; shoulder_lift adds the rest
-    # of the up travel; wrist_flex counter-rotates and over-swings to both limits.
-    ef_up_gain: 78.0           # up/down → elbow_flex  (primary, largest up term)
-    sl_up_gain: 58.0           #         → shoulder_lift
-    wf_up_gain: -135.0         #         → wrist_flex (overshoots ±100 about -10)
-    roll_gain: 128.0           # hand roll → wrist_roll (overshoots ±100, saturates)
-    # --- How raw camera signals normalize to the control axes. Tighter windows
-    #     so a smaller hand movement reaches the full joint travel.
+    # --- Per-axis gains (deg per unit of the normalized [-1,1] axis). Tuned on
+    #     the real rig; keep equal to the workshop's mimic: section
+    #     (workshop/solution/config/workshop.yaml). Over-driven so every limit is
+    #     reachable; the excess saturates at MIMIC_LIMITS (utils/gesture_map.py).
+    pan_gain: 150.0            # left/right (x) → shoulder_pan
+    # forward/back (z): shoulder_lift is the PRIMARY driver; elbow_flex goes
+    # negative to reach out.
+    sl_fwd_gain: 110.0         # toward the camera → shoulder_lift
+    sl_fwd_away_gain: 165.0    # away from the camera → shoulder_lift (+50%)
+    ef_fwd_gain: -75.0         # forward/back → elbow_flex (- forward)
+    # up/down (y): shoulder_lift and elbow_flex move as a locked pair.
+    sl_up_gain: 58.0           # up/down → shoulder_lift
+    ef_up_gain: -55.0          #         → elbow_flex (opens as the hand rises)
+    # wrist_flex follows the operator's wrist BEND (hand direction vs the
+    # elbow→wrist forearm), not the hand height.
+    wf_up_gain: 135.0          # wrist bend → wrist_flex (flip sign to invert)
+    wrist_half_deg: 45.0       # ±this hand-vs-forearm bend → full wrist_flex
+    roll_gain: 128.0           # hand roll → wrist_roll (saturates at the clamp)
+    # --- How raw camera signals normalize to the control axes.
     x_center: 0.5              # frame fraction that is "centered" L/R
-    x_half: 0.32               #   ±this fraction → full left/right
+    x_half: 0.384              #   ±this fraction → full left/right
     y_center: 0.5
-    y_half: 0.28               #   ±this fraction → full up/down
+    y_half: 0.336              #   ±this fraction → full up/down
     deadzone: 0.05             # |axis| below this → 0 (kills resting jitter)
     mirror: true               # operator camera faces the user → mirror left/right
     # --- Forward/back depth from MediaPipe hand size (fraction of frame height).
     hand_size_neutral: 0.0     # 0 = auto-calibrate from the first frames;
                                #   set via --calibrate-depth for a fixed neutral
-    # More sensitive than before: a hand brought close grows fast, so a smaller
-    # size change now reaches the full forward/back travel. Lower this further if
-    # you still can't reach the forward limit; raise it if depth feels twitchy.
-    depth_rel_span: 0.25       # ±25% size change → full forward/back
+    # Lower this if you can't reach the forward limit; raise it if depth feels
+    # twitchy.
+    depth_rel_span: 0.30       # ±30% size change → full forward/back
     depth_baseline_frames: 8   # frames of hand size to median for the auto neutral
     # --- Wrist roll: primary cue is the DIRECTED thumb→index vector. The angle is
     #     measured RELATIVE to a center that AUTO-CALIBRATES to however you're
@@ -194,7 +196,7 @@ behaviors:
     grip_close_frac: 0.10      # within the closest 10% of the range -> fully closed
     grip_open_pos: 90.0        # gripper opening (0-100) at full spread (norm 1.0)
     #grip_start_pos: 90.0      # opening before the first distance is seen (default: open)
-    # --- One Euro smoothing on the four control axes.
+    # --- One Euro smoothing on the five control axes.
     smoothing:
       min_cutoff: 1.5          # Hz, lower = smoother at rest
       beta: 0.03               # higher = less lag during fast motion

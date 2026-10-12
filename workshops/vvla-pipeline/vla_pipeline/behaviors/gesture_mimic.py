@@ -13,16 +13,17 @@ The image is treated as a control surface and its signals are mapped straight
 onto SO-101 joints - the same absolute-target, limit-clamped commands that
 ``test_ros2_arm_motion`` issues - rather than solving the human arm's geometry:
 
-- **YOLOv26s-pose (NPU)** → the wrist keypoint's position in the frame:
-  horizontal → left/right (shoulder_pan), vertical → up/down. Up/down is carried
-  by elbow_flex at full authority plus shoulder_lift's lower ~50% plus a
-  wrist_flex fine-tune (an extension of elbow_flex that keeps the gripper level).
-  The YOLO wrist is also the **fallback controller**: when MediaPipe loses the
-  hand the robot keeps following the wrist for x/y until the hand returns.
+- **YOLOv26s-pose (NPU)** → the nearest person's right wrist position in the
+  frame: horizontal → left/right (shoulder_pan), vertical → up/down
+  (shoulder_lift and elbow_flex as a locked pair). The right elbow gives the
+  forearm direction for wrist_flex. The YOLO wrist is also the **fallback
+  controller**: when MediaPipe loses the hand the robot keeps following the
+  wrist for x/y until the hand returns.
 - **MediaPipe Hands (CPU)** →
     * hand **size** (how near the hand is) → forward/back (z): reaching forward
-      extends shoulder_lift through its upper half (50%→100%) with elbow_flex
-      negative; the opposite pulls back,
+      extends shoulder_lift with elbow_flex negative; the opposite pulls back,
+    * wrist→knuckle direction measured against the forearm (the wrist bend)
+      → wrist_flex,
     * thumb↔index **line** (with the knuckle-line reference, then the wrist→knuckle
       angle, as reliability-weighted fallbacks) → wrist_roll (forward-most = the
       calibration midpoint, 0),
@@ -70,10 +71,6 @@ from vla_pipeline.vision.yolo_pose_npu import KP, PoseEstimator
 
 logger = logging.getLogger(__name__)
 
-# COCO-17 wrists: prefer whichever is more confidently seen this frame.
-_WRISTS = (KP["l_wrist"], KP["r_wrist"])
-
-
 def _primary_person(pose: PoseEstimator, frame):
     """Largest-box detection → (kpts[17,3], boxes, scores, kpts_all) or Nones.
 
@@ -87,13 +84,18 @@ def _primary_person(pose: PoseEstimator, frame):
     return kpts_all[int(np.argmax(areas))], boxes, scores, kpts_all
 
 
-def _wrist_xy(kpts, thr: float) -> tuple[float, float] | None:
-    """Pixel (x, y) of the more-visible wrist, or None if neither is reliable."""
-    best, best_v = None, thr
-    for w in _WRISTS:
-        if kpts[w, 2] >= best_v:
-            best, best_v = (float(kpts[w, 0]), float(kpts[w, 1])), float(kpts[w, 2])
-    return best
+def _pick_arm(kpts, thr: float, side: str = "r"):
+    """(wrist_xy, elbow_xy) of one fixed arm (default right), like the workshop.
+
+    wrist_xy is None when that wrist is below ``thr`` (and then so is elbow_xy);
+    elbow_xy is None when only the elbow is below it.
+    """
+    w, e = KP[f"{side}_wrist"], KP[f"{side}_elbow"]
+    if kpts[w, 2] < thr:
+        return None, None
+    wrist = (float(kpts[w, 0]), float(kpts[w, 1]))
+    elbow = (float(kpts[e, 0]), float(kpts[e, 1])) if kpts[e, 2] >= thr else None
+    return wrist, elbow
 
 
 def run_gesture_mimic(
@@ -130,7 +132,9 @@ def run_gesture_mimic(
 
             # --- Hand location from YOLO pose (NPU) ---
             kpts, boxes, scores, kpts_all = _primary_person(pose, frame)
-            wrist_xy = _wrist_xy(kpts, thr) if kpts is not None else None
+            wrist_xy, elbow_xy = (
+                _pick_arm(kpts, thr) if kpts is not None else (None, None)
+            )
             if kpts is None:
                 missing += 1
                 if missing == 5:
@@ -164,6 +168,7 @@ def run_gesture_mimic(
                     roll_ti_weight=roll_ti_w,
                     pinch=pinch,
                     gripper_override=gripper_override,
+                    elbow_xy=elbow_xy,
                 )
                 arm.send_joints(joints)
             else:
