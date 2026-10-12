@@ -53,7 +53,7 @@ audio:                              # microphone + voice-activity detection
   mic_device: null                  # null = default input (or an index from `python -m sounddevice`)
   silence_threshold: 0.015          # energy-VAD noise floor (RMS) when webrtcvad is missing
   vad_aggressiveness: 2             # webrtcvad mode 0 (lenient) .. 3 (aggressive)
-  hangover_s: 0.7                   # silence that ends an utterance (shorter splits sentences)
+  hangover_s: 1.2                   # silence that ends an utterance (keeps a short pause inside a command)
   pre_roll_s: 0.3                   # audio kept from before speech onset
   min_speech_s: 0.25                # reject clicks/coughs shorter than this
   max_utterance_s: 12.0

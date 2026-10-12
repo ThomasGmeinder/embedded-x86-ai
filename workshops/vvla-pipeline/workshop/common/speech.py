@@ -96,6 +96,18 @@ class Segmenter:
         return audio if voiced >= self.min_speech else None
 
 
+def _pretrained(cls, model_id: str):
+    """Load a public Hugging Face processor from the local cache first.
+
+    A saved login whose token has expired makes the Hub answer 401, and that
+    error hides a complete cache. Download only when the cache does not have it.
+    """
+    try:
+        return cls.from_pretrained(model_id, local_files_only=True)
+    except OSError:
+        return cls.from_pretrained(model_id)
+
+
 class Whisper:
     """Whisper ONNX encoder + decoder, greedy decoding (one utterance at a time)."""
 
@@ -111,8 +123,8 @@ class Whisper:
 
         # The tokenizer must match the checkpoint: the base model is the
         # English-only one, so openai/whisper-base.en.
-        self.features = WhisperFeatureExtractor.from_pretrained(w["tokenizer"])
-        self.tokenizer = WhisperTokenizer.from_pretrained(w["tokenizer"])
+        self.features = _pretrained(WhisperFeatureExtractor, w["tokenizer"])
+        self.tokenizer = _pretrained(WhisperTokenizer, w["tokenizer"])
         if w.get("language") and not w["tokenizer"].endswith(".en"):
             self.tokenizer.set_prefix_tokens(language=w["language"], task="transcribe")
         self.prefix = list(self.tokenizer.prefix_tokens)

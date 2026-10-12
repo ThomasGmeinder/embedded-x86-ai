@@ -106,9 +106,17 @@ class WhisperONNX:
 
         # Tokenizer/feature-extractor MUST match the model checkpoint variant.
         # AMD's base NPU model is English-only -> openai/whisper-base.en.
+        # Prefer the local cache: an expired Hugging Face token returns 401
+        # even when these public files are already downloaded.
         tok_id = tokenizer_id or f"openai/{model_type}"
-        self.feature_extractor = WhisperFeatureExtractor.from_pretrained(tok_id)
-        self.tokenizer = WhisperTokenizer.from_pretrained(tok_id)
+        try:
+            self.feature_extractor = WhisperFeatureExtractor.from_pretrained(
+                tok_id, local_files_only=True
+            )
+            self.tokenizer = WhisperTokenizer.from_pretrained(tok_id, local_files_only=True)
+        except OSError:
+            self.feature_extractor = WhisperFeatureExtractor.from_pretrained(tok_id)
+            self.tokenizer = WhisperTokenizer.from_pretrained(tok_id)
         self.decoder_start_token = self.sot_token = (
             self.tokenizer.convert_tokens_to_ids("<|startoftranscript|>")
         )
