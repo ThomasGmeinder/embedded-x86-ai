@@ -100,7 +100,7 @@ def bench_render(seconds: float = 3.0) -> dict:
             samples.append(rs.pass_ms)
             time.sleep(1 / 60)
         passes = rs.passes - p0
-        return {"renderer": rs.renderer, "views": "640x480 wrist + 640x480 operator + 960x720 3-D",
+        return {"renderer": rs.renderer, "views": "640x480 wrist + 640x480 operator + 800x800 3-D",
                 "pass_ms_median": round(statistics.median(samples), 2),
                 "pass_ms_p95": round(sorted(samples)[int(0.95 * (len(samples) - 1))], 2),
                 "passes_per_s": round(passes / seconds, 1)}

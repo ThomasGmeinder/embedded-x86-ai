@@ -8,13 +8,13 @@
 """Twin console - one image of what the robot sees, hears and does (PROVIDED).
 
 The same layout as the pipeline's ``run_pipeline.sh --digital-twin`` window
-(1200 x 900)::
+(1200 x 1100)::
 
     +-----------------+-----------------+-----------------+
     | operator: YOLO pose| operator: MediaPipe| arm: YOLO detect|   400 x 300 each
     +-----------------+-----------------+-----------------+
     |                                   | voice / intent  |
-    |        3D view of the twin        | behavior log    |   800 x 600 + 400 x 600
+    |        3D view of the twin        | behavior log    |   800 x 800 + 400 x 800
     |                                   | gripper, joints |
     +-----------------------------------+-----------------+
 
@@ -42,7 +42,8 @@ from common.imaging import draw_skeleton
 logger = logging.getLogger(__name__)
 
 TILE_W, TILE_H = 400, 300
-VIEW_W, VIEW_H = 800, 600
+VIEW_W, VIEW_H = 800, 800  # tall enough for the raised arm (wave)
+LOG_LINES = (VIEW_H - 230) // 20  # what fits between the header and the arm HUD
 PANEL_W = 400
 IDLE_AFTER_S = 0.5  # a model untouched this long is run by the console itself
 SHORT = {
@@ -225,7 +226,7 @@ class TwinConsole:
         self.view = view
         self.transcribing = lambda: False  # replaced by the caller (e.g. MicListener)
 
-        self._log: deque[tuple[str, tuple]] = deque(maxlen=18)
+        self._log: deque[tuple[str, tuple]] = deque(maxlen=LOG_LINES)
         self._lock = threading.Lock()
         self._level, self._speaking, self._level_t = 0.0, False, 0.0
         self._behavior: str | None = None
@@ -390,7 +391,7 @@ class TwinConsole:
                             FONT, 0.42, GRAY, 1, cv2.LINE_AA)
 
     def compose(self) -> np.ndarray:
-        """One 1200 x 900 BGR frame of the whole console."""
+        """One 1200 x 1100 BGR frame of the whole console."""
         operator_frame = self.operator.latest() if self.operator is not None else None
         armcam = self.armcam.latest() if self.armcam is not None else None
         tiles = [

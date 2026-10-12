@@ -76,8 +76,8 @@ class View:
         if isinstance(camera, dict) or camera in (None, "free"):
             p = camera if isinstance(camera, dict) else {}
             self.camera.type = mj.mjtCamera.mjCAMERA_FREE
-            self.camera.lookat[:] = p.get("lookat", (0.17, 0.0, 0.08))
-            self.camera.distance = float(p.get("distance", 0.75))
+            self.camera.lookat[:] = p.get("lookat", (0.17, 0.0, 0.18))
+            self.camera.distance = float(p.get("distance", 0.9))
             self.camera.azimuth = float(p.get("azimuth", 150.0))
             self.camera.elevation = float(p.get("elevation", -24.0))
             self.camera_name = "free"

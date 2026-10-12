@@ -1,12 +1,12 @@
 """Twin console - one desktop window showing what the pipeline sees, hears and does.
 
-Layout (1200 x 900)::
+Layout (1200 x 1100)::
 
     +-----------------+-----------------+-----------------+
     | operator: YOLO pose| operator: MediaPipe| arm: YOLO detect|   400 x 300 each
     +-----------------+-----------------+-----------------+
     |                                   | voice / intent  |
-    |        3D view of the twin        | behavior log    |   800 x 600 + 400 x 600
+    |        3D view of the twin        | behavior log    |   800 x 800 + 400 x 800
     |                                   | gripper, joints |
     +-----------------------------------+-----------------+
 
@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 
 WINDOW = "SO-101 twin console"
 TILE_W, TILE_H = 400, 300
-VIEW_W, VIEW_H = 800, 600
+VIEW_W, VIEW_H = 800, 800  # tall enough for the raised arm (wave)
+LOG_LINES = (VIEW_H - 230) // 20  # what fits between the header and the arm HUD
 PANEL_W = 400
 FPS = 15.0
 IDLE_AFTER_S = 0.5  # a model untouched this long is run by the console itself
@@ -231,7 +232,7 @@ class TwinConsole:
         )
         self.view = _view_source(cfg)
 
-        self._log: deque[tuple[str, tuple]] = deque(maxlen=18)
+        self._log: deque[tuple[str, tuple]] = deque(maxlen=LOG_LINES)
         self._lock = threading.Lock()
         self._level, self._speaking, self._level_t = 0.0, False, 0.0
         self._asr_pending = False
@@ -416,7 +417,8 @@ class TwinConsole:
     def run(self, shutdown: threading.Event, on_stop) -> None:
         """Draw until ``shutdown`` is set or the window is closed; space calls ``on_stop()``."""
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(WINDOW, TILE_W * 3, TILE_H + VIEW_H)
+        scale = min(1.0, 950 / (TILE_H + VIEW_H))  # fit a 1080p screen; drag to resize
+        cv2.resizeWindow(WINDOW, int(TILE_W * 3 * scale), int((TILE_H + VIEW_H) * scale))
         period = 1.0 / FPS
         try:
             while not shutdown.is_set():

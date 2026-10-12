@@ -72,11 +72,11 @@ DEFAULTS: dict = {
         "operator": {"camera": "operator_cam", "width": 640, "height": 480, "fps": 30},
         "view": {
             "camera": "free",
-            "width": 960,
-            "height": 720,
+            "width": 800,
+            "height": 800,
             "fps": 30,
-            "lookat": [0.17, 0.0, 0.08],
-            "distance": 0.75,
+            "lookat": [0.17, 0.0, 0.18],  # high and far enough to keep the raised arm in frame
+            "distance": 0.9,
             "azimuth": 150.0,
             "elevation": -24.0,
         },
