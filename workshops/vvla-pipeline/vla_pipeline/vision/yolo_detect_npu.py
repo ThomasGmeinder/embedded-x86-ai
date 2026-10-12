@@ -130,6 +130,8 @@ SYNONYMS = {
     "sports_ball": "sports ball",
     "soccer": "sports ball",
     "soccer ball": "sports ball",
+    "football": "sports ball",
+    "foot ball": "sports ball",
     "cube": None,
     "block": None,
     "phone": "cell phone",
