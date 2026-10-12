@@ -166,3 +166,34 @@ dance:
 
 wave:
   cycles: 3
+
+# Manipulation behaviors (provided, common/manipulation.py) - the pipeline's values.
+grip:                               # close until contact, confirm with the arm camera
+  close_step_deg: 1.5
+  stall_eps_deg: 0.4                # measured lagging the command by this much = stalled
+  stall_ticks: 5
+  settle_extra_deg: 2.0             # hold this much tighter than the contact point
+  stall_grace_s: 0.6                # keep sampling after full close (thin objects)
+  load_threshold: 120.0             # Present_Current counts that mean contact
+  load_ticks: 3
+  jaw_roi: [0.30, 0.45, 0.70, 0.95] # arm-camera region between the jaws (fractions)
+  jaw_diff_threshold: 0.06
+
+pick_place:                         # "pick up the ball": detect on the arm camera, grasp, hand over
+  scan_pose: {shoulder_pan: 0.0, shoulder_lift: -55.0, elbow_flex: 65.0, wrist_flex: 45.0, wrist_roll: 0.0, gripper: 70.0}
+  approach_pose: {shoulder_lift: -35.0, elbow_flex: 45.0, wrist_flex: 35.0}
+  descend_lift: -20.0
+  servo_gain_pan: 18.0              # deg of pan per unit of horizontal image error
+  servo_tolerance: 0.06
+  servo_timeout_s: 6.0
+  min_box_area_frac: 0.002
+  ambiguous_ratio: 1.25
+  handoff_reach: 55.0
+  release_timeout_s: 6.0
+  retries: 1
+
+fetch_block:                        # "bring me the block": taught pose, grasp, hand over
+  block_pose: {shoulder_pan: 35.0, shoulder_lift: -45.0, elbow_flex: 60.0, wrist_flex: 40.0, wrist_roll: 0.0, gripper: 35.0}
+  lift_pose: {shoulder_pan: 35.0, shoulder_lift: -80.0, elbow_flex: 85.0, wrist_flex: 50.0, wrist_roll: 0.0, gripper: 5.0}
+  handoff_reach: 55.0
+  release_timeout_s: 6.0
