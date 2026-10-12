@@ -13,7 +13,7 @@ The robot has senses: **Whisper is its ears**, **YOLO is its eyes**, **Llama is 
 flowchart TB
     subgraph SENSE["Perception &amp; speech"]
         MIC([Microphone]):::io
-        MOUNTCAM([Mount camera<br/>faces human]):::io
+        OPERATORCAM([Operator camera<br/>faces human]):::io
         ARMCAM([Arm camera<br/>end effector]):::io
 
         VAD["VAD listener thread<br/>0.35 s end-of-speech<br/>(always hot)"]:::cpu
@@ -49,8 +49,8 @@ flowchart TB
     STOPCHK -- "no" --> LLAMA --> REG
     STOPCHK -- "yes" --> STOPEVENT
 
-    MOUNTCAM --> POSE
-    MOUNTCAM --> HANDS
+    OPERATORCAM --> POSE
+    OPERATORCAM --> HANDS
     ARMCAM --> DETECT
     ARMCAM --> GRIP
 
@@ -187,19 +187,19 @@ The ROS 2 transport (`robot.use_ros2: true`, `cameras.*.use_ros2: true`) splits 
 ```mermaid
 flowchart LR
     subgraph DEVICES["Hardware"]
-        MC([Mount camera<br/>V4L2]):::hw
+        MC([Operator camera<br/>V4L2]):::hw
         AC([Arm camera<br/>V4L2]):::hw
         BUS([SO-101 Feetech bus<br/>/dev/ttyACM0]):::hw
     end
 
     subgraph NODES["ROS 2 nodes (background processes)"]
-        CMN["camera_mount_node"]:::node
+        CMN["camera_operator_node"]:::node
         CAN["camera_arm_node"]:::node
         SRV["so101_server_node<br/>(sole bus owner)"]:::node
     end
 
     subgraph ORCH["vla_pipeline.main (orchestrator process)"]
-        CCM["camera_client_mount"]:::client
+        CCM["camera_client_operator"]:::client
         CCA["camera_client_arm"]:::client
         ARMCL["so101_arm_client"]:::client
         BEH["behaviors<br/>(mimic · pick · grip · …)"]:::beh
@@ -209,8 +209,8 @@ flowchart LR
     AC --> CAN
     BUS <--> SRV
 
-    CMN -->|"/cameras/mount/image_raw (Image)"| CCM
-    CMN -.->|"/cameras/mount/healthy (Bool)"| CCM
+    CMN -->|"/cameras/operator/image_raw (Image)"| CCM
+    CMN -.->|"/cameras/operator/healthy (Bool)"| CCM
     CAN -->|"/cameras/arm/image_raw (Image)"| CCA
     CAN -.->|"/cameras/arm/healthy (Bool)"| CCA
 
@@ -231,10 +231,10 @@ flowchart LR
 
 | Node | Process / how it starts | Role | Owns |
 |---|---|---|---|
-| `camera_mount_node` | `python -m vla_pipeline.vision.camera_node --role mount` (launch/run_pipeline) | Captures the human-facing camera and publishes frames + health | the mount V4L2 device |
+| `camera_operator_node` | `python -m vla_pipeline.vision.camera_node --role operator` (launch/run_pipeline) | Captures the human-facing camera and publishes frames + health | the operator V4L2 device |
 | `camera_arm_node` | `python -m vla_pipeline.vision.camera_node --role arm` | Captures the end-effector camera and publishes frames + health | the arm V4L2 device |
 | `so101_server_node` | `python -m vla_pipeline.robot.robot_node --server` | **Sole owner of the Feetech bus**; applies joint commands at `control_fps`, streams joint state + gripper effort, parks the arm at rest on shutdown | the SO-101 serial bus |
-| `camera_client_mount` | created inside `vla_pipeline.main` (`Ros2Camera`) | Subscribes to the mount image topic, hands the latest frame to behaviors | — |
+| `camera_client_operator` | created inside `vla_pipeline.main` (`Ros2Camera`) | Subscribes to the operator image topic, hands the latest frame to behaviors | — |
 | `camera_client_arm` | created inside `vla_pipeline.main` (`Ros2Camera`) | Subscribes to the arm image topic for detection / jaw verification | — |
 | `so101_arm_client` | created inside `vla_pipeline.main` (`Ros2ArmClient`) | The `ArmClient` implementation behaviors call; publishes commands, reads back joint state + effort | — |
 
@@ -244,19 +244,19 @@ The three client nodes spin on their own background executors inside the single 
 
 | Topic | Type | Publisher → Subscriber | Notes |
 |---|---|---|---|
-| `/cameras/mount/image_raw` | `sensor_msgs/Image` (bgr8) | `camera_mount_node` → `camera_client_mount` | pose / gesture-mimic / person finding |
-| `/cameras/mount/healthy` | `std_msgs/Bool` | `camera_mount_node` → (any) | `false` while the device is offline/reopening |
+| `/cameras/operator/image_raw` | `sensor_msgs/Image` (bgr8) | `camera_operator_node` → `camera_client_operator` | pose / gesture-mimic / person finding |
+| `/cameras/operator/healthy` | `std_msgs/Bool` | `camera_operator_node` → (any) | `false` while the device is offline/reopening |
 | `/cameras/arm/image_raw` | `sensor_msgs/Image` (bgr8) | `camera_arm_node` → `camera_client_arm` | object detection + grip jaw verification |
 | `/cameras/arm/healthy` | `std_msgs/Bool` | `camera_arm_node` → (any) | health flag for the arm camera |
 | `/so101/joint_command` | `sensor_msgs/JointState` (deg) | `so101_arm_client` → `so101_server_node` | absolute joint targets; partial dicts allowed |
 | `/so101/joint_state` | `sensor_msgs/JointState` | `so101_server_node` → `so101_arm_client` | positions for all joints; **`effort[gripper]` = servo current** (NaN if the bus can't read it) |
 
-All topics use best-effort, keep-last depth-1 QoS — the latest frame/state always wins and vision never backs up behind a slow consumer. Every camera parameter (device, resolution, fps, rotation, topic) is a ROS parameter with defaults from `cameras:` in `config/pipeline.yaml`; point `cameras.arm.device` at the end-effector camera (a `/dev/v4l/by-id/...` path is more stable than an index) and set `rotate` to match its mounting. If a camera is unplugged the node stays up, publishes `healthy: false`, retries every `reopen_interval_s`, and behaviors degrade gracefully (pick-and-place falls back to the mount camera; fetch hands off straight ahead).
+All topics use best-effort, keep-last depth-1 QoS — the latest frame/state always wins and vision never backs up behind a slow consumer. Every camera parameter (device, resolution, fps, rotation, topic) is a ROS parameter with defaults from `cameras:` in `config/pipeline.yaml`; point `cameras.arm.device` at the end-effector camera (a `/dev/v4l/by-id/...` path is more stable than an index) and set `rotate` to match its mounting. If a camera is unplugged the node stays up, publishes `healthy: false`, retries every `reopen_interval_s`, and behaviors degrade gracefully (pick-and-place falls back to the operator camera; fetch hands off straight ahead).
 
 Quick inspection:
 
 ```bash
-ros2 node list                       # camera_mount_node, camera_arm_node, so101_server_node, ...
+ros2 node list                       # camera_operator_node, camera_arm_node, so101_server_node, ...
 ros2 topic hz /cameras/arm/image_raw # confirm the arm camera is publishing
 ros2 topic echo /so101/joint_state   # watch positions + gripper effort
 ```
@@ -273,7 +273,7 @@ strix-vla-pipeline/
 │   ├── vaiep_config.json         # VitisAI compiler config for YOLO (BF16, VAIML)
 │   └── vitisai_config_whisper_{encoder,decoder}.json
 ├── launch/
-│   └── strix_vla.launch.py       # cameras (mount+arm) + SO-101 server node
+│   └── strix_vla.launch.py       # cameras (operator+arm) + SO-101 server node
 ├── scripts/
 │   ├── compile_npu_models.py     # compile whisper/yolo ONNX for the NPU (SDK venv)
 │   ├── export_whisper_onnx.py    # Whisper encoder/decoder ONNX export
@@ -489,9 +489,9 @@ The old close loop exited when the *commanded* position reached 0°. A pen stall
 
 ## Voice pick-and-place
 
-"Pick up the ball" → `{"command": "pick_place", "object": "ball"}` → `vla_pipeline/behaviors/pick_place.py`: scan pose → YOLOv26s-detect on the arm camera grounds the name (synonym table: ball→sports ball, mug→cup, …) → proportional pan servoing centers the box → descend → the same feedback-based close as grip (one retry) → lift → find the person with YOLO-pose on the mount camera → extend → release → home.
+"Pick up the ball" → `{"command": "pick_place", "object": "ball"}` → `vla_pipeline/behaviors/pick_place.py`: scan pose → YOLOv26s-detect on the arm camera grounds the name (synonym table: ball→sports ball, mug→cup, …) → proportional pan servoing centers the box → descend → the same feedback-based close as grip (one retry) → lift → find the person with YOLO-pose on the operator camera → extend → release → home.
 
-Failure handling speaks: unknown word ("I don't know what that looks like"), nothing found, ambiguous matches, failed/slipped grasp (retry then give up), missing cameras (arm cam down → mount cam with a warning). Note COCO-80 has no "cube"/"pen" class — fine-tune YOLO26 on your own objects and extend `SYNONYMS` in `vla_pipeline/vision/yolo_detect_npu.py` to ground them. One-time setup: `python scripts/export_yolo26s_detect.py`.
+Failure handling speaks: unknown word ("I don't know what that looks like"), nothing found, ambiguous matches, failed/slipped grasp (retry then give up), missing cameras (arm cam down → operator camera with a warning). Note COCO-80 has no "cube"/"pen" class — fine-tune YOLO26 on your own objects and extend `SYNONYMS` in `vla_pipeline/vision/yolo_detect_npu.py` to ground them. One-time setup: `python scripts/export_yolo26s_detect.py`.
 
 ## Adding a voice command
 
@@ -514,7 +514,7 @@ Every component is a standalone module with its own `__main__` self-test.
 | YOLO pose | webcam | `python -m vla_pipeline.vision.yolo_pose_npu --device npu` |
 | YOLO detect | webcam | `python -m vla_pipeline.vision.yolo_detect_npu --find ball --role arm` |
 | MediaPipe hands | webcam | `python -m vla_pipeline.vision.mediapipe_hands` |
-| Camera client | webcam | `python -m vla_pipeline.vision.camera --role mount` |
+| Camera client | webcam | `python -m vla_pipeline.vision.camera --role operator` |
 | Camera node | ROS 2 + webcam | `python -m vla_pipeline.vision.camera_node --role arm` |
 | Arm interface | no (`--dry-run`) / arm | `python -m vla_pipeline.robot.arm_interface --dry-run` |
 | Arm calibration | arm | `python -m vla_pipeline.robot.arm_interface --calibrate` |
@@ -541,7 +541,7 @@ All tunables live in `config/pipeline.yaml`:
 - **whisper** — model variant, device, VitisAI configs, cache keys
 - **llm** — `llama-server` port (default 8081), GPU layers, ctx size, GBNF path, `hsa_override_gfx_version`
 - **yolo_pose / yolo_detect / mediapipe** — confidence thresholds, cache keys, hand-roll cue threshold
-- **cameras** — per-role (`mount` / `arm`) device, resolution, fps, rotation, `use_ros2`, topic; legacy single `camera:` kept for one-cam dev machines
+- **cameras** — per-role (`operator` / `arm`) device, resolution, fps, rotation, `use_ros2`, topic; legacy single `camera:` kept for one-cam dev machines
 - **robot** — `use_ros2`, `motor_port`, `robot_id`, topics, control FPS, `max_relative_target`
 - **behaviors** — `gesture_mimic` camera-to-joint gains, mirror, depth and grip calibration, One Euro smoothing; fetch/pick keyframes and servo gains; grip stall/grace/load/jaw-ROI; dance BPM; wave cycles
 - **resource_monitor** — sample rate, CSV output
@@ -561,7 +561,7 @@ All tunables live in `config/pipeline.yaml`:
 - **`HW context creation unsuccessful` / `sub buffer size and offset` when loading a model on the NPU** — the NPU ran out of concurrent hardware contexts; you're trying to keep too many models resident (Whisper encoder+decoder + both YOLO is usually one too many). This is *not* a stale cache — a model that works alone fails here only because others already hold the contexts. Move one off the NPU: set `whisper.device: cpu` (recommended) or the YOLO models to `cpu`. See **Compute placement → NPU context budget**.
 - **NPU model falls back to CPU unexpectedly** — check the startup logs; a model set to `npu` that can't get a context now logs a warning and runs on CPU rather than crashing. Pin `device:` fields deliberately once you see what fits.
 - **`EOFError` / "No calibration … not a TTY" from the server node** — the arm has no calibration file and the server is backgrounded (no terminal to run interactive calibration). Run `python -m vla_pipeline.robot.arm_interface --calibrate` once in the foreground; `run_pipeline.sh` now does this automatically before launch.
-- **Camera preview shows "no frames — camera offline"** — with `use_ros2: true` the preview *subscribes* to a topic, so it needs the camera node publishing. Start the nodes (`./run_pipeline.sh` or `python -m vla_pipeline.vision.camera_node --role mount`), or test the raw device directly by setting that role's `use_ros2: false`. Confirm the device captures at all with `v4l2-ctl -d <by-id path> --list-formats-ext`.
+- **Camera preview shows "no frames — camera offline"** — with `use_ros2: true` the preview *subscribes* to a topic, so it needs the camera node publishing. Start the nodes (`./run_pipeline.sh` or `python -m vla_pipeline.vision.camera_node --role operator`), or test the raw device directly by setting that role's `use_ros2: false`. Confirm the device captures at all with `v4l2-ctl -d <by-id path> --list-formats-ext`.
 - **Two identical USB cameras swap on reboot** — use the stable `/dev/v4l/by-id/...-video-index0` symlink (the `-index0` node is the capture node) for `cameras.*.device` instead of a numeric index.
 - **llama-server fails to start** — check `third_party/llama.cpp/build/bin/llama-server` exists; rebuild with `./bootstrap.sh --skip-apt --skip-models`. On failure the last 20 lines of `logs/llama-server.log` are printed.
 - **llama-server segfaults with `cudaMalloc failed: out of memory`** — the KV cache overflowed the iGPU VRAM carve-out. Keep `llm.ctx_size` capped (2048) and `llm.parallel: 1`; never run the server with an uncapped context on Strix Halo. If still tight, lower `n_gpu_layers`, or raise the UMA/VRAM split in BIOS.

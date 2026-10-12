@@ -10,7 +10,7 @@
 Rules that keep the iGPU cheap to share with llama-server:
 
 * one EGL context, one render thread for all views (the wrist camera, the
-  mount camera, the free 3-D view, segmentation passes);
+  operator camera, the free 3-D view, segmentation passes);
 * the world lock is held only for ``mjv_updateScene`` (a CPU copy of the
   scene), never while the GPU draws;
 * all due views are drawn as tiles into one offscreen framebuffer and read

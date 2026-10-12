@@ -6,7 +6,7 @@
 # content has been reviewed and validated by the authors.
 
 """Fetch-block behavior: pick the block from its fixed location and hand it
-to the user, who is located with YOLOv26s-pose on the **mount camera**.
+to the user, who is located with YOLOv26s-pose on the **operator camera**.
 
 State machine: APPROACH → GRASP → LIFT → FIND (person) → EXTEND → RELEASE →
 HOME. The fixed block location is configured in joint space
@@ -57,7 +57,7 @@ def person_pan_target(pose: PoseEstimator, frame: np.ndarray) -> float | None:
 
 def find_person_pan(
     pose: PoseEstimator | None,
-    mount_camera,
+    operator_camera,
     arm: ArmClient,
     seek_s: float = 4.0,
     stop_check=None,
@@ -67,12 +67,12 @@ def find_person_pan(
     Returns ``(pan_deg, found)``; pan 0.0 / not-found when no camera or person.
     """
     pan, found = 0.0, False
-    if pose is None or mount_camera is None:
-        logger.info("[handoff] no mount camera - handing off straight ahead")
+    if pose is None or operator_camera is None:
+        logger.info("[handoff] no operator camera - handing off straight ahead")
         return pan, found
     deadline = time.time() + seek_s
     while time.time() < deadline and not (stop_check and stop_check()):
-        ok, frame = mount_camera.read()
+        ok, frame = operator_camera.read()
         if not ok:
             time.sleep(0.05)
             continue
@@ -91,12 +91,12 @@ def track_person_and_handoff(
     cfg_section: dict,
     arm: ArmClient,
     pose: PoseEstimator | None,
-    mount_camera,
+    operator_camera,
     lift_pose: dict,
     stop_check=None,
 ) -> None:
     """Shared EXTEND → RELEASE → HOME tail used by fetch_block and pick_place."""
-    pan, _found = find_person_pan(pose, mount_camera, arm, stop_check=stop_check)
+    pan, _found = find_person_pan(pose, operator_camera, arm, stop_check=stop_check)
 
     logger.info("[handoff] EXTEND toward person")
     arm.go_to(
@@ -124,7 +124,7 @@ def run_fetch_block(
     cfg: dict,
     arm: ArmClient,
     pose: PoseEstimator | None,
-    mount_camera,
+    operator_camera,
     stop_check=None,
 ) -> bool:
     """Execute the fetch sequence. Returns True on (best-effort) success."""
@@ -150,7 +150,7 @@ def run_fetch_block(
     if stopped():
         return False
 
-    track_person_and_handoff(fb, arm, pose, mount_camera, lift_pose, stop_check)
+    track_person_and_handoff(fb, arm, pose, operator_camera, lift_pose, stop_check)
     return True
 
 
@@ -183,10 +183,10 @@ def main() -> None:
         from vla_pipeline.vision.camera import make_camera
 
         pose = PoseEstimator(cfg, device=args.device)
-        cam = make_camera(cfg, "mount")
+        cam = make_camera(cfg, "operator")
         if not cam.ok():
             logger.warning(
-                "Mount camera unavailable - continuing without person finding."
+                "Operator camera unavailable - continuing without person finding."
             )
     try:
         ok = run_fetch_block(cfg, arm, pose, cam)

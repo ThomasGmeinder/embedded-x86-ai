@@ -15,7 +15,7 @@ Pipeline
    (:func:`vla_pipeline.vision.yolo_detect_npu.resolve_class`). Unknown names
    fail fast with a spoken explanation instead of guessing.
 2. **SCAN** - move to ``scan_pose`` and run YOLOv26s detection (NPU) on the
-   **arm camera** (falls back to the mount camera if the arm camera is down).
+   **arm camera** (falls back to the operator camera if the arm camera is down).
 3. **SERVO** - proportional visual servoing on ``shoulder_pan`` centers the
    detection horizontally (``servo_gain_pan`` deg per unit of normalized
    error) before committing to the approach.
@@ -23,7 +23,7 @@ Pipeline
    feedback-based loop the grip behavior uses
    (:func:`vla_pipeline.behaviors.grip.close_with_feedback`): effort/current
    when available, position stall + thin-object grace window otherwise.
-5. **HANDOFF** - lift, find the person with YOLO-pose on the mount camera,
+5. **HANDOFF** - lift, find the person with YOLO-pose on the operator camera,
    extend, release, home (shared with fetch_block).
 
 Failure handling: every stage reports through the ``feedback`` callback
@@ -90,7 +90,7 @@ def run_pick_place(
     detector: ObjectDetector,
     pose,  # PoseEstimator | None - person finding
     arm_camera,  # CameraClient | None
-    mount_camera,  # CameraClient | None
+    operator_camera,  # CameraClient | None
     object_name: str,
     shared_state: dict | None = None,
     stop_check=None,
@@ -110,12 +110,12 @@ def run_pick_place(
         say("What should I pick up? Try: pick up the ball.")
         return False
 
-    camera = arm_camera if (arm_camera and arm_camera.ok()) else mount_camera
+    camera = arm_camera if (arm_camera and arm_camera.ok()) else operator_camera
     if camera is None or not camera.ok():
         say("I can't see anything - both cameras are offline.")
         return False
     if camera is not arm_camera:
-        say("Arm camera is offline - using the mount camera (coarser aim).")
+        say("Arm camera is offline - using the operator camera (coarser aim).")
 
     # ---------------- SCAN ----------------
     say(f"Looking for a {object_name}.")
@@ -224,7 +224,7 @@ def run_pick_place(
     arm.go_to(lift_pose, duration_s=2.0, stop_check=stop_check)
     if stopped():
         return False
-    track_person_and_handoff(pp, arm, pose, mount_camera, lift_pose, stop_check)
+    track_person_and_handoff(pp, arm, pose, operator_camera, lift_pose, stop_check)
     say("Done.")
     return True
 
@@ -262,7 +262,7 @@ def main() -> None:
     detector = ObjectDetector(cfg, device=args.device)
     pose = PoseEstimator(cfg, device=args.device)
     arm_cam = make_camera(cfg, "arm")
-    mount_cam = make_camera(cfg, "mount")
+    operator_cam = make_camera(cfg, "operator")
     try:
         ok = run_pick_place(
             cfg,
@@ -270,7 +270,7 @@ def main() -> None:
             detector,
             pose,
             arm_cam,
-            mount_cam,
+            operator_cam,
             args.object,
             feedback=lambda m: print(f"{m}"),
         )
@@ -278,7 +278,7 @@ def main() -> None:
         raise SystemExit(0 if ok else 1)
     finally:
         arm_cam.close()
-        mount_cam.close()
+        operator_cam.close()
         arm.close()
 
 

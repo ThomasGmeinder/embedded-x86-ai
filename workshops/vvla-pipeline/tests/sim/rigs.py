@@ -25,7 +25,7 @@ import numpy as np
 
 from scripted import (
     Clock,
-    ScriptedMountCamera,
+    ScriptedOperatorCamera,
     ScriptedTranscripts,
     SignalBoard,
     SimDetector,
@@ -124,7 +124,7 @@ class _Rig:
         self.said: list[str] = []
         self.pose = TimelinePose(self.clock)
         self.hands = TimelineHands(self.clock, self._hand_obs_cls())
-        self.mount = ScriptedMountCamera(self.pose, self.hands, self.board)
+        self.operator = ScriptedOperatorCamera(self.pose, self.hands, self.board)
         self.world.reset()
         for obj in self.world.objects:
             self.world.hide(obj)
@@ -135,7 +135,7 @@ class _Rig:
 
             self.recorder = SimRecorder(
                 self.world, recorder_path, renderer=self.renderer,
-                user_source=self.mount.signals_pane, user_label="scripted user signals",
+                user_source=self.operator.signals_pane, user_label="scripted user signals",
                 title=title, load_threshold=self._load_threshold(),
             ).start()
         self._closers: list = []
@@ -263,7 +263,7 @@ class PipelineRig(_Rig):
         self._closers.append(self.parser.close)
         self.ctx = PipelineContext(
             cfg=self.cfg, arm=self.arm, pose=self.pose, detector=self.detector, hands=self.hands,
-            mount_camera=self.mount, arm_camera=self.arm_camera, headless=True,
+            operator_camera=self.operator, arm_camera=self.arm_camera, headless=True,
         )
         self.ctx.say = self.say
         self.dispatcher = None
@@ -338,7 +338,7 @@ class WorkshopRig(_Rig):
         self.parser = LlamaIntentParser(self.cfg, autostart=False)
         self._closers.append(self.parser.close)
         self.ctx = WorkshopContext(
-            cfg=self.cfg, arm=self.arm, pose=self.pose, hands=self.hands, camera=self.mount,
+            cfg=self.cfg, arm=self.arm, pose=self.pose, hands=self.hands, camera=self.operator,
             mapper=mapper_from_config(self.cfg), registry=build_registry(), headless=True,
         )
         self.ctx.say = self.say

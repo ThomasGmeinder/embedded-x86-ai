@@ -224,7 +224,7 @@ def main() -> None:
         cv2.VideoCapture(args.video)
         if args.video
         else cv2.VideoCapture(
-            args.cam if args.cam is not None else cfg["cameras"]["mount"]["device"]
+            args.cam if args.cam is not None else cfg["cameras"]["operator"]["device"]
         )
     )
     if not cap.isOpened():

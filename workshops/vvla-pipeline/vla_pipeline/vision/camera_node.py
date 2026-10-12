@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""ROS 2 camera node - one process per camera (mount / arm).
+"""ROS 2 camera node - one process per camera (operator / arm).
 
 Publishes ``sensor_msgs/Image`` (bgr8) on a configurable topic at a
 configurable rate, plus a ``std_msgs/Bool`` health flag so the orchestrator
@@ -30,9 +30,9 @@ crashing the launch.
 Independent test
 ----------------
     # Terminal 1
-    python -m vla_pipeline.vision.camera_node --role mount
+    python -m vla_pipeline.vision.camera_node --role operator
     # Terminal 2
-    ros2 topic hz /cameras/mount/image_raw
+    ros2 topic hz /cameras/operator/image_raw
 """
 
 from __future__ import annotations
@@ -186,7 +186,7 @@ def main() -> None:
     if not ROS2_AVAILABLE:
         raise SystemExit("rclpy not importable - source ROS 2 Jazzy before .venv.")
     parser = argparse.ArgumentParser(description="Camera publisher node")
-    parser.add_argument("--role", choices=["mount", "arm"], required=True)
+    parser.add_argument("--role", choices=["operator", "arm"], required=True)
     parser.add_argument("--config", default=None)
     args, ros_args = parser.parse_known_args()
 

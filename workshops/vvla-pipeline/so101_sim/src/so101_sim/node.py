@@ -131,7 +131,7 @@ def build_nodes(
     nodes.append(server)
     closers.append(server.destroy_node)
     for role, spec in (cfg.get("cameras") or {}).items():
-        if role not in ("arm", "mount") or not isinstance(spec, dict):
+        if role not in ("arm", "operator") or not isinstance(spec, dict):
             continue
         source = spec.get("source", "sim" if role == "arm" else "device")
         if source == "sim":

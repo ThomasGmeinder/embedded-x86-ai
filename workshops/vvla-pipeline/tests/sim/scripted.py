@@ -12,7 +12,7 @@ the behaviors, dispatcher and transports under test run unchanged:
 
 ``TimelinePose``        YOLO-pose ``infer`` / ``primary_person`` (keyframed people)
 ``TimelineHands``       MediaPipe ``HandTracker.process`` (keyframed pinch/roll/size)
-``ScriptedMountCamera`` the mount camera: paced frames showing the scripted
+``ScriptedOperatorCamera`` the operator camera: paced frames showing the scripted
                         person, plus the "signals" pane for the test video
 ``SimDetector``         YOLO ``ObjectDetector`` from the twin's segmentation
 ``ScriptedTranscripts`` Whisper: timed utterances into the dispatcher
@@ -231,7 +231,7 @@ class TimelineHands:
 
 
 # ---------------------------------------------------------------------------
-# mount camera + signals pane
+# operator camera + signals pane
 # ---------------------------------------------------------------------------
 class SignalBoard:
     """What the video's signals pane shows besides the person (thread-safe-ish)."""
@@ -252,10 +252,10 @@ class SignalBoard:
             self.intent = f"ignored ({data.get('reason')})"
 
 
-class ScriptedMountCamera:
-    """The mount camera: frames of the scripted person at ``fps`` (blocking read)."""
+class ScriptedOperatorCamera:
+    """The operator camera: frames of the scripted person at ``fps`` (blocking read)."""
 
-    role = "mount"
+    role = "operator"
 
     def __init__(self, pose: TimelinePose, hands: TimelineHands | None = None,
                  board: SignalBoard | None = None, width: int = 640, height: int = 480, fps: float = 30.0):

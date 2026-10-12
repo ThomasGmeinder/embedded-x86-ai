@@ -12,7 +12,7 @@ Same structure as :class:`vla_pipeline.vision.yolo_pose_npu.PoseEstimator`
 80-class COCO detection head ([1, 300, 6]: xyxy, score, class). Used by:
 
 - ``pick_place`` - locate the object named in the voice command ("pick up
-  the **ball**") in the arm/mount camera frame;
+  the **ball**") in the arm/operator camera frame;
 - ``grip`` - optional verification that an object is present between the jaws.
 
 Spoken names are matched through a synonym table (``"ball" → sports ball``)
@@ -280,7 +280,7 @@ def main() -> None:
         description="YOLOv26s detection on Ryzen AI NPU - component test"
     )
     parser.add_argument("--config", default=None)
-    parser.add_argument("--role", choices=["mount", "arm"], default="arm")
+    parser.add_argument("--role", choices=["operator", "arm"], default="arm")
     parser.add_argument(
         "--find", default=None, help="highlight matches for a spoken name"
     )

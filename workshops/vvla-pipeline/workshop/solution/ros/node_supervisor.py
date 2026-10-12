@@ -32,14 +32,14 @@ Two properties make this safe to run automatically:
 Python API (used by ``app.py``)::
 
     from ros.node_supervisor import NodeSupervisor
-    with NodeSupervisor(cfg, nodes=["arm", "camera_mount"]) as sup:
+    with NodeSupervisor(cfg, nodes=["arm", "camera_operator"]) as sup:
         ...   # the arm/camera server nodes are live for the duration
 
 CLI::
 
     python -m ros.node_supervisor              # all nodes, real hardware
     python -m ros.node_supervisor --mock       # intent node uses keyword brain
-    python -m ros.node_supervisor --only arm,camera_mount
+    python -m ros.node_supervisor --only arm,camera_operator
     python -m ros.node_supervisor --dry-run --synthetic --mock   # laptop/CI
     python -m ros.node_supervisor --digital-twin  # MuJoCo twin: arm + arm camera
 
@@ -68,7 +68,7 @@ PACKAGE_DIR = Path(__file__).resolve().parents[1]
 
 # Order matters: the arm parks safely and cameras are cheap; the intent node is
 # last because it may spin up llama-server.
-ALL_NODES = ("arm", "camera_mount", "camera_arm", "intent")
+ALL_NODES = ("arm", "camera_operator", "camera_arm", "intent")
 
 
 @dataclass
@@ -110,16 +110,16 @@ def _node_specs(
             ready_topic=robot.get("state_topic", "/so101/joint_state"),
             argv=["ros.arm_node", *(["--dry-run"] if dry_run else [])],
         ),
-        "camera_mount": _Child(
-            key="camera_mount",
-            label="mount camera",
-            ready_topic=(cams.get("mount") or {}).get(
-                "topic", "/cameras/mount/image_raw"
+        "camera_operator": _Child(
+            key="camera_operator",
+            label="operator camera",
+            ready_topic=(cams.get("operator") or {}).get(
+                "topic", "/cameras/operator/image_raw"
             ),
             argv=[
                 "ros.camera_node",
                 "--role",
-                "mount",
+                "operator",
                 *(["--synthetic"] if synthetic else []),
             ],
         ),

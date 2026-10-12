@@ -23,7 +23,7 @@ from so101_sim.render import shared_renderer
 
 
 class SimCamera:
-    """A twin camera role (``arm`` | ``mount`` | ``view``) or MJCF camera name."""
+    """A twin camera role (``arm`` | ``operator`` | ``view``) or MJCF camera name."""
 
     def __init__(
         self,

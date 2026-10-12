@@ -222,7 +222,7 @@ class MimicNorm:
     y_center: float = 0.5
     y_half: float = 0.30
     deadzone: float = 0.05  # |axis| below this snaps to 0 (kills jitter)
-    mirror: bool = True  # mount camera faces the user → mirror L/R
+    mirror: bool = True  # operator camera faces the user → mirror L/R
 
     # Depth from hand size. 0 neutral = auto-calibrate from the first
     # ``depth_baseline_frames`` valid readings. depth_rel_span = fractional size

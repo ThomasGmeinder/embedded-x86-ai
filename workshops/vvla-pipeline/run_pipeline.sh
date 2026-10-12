@@ -16,7 +16,7 @@
 #   ./run_pipeline.sh --headless          # no preview windows
 #
 # When robot.use_ros2: true in config/pipeline.yaml, starts the SO-101 server
-# node AND both camera nodes (mount + arm) in the background - equivalent to
+# node AND both camera nodes (operator + arm) in the background - equivalent to
 # `ros2 launch launch/strix_vla.launch.py` - then runs the orchestrator.
 set -eo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,7 +55,7 @@ cfg = load_config()
 robot = str(cfg["robot"].get("use_ros2", False)).lower()
 cams = cfg.get("cameras") or {}
 cam_ros2 = any(str((cams.get(r) or {}).get("use_ros2", False)).lower() == "true"
-               for r in ("mount", "arm"))
+               for r in ("operator", "arm"))
 print(f"{robot} {str(cam_ros2).lower()}")
 PY
 )"
@@ -119,7 +119,7 @@ elif [[ "$ROBOT_ROS2" == "true" ]]; then
 fi
 if [[ "$CAMERA_ROS2" == "true" ]]; then
   echo "Starting camera nodes..."
-  python -m vla_pipeline.vision.camera_node --role mount &
+  python -m vla_pipeline.vision.camera_node --role operator &
   PIDS+=($!)
   if [[ -z "$SIM" || -n "$DRY" || "$ROBOT_ROS2" != "true" ]]; then
     python -m vla_pipeline.vision.camera_node --role arm &

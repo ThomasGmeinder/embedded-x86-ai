@@ -186,7 +186,7 @@ def test_pick_up_the_ball(pipeline_rig):
     assert rig.trace.heights("ball").max() - z0 > 0.03, "ball never rose 3 cm"
     assert rig.trace.grasped_seconds("ball") >= 1.0, "ball not held for 1 s"
     assert not rig.world.is_grasped("ball"), "ball was never released at the handoff"
-    # handed toward the person on the left of the mount camera (mirrored -> +pan)
+    # handed toward the person on the left of the operator camera (mirrored -> +pan)
     _, pan = rig.trace.series("shoulder_pan")
     assert pan.max() > 10.0
 

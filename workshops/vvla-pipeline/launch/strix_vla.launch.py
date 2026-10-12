@@ -61,20 +61,20 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="false",
                 description="MuJoCo digital twin replaces the arm server + arm camera",
             ),
-            # Mount camera (faces the human) - /cameras/mount/image_raw
+            # Operator camera (faces the human) - /cameras/operator/image_raw
             ExecuteProcess(
                 cmd=[
                     PY,
                     "-m",
                     "vla_pipeline.vision.camera_node",
                     "--role",
-                    "mount",
+                    "operator",
                     "--config",
                     config,
                 ],
                 cwd=str(REPO_ROOT),
                 output="screen",
-                name="camera_mount",
+                name="camera_operator",
             ),
             # Arm camera (end effector) - /cameras/arm/image_raw
             ExecuteProcess(

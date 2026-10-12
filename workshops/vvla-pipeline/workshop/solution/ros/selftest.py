@@ -107,13 +107,13 @@ def check_cameras(rep: Reporter, cfg: dict) -> None:
     from ros.camera_client import Ros2Camera
     from ros.camera_node import CameraNode
 
-    defaults = dict(cfg["cameras"]["mount"])
+    defaults = dict(cfg["cameras"]["operator"])
     topic = defaults["topic"]
 
     ok_node, node = rep.run(
         "2.1",
         "camera node constructs (publishers + timer)",
-        lambda: CameraNode("mount", defaults, frame_source=SyntheticCamera()),
+        lambda: CameraNode("operator", defaults, frame_source=SyntheticCamera()),
         hint="create both publishers with best-effort/keep-last/depth-1 QoS "
         "and a timer at 1/fps driving self._tick",
     )
@@ -129,7 +129,7 @@ def check_cameras(rep: Reporter, cfg: dict) -> None:
             "2.3",
             "camera client constructs (subscription + executor)",
             lambda: Ros2Camera(
-                "mount", topic, stale_after_s=defaults.get("stale_after_s", 1.0)
+                "operator", topic, stale_after_s=defaults.get("stale_after_s", 1.0)
             ),
             hint="subscribe with BEST-EFFORT QoS - the node publishes "
             "best-effort, and a RELIABLE subscriber never matches it",
@@ -186,12 +186,12 @@ def check_cameras(rep: Reporter, cfg: dict) -> None:
                 depth=1,
             )
             probe.create_subscription(
-                Bool, "/cameras/mount/healthy", lambda m: seen.append(m.data), qos
+                Bool, "/cameras/operator/healthy", lambda m: seen.append(m.data), qos
             )
             r = _Runner(probe)
             got = _wait_for(lambda: seen, 2.0)
             r.stop()
-            assert got, _graph_feedback("/cameras/mount/healthy")
+            assert got, _graph_feedback("/cameras/operator/healthy")
             assert seen[-1] is True, "healthy flag is False with a live source"
 
         rep.run("2.2", "health flag rides alongside the frames", health)
@@ -464,11 +464,11 @@ def main() -> int:
     code = rep.summary()
     if not used_fake:
         print("\nOn-hardware next steps (each in its own terminal):")
-        print("  python -m ros.camera_node --role mount")
+        print("  python -m ros.camera_node --role operator")
         print("  python -m ros.arm_node --dry-run   (drop --dry-run for the real arm)")
         print("  python -m ros.intent_node --mock")
         print(
-            "  ros2 topic hz /cameras/mount/image_raw && ros2 topic echo /so101/joint_state"
+            "  ros2 topic hz /cameras/operator/image_raw && ros2 topic echo /so101/joint_state"
         )
     try:
         rclpy.shutdown()

@@ -42,9 +42,9 @@
         material="stand_mat" contype="0" conaffinity="0"/>
     </body>
 
-    <!-- user-facing mount camera: where the human stands, looking back at the arm -->
-    <body name="mount_look" pos="0.15 0 0.12"/>
-    <camera name="mount_cam" mode="targetbody" target="mount_look" pos="0.85 0 0.42"
+    <!-- user-facing operator camera: where the human stands, looking back at the arm -->
+    <body name="operator_look" pos="0.15 0 0.12"/>
+    <camera name="operator_cam" mode="targetbody" target="operator_look" pos="0.85 0 0.42"
       resolution="640 480" sensorsize="0.0048 0.0036" focal="0.0036 0.0036"/>
 
     <!-- default 3-D overview camera -->
