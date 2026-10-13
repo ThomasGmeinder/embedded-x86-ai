@@ -52,13 +52,52 @@ if [[ -z "${XILINX_XRT:-}" && -f /opt/xilinx/xrt/setup.sh ]]; then
   source /opt/xilinx/xrt/setup.sh >/dev/null
 fi
 
-# Strix (STX) NPU firmware xclbin ships inside the flexml wheel, which only the
-# Ryzen AI SDK venv has. XLNX_VART_FIRMWARE must point at a specific .xclbin
-# FILE (not the directory), else the EP errors with "xclbin is set to a directory".
-_RAI_SDK_VENV="${RYZEN_AI_VENV:-${RYZEN_AI_WHEELS:+${RYZEN_AI_WHEELS}/venv}}"
+# Strix (STX) NPU firmware xclbin ships inside the flexml wheel. The deployment
+# venv installs voe and flexmlrt, not that wheel, and install_ryzen_ai.sh is
+# what unpacks it into an SDK venv. XLNX_VART_FIRMWARE must point at a specific
+# .xclbin FILE (not the directory), else the EP errors with "xclbin is set to
+# a directory".
+_RAI_XCLBIN_REL="lib/${_RAI_PYVER}/site-packages/flexml/flexml_extras/data/ryzen-ai/stx"
 _RAI_XCLBIN_DIR="${_RAI_SP}/flexml/flexml_extras/data/ryzen-ai/stx"
-if [[ ! -d "$_RAI_XCLBIN_DIR" && -n "$_RAI_SDK_VENV" ]]; then
-  _RAI_XCLBIN_DIR="${_RAI_SDK_VENV}/lib/${_RAI_PYVER}/site-packages/flexml/flexml_extras/data/ryzen-ai/stx"
+_RAI_XCLBIN_CANDIDATES=()
+[[ -n "${RYZEN_AI_VENV:-}" ]] && _RAI_XCLBIN_CANDIDATES+=("${RYZEN_AI_VENV}/${_RAI_XCLBIN_REL}")
+if [[ -n "${RYZEN_AI_WHEELS:-}" ]]; then
+  _RAI_XCLBIN_CANDIDATES+=("${RYZEN_AI_WHEELS}/venv/${_RAI_XCLBIN_REL}" "${RYZEN_AI_WHEELS}/.venv/${_RAI_XCLBIN_REL}")
+fi
+for _d in "$HOME"/ryzen_ai*/venv "$HOME"/ryzen_ai*/.venv /opt/ryzen_ai*/venv /opt/ryzen_ai*/.venv; do
+  [[ -d "$_d" ]] && _RAI_XCLBIN_CANDIDATES+=("${_d}/${_RAI_XCLBIN_REL}")
+done
+# The deployment venv does not install the flexml wheel. Pull the small stx
+# firmware out of the wheel that matches the installed voe, then fall back to
+# an SDK venv (venv or .venv) if that wheel is not present.
+if ! compgen -G "${_RAI_XCLBIN_DIR}/*.xclbin" >/dev/null; then
+  _RAI_VOE_VER=""
+  _d="$(ls -d "${_RAI_SP}"/voe-*.dist-info 2>/dev/null | head -1 || true)"
+  [[ -n "$_d" ]] && _RAI_VOE_VER="$(basename "$_d" | sed -n 's/^voe-\(.*\)\.dist-info$/\1/p')"
+  _RAI_WHL=""
+  _RAI_WHEEL_DIRS=()
+  [[ -n "${RYZEN_AI_WHEELS:-}" ]] && _RAI_WHEEL_DIRS+=("$RYZEN_AI_WHEELS")
+  for _d in "$HOME"/ryzen_ai* /opt/ryzen_ai*; do
+    [[ -d "$_d" ]] && _RAI_WHEEL_DIRS+=("$_d")
+  done
+  if [[ -n "$_RAI_VOE_VER" ]]; then
+    for _d in "${_RAI_WHEEL_DIRS[@]}"; do
+      _x="$(ls "$_d"/flexml-"${_RAI_VOE_VER}"-*.whl 2>/dev/null | head -1 || true)"
+      [[ -n "$_x" ]] && _RAI_WHL="$_x" && break
+    done
+  fi
+  if [[ -n "$_RAI_WHL" ]]; then
+    mkdir -p "$_RAI_XCLBIN_DIR"
+    unzip -qo -j "$_RAI_WHL" 'flexml/flexml_extras/data/ryzen-ai/stx/*.xclbin' -d "$_RAI_XCLBIN_DIR"
+  fi
+fi
+if ! compgen -G "${_RAI_XCLBIN_DIR}/*.xclbin" >/dev/null; then
+  for _d in "${_RAI_XCLBIN_CANDIDATES[@]}"; do
+    if compgen -G "${_d}/*.xclbin" >/dev/null; then
+      _RAI_XCLBIN_DIR="$_d"
+      break
+    fi
+  done
 fi
 if [[ -z "${XLNX_VART_FIRMWARE:-}" && -d "$_RAI_XCLBIN_DIR" ]]; then
   if [[ -n "${RAI_XCLBIN:-}" && -f "$RAI_XCLBIN" ]]; then
@@ -83,7 +122,7 @@ if [[ ! -e "${_RAI_SP}/voe/lib/libxcompiler-core-without-symbol.so" ]]; then
   echo "[ryzen_ai_env] the NPU EP will fall back to CPU. Ensure the 'voe' wheel installed." >&2
 fi
 
-unset _RAI_VENV _RAI_SELF _RAI_PYVER _RAI_SP _RAI_CANDIDATES _d _RAI_SDK_VENV _RAI_XCLBIN_DIR _x
+unset _RAI_VENV _RAI_SELF _RAI_PYVER _RAI_SP _RAI_CANDIDATES _d _RAI_XCLBIN_REL _RAI_XCLBIN_CANDIDATES _RAI_XCLBIN_DIR _RAI_VOE_VER _RAI_WHL _RAI_WHEEL_DIRS _x
 
 # llama.cpp is built for gfx1100 on Strix (gfx1150/gfx1151); present the
 # iGPU as gfx1100 so its HIP kernels load instead of segfaulting. Affects

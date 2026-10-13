@@ -38,7 +38,8 @@ def main() -> int:
     if firmware and Path(firmware).is_file():
         print(f"  [ok] firmware: {firmware}")
     else:
-        fail("XLNX_VART_FIRMWARE does not name an existing xclbin", errors)
+        shown = firmware or "(unset)"
+        fail(f"XLNX_VART_FIRMWARE does not name an existing xclbin ({shown})", errors)
 
     try:
         import onnxruntime as ort

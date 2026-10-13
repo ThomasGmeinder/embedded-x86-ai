@@ -41,7 +41,7 @@
 #   --skip-apt      don't run apt (no sudo needed)
 #   --skip-llama    don't clone/build llama.cpp
 #   --skip-models   don't download models
-#   --skip-compile  don't compile NPU models (whisper/yolo) even if SDK venv present
+#   --skip-compile  don't compile the YOLO NPU models even if the SDK venv is present
 #   --cpu-only      no ROCm torch / no NPU wheels (dev machines; everything
 #                   still runs with --device cpu and --dry-run)
 # =============================================================================
@@ -95,15 +95,13 @@ for arg in "$@"; do
   esac
 done
 
-# Full SDK venv used only to compile models. bootstrap never installs this
-# multi-GB SDK into the repository. RYZEN_AI_VENV is also consumed by the
-# deployment runtime for native libraries not shipped by the light wheels.
+# Full SDK venv used only to compile models. It has to live inside the
+# same install as RYZEN_AI_WHEELS. bootstrap never searches other
+# ryzen_ai-* trees: ~/ryzen_ai-1.7.1 with no venv must not pick up
+# ~/ryzen_ai-1.8.0/.venv.
 RYZEN_AI_VENV="${RYZEN_AI_VENV:-${RYZEN_AI_COMPILE_VENV:-}}"
-if [[ -z "$RYZEN_AI_VENV" && -n "$RYZEN_AI_WHEELS" && -x "${RYZEN_AI_WHEELS}/venv/bin/python" ]]; then
-  RYZEN_AI_VENV="${RYZEN_AI_WHEELS}/venv"
-fi
-if [[ -z "$RYZEN_AI_VENV" ]]; then
-  for cand in "$HOME"/ryzen_ai*/venv /opt/ryzen_ai*/venv; do
+if [[ -z "$RYZEN_AI_VENV" && -n "$RYZEN_AI_WHEELS" ]]; then
+  for cand in "${RYZEN_AI_WHEELS}/venv" "${RYZEN_AI_WHEELS}/.venv"; do
     [[ -x "${cand}/bin/python" ]] && RYZEN_AI_VENV="$cand" && break
   done
 fi
@@ -550,22 +548,24 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 5b. Compile NPU models (whisper + yolo pose/detect) using the full Ryzen AI SDK venv
+# 5b. Compile the YOLO NPU models using the full Ryzen AI SDK venv
+# Whisper runs on the CPU (config whisper.device). Compile it only when
+# that field is set to npu: scripts/compile_npu_models.sh --only whisper
 # -----------------------------------------------------------------------------
 # The deployment .venv can RUN precompiled NPU models but cannot COMPILE them.
 # Compilation uses an externally installed full SDK venv. bootstrap never
 # copies the multi-GB SDK into this repository.
 if [[ "$SKIP_COMPILE" -eq 0 && "$CPU_ONLY" -eq 0 ]]; then
   if [[ -n "$RYZEN_AI_VENV" && -x "${RYZEN_AI_VENV}/bin/python" ]]; then
-    log "Compiling available NPU models with external SDK venv ${RYZEN_AI_VENV}"
-    RYZEN_AI_VENV="$RYZEN_AI_VENV" "${REPO_ROOT}/scripts/compile_npu_models.sh" \
-      || die "NPU compile failed. Retry with RYZEN_AI_VENV=$RYZEN_AI_VENV scripts/compile_npu_models.sh"
+    log "Compiling YOLO NPU models with external SDK venv ${RYZEN_AI_VENV}"
+    RYZEN_AI_VENV="$RYZEN_AI_VENV" "${REPO_ROOT}/scripts/compile_npu_models.sh" --only yolo \
+      || die "NPU compile failed. Retry with RYZEN_AI_VENV=$RYZEN_AI_VENV scripts/compile_npu_models.sh --only yolo"
     log "NPU compile complete - artifacts in ${REPO_ROOT}/cache"
   else
-    warn "No external Ryzen AI SDK venv found; skipping NPU compilation.
-       Install it outside the repo, for example:
-       ${RYZEN_AI_WHEELS:-/path/to/ryzen_ai}/install_ryzen_ai.sh -a yes -p \$HOME/ryzen_ai/venv
-       Then set RYZEN_AI_VENV and run scripts/compile_npu_models.sh."
+    die "No SDK venv in ${RYZEN_AI_WHEELS:-the Ryzen AI install}.
+       Create it there, for example:
+       cd ${RYZEN_AI_WHEELS:-~/ryzen_ai-1.7.1} && ./install_ryzen_ai.sh -a yes -p \$PWD/venv
+       bootstrap does not use a venv from a different ryzen_ai-* directory."
   fi
 else
   [[ "$SKIP_COMPILE" -eq 1 ]] && log "Skipping NPU model compilation (--skip-compile)"
@@ -624,9 +624,14 @@ except Exception as e:
 sys.exit(0 if ok else 1)
 PY
 
-if [[ "$EXPECT_NPU" -eq 1 ]]; then
+# --skip-compile is the first install pass: the venv and model downloads.
+# The NPU firmware check belongs to the later compile pass, after the YOLO
+# ONNX files exist. scripts/ryzen_ai_env.sh is sourced again there.
+if [[ "$EXPECT_NPU" -eq 1 && "$SKIP_COMPILE" -eq 0 ]]; then
   EXPECT_NPU=1 python "${REPO_ROOT}/scripts/verify_npu_stack.py" --preflight \
     || die "Ryzen AI NPU preflight failed; bootstrap is incomplete."
+elif [[ "$SKIP_COMPILE" -eq 1 ]]; then
+  log "Skipping NPU preflight (--skip-compile). It runs on the compile pass."
 fi
 
 cat <<EOF
