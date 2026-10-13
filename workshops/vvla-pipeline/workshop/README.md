@@ -97,10 +97,11 @@ The two AMD-specific lessons to hammer home during the session:
 1. **Verify the execution provider.** Requesting the NPU isn't getting it.
    A silent CPU fallback runs correctly and 10-30x slower. Session built ->
    provider printed. Always.
-2. **The NPU context budget.** Too many resident models for the concurrent
-   XDNA2 hardware contexts fails with `HW context creation unsuccessful`.
-   It's not a stale cache; move a model to CPU deliberately (camera-rate
-   vision stays on the NPU).
+2. **The NPU load order.** The first model a process opens on the NPU
+   sizes the buffers the others share while it stays open; a larger model
+   opened after it fails with `HW context creation unsuccessful`. It's not a
+   stale cache and not a full NPU - open the largest first and keep it open
+   (`models.vision.size_npu`).
 
 Generated dirs (`_artifacts/`, `logs/`, `__pycache__/`) are disposable -
 see `.gitignore`.

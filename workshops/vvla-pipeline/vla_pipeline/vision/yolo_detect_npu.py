@@ -36,7 +36,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from vla_pipeline.utils.config import load_config
-from vla_pipeline.utils.npu_session import build_session
+from vla_pipeline.utils.npu_session import build_session, size_npu
 from vla_pipeline.vision.yolo_pose_npu import head_rows, letterbox, nms_keep, xywh_to_xyxy
 
 logger = logging.getLogger(__name__)
@@ -204,6 +204,7 @@ class ObjectDetector:
         y = cfg["yolo_detect"]
         self.imgsz: int = int(y["imgsz"])
         self.conf_threshold: float = float(y["conf_threshold"])
+        size_npu(cfg, device)
         self.session = build_session(
             y["onnx"],
             device or y["device"],

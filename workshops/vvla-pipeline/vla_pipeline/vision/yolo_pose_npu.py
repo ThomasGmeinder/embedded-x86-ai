@@ -31,7 +31,7 @@ import cv2
 import numpy as np
 
 from vla_pipeline.utils.config import load_config
-from vla_pipeline.utils.npu_session import build_session
+from vla_pipeline.utils.npu_session import build_session, size_npu
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +138,7 @@ class PoseEstimator:
         self.imgsz: int = int(y["imgsz"])
         self.conf_threshold: float = float(y["conf_threshold"])
         self.kpt_threshold: float = float(y["kpt_threshold"])
+        size_npu(cfg, device)
         self.session = build_session(
             y["onnx"],
             device or y["device"],

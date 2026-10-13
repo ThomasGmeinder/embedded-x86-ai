@@ -81,7 +81,7 @@ flowchart TB
     classDef gate fill:#f5f5f5,stroke:#666,color:#000;
 ```
 
-Legend — <span title="NPU">🟧 NPU (VitisAI EP)</span> · 🟦 iGPU (ROCm) · 🟪 CPU · 🟩 behavior · 🟥 robot/transport. YOLO-pose and YOLO-detect target the NPU by default; Whisper defaults to CPU because the NPU cannot hold all four ONNX contexts at once. Whisper can instead use its compiled NPU cache when explicitly selected; see [Compute placement → NPU context budget](#npu-context-budget-important).
+Legend — <span title="NPU">🟧 NPU (VitisAI EP)</span> · 🟦 iGPU (ROCm) · 🟪 CPU · 🟩 behavior · 🟥 robot/transport. YOLO-pose and YOLO-detect target the NPU by default; Whisper defaults to CPU, where a short command transcribes in a few hundred ms. All four ONNX models fit on the NPU together, so Whisper can use its compiled NPU cache when explicitly selected; see [Compute placement → NPU load order](#npu-load-order-important).
 
 ## The robot's senses → an SO-101
 
@@ -160,25 +160,21 @@ Llama is constrained by `config/intent.gbnf` so it can only ever emit `{"command
 
 Every NPU session is built through one shared factory (`vla_pipeline/utils/npu_session.py`); each `device:` field is set per-model in `config/pipeline.yaml`, and a model set to `npu` falls back to CPU (with a warning) if the VitisAI runtime can't give it a context — so the pipeline never hard-crashes over NPU capacity and also runs (slowly) on a plain dev machine.
 
-### NPU context budget (important)
+### NPU load order (important)
 
-The XDNA2 NPU partition holds only a **limited number of concurrent hardware contexts** — in practice not enough for *all four* ONNX models (Whisper encoder + decoder count as two) to be resident at once. Whisper-base on the NPU works fine on its own, and the two YOLO models load together fine, but loading all four can exhaust the device with a `HW context creation unsuccessful / sub buffer size and offset` error.
+The models on the NPU share buffers within a process: the first NPU session a process opens **sizes them**, and they last until its last NPU session closes. A larger model opened while a smaller one is open fails with `HW context creation unsuccessful / sub buffer size and offset` — not a stale cache and not a full NPU. Opened largest first (Whisper encoder, Whisper decoder, YOLO-pose, YOLO-detect), **all four ONNX models fit** and run together.
 
-The default split keeps the **latency-sensitive vision** models on the NPU (pose runs at camera rate for mimicry) and runs **Whisper on CPU**, where a short command still transcribes in a few hundred ms — well under the VAD budget. If you'd rather keep Whisper on the NPU, move the YOLO models to CPU instead:
+`size_npu` in `vla_pipeline/utils/npu_session.py` takes care of it: before the first NPU session, it opens the largest model the config puts on the NPU and keeps it open for the life of the process (one extra session of that model), so the others can load in any order. `tests/npu` checks the orders the pipeline and the workshop use.
+
+The default split keeps the **latency-sensitive vision** models on the NPU (pose runs at camera rate for mimicry) and runs **Whisper on CPU**, where a short command still transcribes in a few hundred ms — well under the VAD budget. To put Whisper on the NPU as well:
 
 ```yaml
-# Recommended: vision on NPU, ASR on CPU
-whisper:    {device: cpu}
+whisper:    {device: npu}
 yolo_pose:  {device: npu}
 yolo_detect:{device: npu}
-
-# Alternative: ASR on NPU, vision on CPU (mimicry will be laggier)
-whisper:    {device: npu}
-yolo_pose:  {device: cpu}
-yolo_detect:{device: cpu}
 ```
 
-Because each model falls back to CPU when it can't get a context, you can also just leave them all on `npu` and read the startup logs to see what actually fit, then pin the `device:` fields deliberately.
+A model set to `npu` still falls back to CPU, with a warning, if the VitisAI runtime can't give it a session; the startup logs say where each model landed.
 
 ## ROS 2 nodes & topics
 
@@ -586,8 +582,8 @@ All tunables live in `config/pipeline.yaml`:
 
 - **"VitisAI EP not available — falling back to CPU"** — set `RYZEN_AI_WHEELS` and rerun `./bootstrap.sh`, and confirm the XDNA driver is loaded (`ls /dev/accel/`).
 - **torch sees no GPU** — add yourself to `render`/`video` groups (`sudo usermod -a -G render,video $USER`) and reboot.
-- **`HW context creation unsuccessful` / `sub buffer size and offset` when loading a model on the NPU** — the NPU ran out of concurrent hardware contexts; you're trying to keep too many models resident (Whisper encoder+decoder + both YOLO is usually one too many). This is *not* a stale cache — a model that works alone fails here only because others already hold the contexts. Move one off the NPU: set `whisper.device: cpu` (recommended) or the YOLO models to `cpu`. See **Compute placement → NPU context budget**.
-- **NPU model falls back to CPU unexpectedly** — check the startup logs; a model set to `npu` that can't get a context now logs a warning and runs on CPU rather than crashing. Pin `device:` fields deliberately once you see what fits.
+- **`HW context creation unsuccessful` / `sub buffer size and offset` when loading a model on the NPU** — a larger model was opened on the NPU while a smaller one was already open in the same process, and the first one sized the buffers they share. This is *not* a stale cache and *not* a full NPU. The pipeline and the workshop open the largest first (`size_npu`); code that builds its own sessions must open the largest first and keep it open. See **Compute placement → NPU load order**.
+- **NPU model falls back to CPU unexpectedly** — check the startup logs; a model set to `npu` that can't get a session logs a warning and runs on CPU rather than crashing.
 - **`EOFError` / "No calibration … not a TTY" from the server node** — the arm has no calibration file and the server is backgrounded (no terminal to run interactive calibration). Run `python -m vla_pipeline.robot.arm_interface --calibrate` once in the foreground; `run_pipeline.sh` now does this automatically before launch.
 - **Camera preview shows "no frames — camera offline"** — with `use_ros2: true` the preview *subscribes* to a topic, so it needs the camera node publishing. Start the nodes (`./run_pipeline.sh` or `python -m vla_pipeline.vision.camera_node --role operator`), or test the raw device directly by setting that role's `use_ros2: false`. Confirm the device captures at all with `v4l2-ctl -d <by-id path> --list-formats-ext`.
 - **Two identical USB cameras swap on reboot** — use the stable `/dev/v4l/by-id/...-video-index0` symlink (the `-index0` node is the capture node) for `cameras.*.device` instead of a numeric index.
