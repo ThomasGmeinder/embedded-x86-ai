@@ -266,10 +266,20 @@ def _xywh_to_xyxy(boxes: np.ndarray) -> np.ndarray:
 
 
 def _nms_keep(boxes: np.ndarray, scores: np.ndarray, iou: float = 0.45) -> np.ndarray:
-    """Indices kept by greedy NMS. Empty when nothing is above the boxes array."""
+    """Indices kept by greedy NMS. ``boxes`` are corner ``[x1, y1, x2, y2]``.
+
+    ``cv2.dnn.NMSBoxes`` takes top-left ``[x, y, width, height]``. Passing
+    the corners makes each box as wide as its right edge, so two people or
+    cups a few pixels apart collapse into one detection.
+    """
     if len(boxes) == 0:
         return np.empty(0, dtype=int)
-    picked = cv2.dnn.NMSBoxes(boxes.tolist(), scores.astype(float).tolist(), 0.0, iou)
+    tlwh = np.empty_like(boxes)
+    tlwh[:, 0] = boxes[:, 0]
+    tlwh[:, 1] = boxes[:, 1]
+    tlwh[:, 2] = boxes[:, 2] - boxes[:, 0]
+    tlwh[:, 3] = boxes[:, 3] - boxes[:, 1]
+    picked = cv2.dnn.NMSBoxes(tlwh.tolist(), scores.astype(float).tolist(), 0.0, iou)
     if picked is None or len(picked) == 0:
         return np.empty(0, dtype=int)
     return np.asarray(picked, dtype=int).reshape(-1)
