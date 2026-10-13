@@ -29,7 +29,7 @@ object detected", then relax the gripper to 30° and drop the pen. Fixes:
 
 While ``grip_lock`` is set, gesture-mimic holds that gripper position, so a
 gripped pencil stays gripped while the arm mirrors the human - e.g. to write.
-Saying "grip" again releases.
+``release`` opens the jaws.
 
 Independent test
 ----------------
@@ -46,7 +46,13 @@ import time
 
 import numpy as np
 
-from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR, ArmClient, DryRunArm, make_arm
+from vla_pipeline.robot.arm_interface import (
+    GRIPPER_CLOSED_FLOOR,
+    JOINT_LIMITS,
+    ArmClient,
+    DryRunArm,
+    make_arm,
+)
 from vla_pipeline.utils.config import load_config
 
 logger = logging.getLogger(__name__)
@@ -220,16 +226,8 @@ def run_grip(
     roi = g.get("jaw_roi", [0.30, 0.45, 0.70, 0.95])
     diff_thr = float(g.get("jaw_diff_threshold", 0.06))
 
-    # A repeated "grip" while locked = release.
     if shared_state.get("grip_lock"):
-        say("Releasing the object.")
-        shared_state.pop("grip_lock", None)
-        shared_state.pop("grip_lock_pos", None)
-        arm.go_to(
-            {**PRESENT_POSE, "gripper": 80.0}, duration_s=2.0, stop_check=stop_check
-        )
-        time.sleep(1.5)
-        arm.go_to_rest()
+        say("I'm already holding something. Say release to let go.")
         return False
 
     say("Place the object between the jaws.")
@@ -271,12 +269,26 @@ def run_grip(
         shared_state["grip_lock_pos"] = hold
         say(
             f"Object gripped at {hold:.1f} degrees - grip locked. "
-            "Say 'gesture mimic' to use it; say 'grip' again to release."
+            "Say 'gesture mimic' to use it; say 'release' to let go."
         )
     else:
         say("No object detected.")
         arm.go_to({"gripper": 30.0}, duration_s=0.8)
     return gripped
+
+
+def run_release(arm: ArmClient, shared_state: dict | None = None, stop_check=None, feedback=None) -> bool:
+    """Open the jaws where they are. The arm stays put, so a held object can
+    be taken or dropped."""
+    say = feedback or (lambda m: logger.info("[release] %s", m))
+    shared_state = shared_state if shared_state is not None else {}
+    shared_state.pop("grip_lock", None)
+    shared_state.pop("grip_lock_pos", None)
+    say("Released.")
+    arm.go_to(
+        {"gripper": JOINT_LIMITS["gripper"][1]}, duration_s=0.8, stop_check=stop_check,
+    )
+    return not (stop_check and stop_check())
 
 
 # =============================================================================

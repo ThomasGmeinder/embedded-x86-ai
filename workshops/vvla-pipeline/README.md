@@ -34,6 +34,7 @@ flowchart TB
         PICK["pick_place"]:::beh
         FETCH["fetch_block"]:::beh
         GRIP["grip"]:::beh
+        RELEASE["release"]:::beh
         OTHER["dance · wave · home"]:::beh
     end
 
@@ -54,7 +55,7 @@ flowchart TB
     ARMCAM --> DETECT
     ARMCAM --> GRIP
 
-    REG --> MIMIC & PICK & FETCH & GRIP & OTHER
+    REG --> MIMIC & PICK & FETCH & GRIP & RELEASE & OTHER
 
     POSE --> MIMIC
     HANDS --> MIMIC
@@ -127,8 +128,9 @@ Llama is constrained by `config/intent.gbnf` so it can only ever emit `{"command
 |---|---|---|
 | "mirror my arm", "copy my movements" | `gesture_mimic` | YOLO-pose tracks your wrist; a direct camera-frame mapping drives the arm joints to follow your hand (depth from MediaPipe hand size). MediaPipe tracks your thumb–index pinch → gripper. |
 | "pick up the ball", "grab the bottle and give it to me" | `pick_place` | YOLO-detect grounds the named object on the arm camera → pan-servo onto it → locate it on the table from its box → IK reach, straight down onto it → feedback grasp → lift it above the other objects and hold it out. The jaws stay closed. |
+| "release", "open", "drop it" | `release` | Llama maps the phrase to `release`. The jaws open where they are and the arm stays put, so the object can be taken or dropped. |
 | "fetch the block", "bring me the cube" | `fetch_block` | Approach the block at its taught pose → grasp → lift → find you (YOLO-pose) → extend → release → home. |
-| "hold this", "take this pencil" | `grip` | Closes until contact (current/stall + grace window), confirms with the arm camera, then **locks the grip**. A following `gesture_mimic` keeps the lock — so the arm can mimic you *while holding a pen to write*. Saying "grip" again releases. |
+| "hold this", "take this pencil" | `grip` | Closes until contact (current/stall + grace window), confirms with the arm camera, then **locks the grip**. A following `gesture_mimic` keeps the lock — so the arm can mimic you *while holding a pen to write*. |
 | "dance", "show me some moves" | `dance` | BPM-paced keyframe choreography. |
 | "wave at me", "say hi" | `wave` | Raises the arm and waves `behaviors.wave.cycles` times. |
 | "go home", "reset position" | `home` | Returns to the rest pose. |
@@ -300,7 +302,7 @@ strix-vla-pipeline/
     │   ├── gesture_mimic.py      # camera-frame mapping loop, grip-lock aware, --calibrate-depth/-grip
     │   ├── pick_place.py         # voice-grounded pick (locate on the table + IK reach) → hold it out
     │   ├── fetch_block.py        # taught-pose fetch; exports the handoff helpers
-    │   ├── grip.py               # feedback close (current/stall/grace) + camera verify
+    │   ├── grip.py               # feedback close (current/stall/grace) + camera verify; release opens the jaws in place
     │   ├── dance.py              # keyframe moves, BPM pacing
     │   └── simple.py             # wave, home
     └── utils/
@@ -573,9 +575,9 @@ All tunables live in `config/pipeline.yaml`:
 ## Architecture notes
 
 - **Transport-agnostic behaviors.** Behaviors only ever talk to the `ArmClient` ABC and the `CameraClient` ABC. The same behavior code runs over ROS 2 topics (`Ros2ArmClient` → `So101ServerNode`, which exclusively owns the Feetech bus), direct serial (`DirectArm` → LeRobot `SO101Follower`), or `DryRunArm` for development; cameras likewise over ROS 2 topics or direct V4L2.
-- **Grammar-constrained intent.** llama.cpp's GBNF support means the LLM physically cannot emit anything but one of the command JSONs (`gesture_mimic`, `fetch_block`, `pick_place`, `dance`, `grip`, `wave`, `home`, `stop`, `unknown`) with an `object` slot.
+- **Grammar-constrained intent.** llama.cpp's GBNF support means the LLM physically cannot emit anything but one of the command JSONs (`gesture_mimic`, `fetch_block`, `pick_place`, `dance`, `grip`, `release`, `wave`, `home`, `stop`, `unknown`) with an `object` slot.
 - **Registry dispatch.** The orchestrator never hardcodes behaviors; handlers register on a `CommandRegistry`, so adding a command never touches `main.py`'s dispatch loop.
-- **Grip-lock.** `grip` records the contact position in shared state; `gesture_mimic` checks that state every tick and pins the gripper joint to the locked position while the rest of the arm mimics — releasing only when `grip` is invoked again.
+- **Grip-lock.** `grip` records the contact position in shared state; `gesture_mimic` checks that state every tick and pins the gripper joint to the locked position while the rest of the arm mimics. `release` ("release", "open", "drop it") clears the lock and opens the jaws where they are.
 - **Safety.** All joint targets pass through `clamp_joints` against per-joint limits; `max_relative_target` bounds per-tick deltas at the LeRobot layer; "stop" is a keyword fast path that sets a shared stop event polled every control tick (including inside `go_to` interpolation); `q` in any preview window and Ctrl-C are equivalent; the server node parks the arm at `REST_POSE` on any shutdown path; crashed behaviors are caught by the orchestrator, which parks the arm.
 
 ## Troubleshooting

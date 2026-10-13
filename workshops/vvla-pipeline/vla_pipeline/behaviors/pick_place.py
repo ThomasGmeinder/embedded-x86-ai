@@ -36,7 +36,7 @@ Pipeline
    otherwise; then settle and check the grip holds.
 6. **OFFER** - lift the grasp point above the other props and hold the
    object out toward the operator. The jaws stay closed, so the object can
-   be taken or left.
+   be taken or left. "release", "open", or "drop it" opens the jaws.
 
 Failure handling: every stage reports through the ``feedback`` callback
 ("I can't see a ball", "I see two cups, taking the clearest one", "the grasp

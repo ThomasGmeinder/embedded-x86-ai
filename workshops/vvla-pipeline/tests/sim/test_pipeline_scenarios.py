@@ -67,6 +67,19 @@ def test_wave(pipeline_rig, mock_llm):
     _assert_at(rig, _rest())
 
 
+def test_release_opens_the_jaws(pipeline_rig):
+    rig = pipeline_rig
+    rig.ctx.shared_state["grip_lock"] = True
+    rig.ctx.shared_state["grip_lock_pos"] = 40.0
+    rig.run([(0.3, "drop it"), (2.5, "open"), (5.0, "release")], timeout=20)
+
+    assert len(rig.event_times("behavior_end", intent="release", ok=True)) == 3
+    assert rig.said_any("Released")
+    assert rig.joints()["gripper"] > 80.0
+    assert not rig.ctx.shared_state.get("grip_lock")
+    _assert_at(rig, _rest())
+
+
 def test_home_from_anywhere(pipeline_rig):
     rig = pipeline_rig
     rig.world.reset({"shoulder_pan": 40.0, "shoulder_lift": -40.0, "elbow_flex": 50.0, "wrist_flex": 20.0,

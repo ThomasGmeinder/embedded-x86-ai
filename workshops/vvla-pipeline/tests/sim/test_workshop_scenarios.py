@@ -56,6 +56,33 @@ def _assert_held_out(rig, body: str, spoken: str, z0: float):
     _assert_others_in_place(rig, body)
 
 
+def test_workshop_release_opens_the_jaws(workshop_rig):
+    from common.motion import REST_POSE
+
+    rig = workshop_rig
+    rig.ctx.shared_state["grip_lock"] = True
+    rig.ctx.shared_state["grip_lock_pos"] = 40.0
+    rig.run([(0.3, "drop it")], timeout=20)
+
+    from common.fixtures import offline_parse_text
+
+    for phrase in ("release", "open", "drop it", "let go"):
+        assert offline_parse_text(phrase)["command"] == "release", phrase
+    assert offline_parse_text("pick up the ball")["command"] == "pick_place"
+    parsed = [data for _, event, data in rig.events if event == "parsed" and data.get("intent") == "release"]
+    assert len(parsed) == 1, parsed
+    assert rig.said_any("Released")
+    assert rig.joints()["gripper"] > 80.0
+    assert not rig.ctx.shared_state.get("grip_lock")
+    cur = rig.joints()
+    off = {
+        k: round(cur[k] - REST_POSE[k], 1)
+        for k in ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
+        if abs(cur[k] - REST_POSE[k]) > 4.0
+    }
+    assert not off, off
+
+
 @pytest.mark.parametrize("spot", [None, (0.22, -0.04)], ids=["default", "near"])
 def test_workshop_pick_up_the_ball(workshop_rig, caplog, spot):
     rig = workshop_rig

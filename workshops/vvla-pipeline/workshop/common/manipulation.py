@@ -12,13 +12,13 @@ The pipeline's remaining voice commands, in the workshop's handler shape
 
 - **grip** - present the open jaws, close until contact (gripper current, or
   a position stall), confirm with the arm camera, lock the grip. A following
-  gesture_mimic keeps the lock; "grip" again releases.
+  gesture_mimic keeps the lock. "release", "open", or "drop it" opens the jaws.
 - **pick_place** - ground the spoken object name to a COCO class, find it with
   YOLO detection on the arm camera, line it up with the pan joint, locate it
   on the table from its box and reach it with IK
   (``so101_sim.kinematics``; the taught poses when that isn't possible),
   grasp, lift it above the other objects, and hold it out. The jaws stay
-  closed.
+  closed until "release", "open", or "drop it".
 - **fetch_block** - fetch the block from its taught pose, then hand it over.
 
 The handover finds you with YOLO-pose on the operator camera, aims the pan
@@ -168,12 +168,7 @@ def run_grip(ctx, cmd=None, wait_s: float = 4.0) -> bool:
     cam = ctx.arm_camera
 
     if state.get("grip_lock"):
-        ctx.say("Releasing the object.")
-        state.pop("grip_lock", None)
-        state.pop("grip_lock_pos", None)
-        ctx.arm.go_to({**PRESENT_POSE, "gripper": 80.0}, duration_s=2.0, stop_check=ctx.stop_check)
-        time.sleep(1.5)
-        ctx.arm.go_to_rest()
+        ctx.say("I'm already holding something. Say release to let go.")
         return False
 
     ctx.say("Place the object between the jaws.")
@@ -209,7 +204,7 @@ def run_grip(ctx, cmd=None, wait_s: float = 4.0) -> bool:
         state["grip_lock_pos"] = hold
         ctx.say(
             f"Object gripped at {hold:.1f} degrees - grip locked. "
-            "Say 'gesture mimic' to use it; say 'grip' again to release."
+            "Say 'gesture mimic' to use it; say 'release' to let go."
         )
     else:
         ctx.say("No object detected.")
@@ -917,8 +912,20 @@ def _settle_grip(arm, g: dict) -> float:
     return hold
 
 
+def run_release(ctx, cmd=None) -> bool:
+    """Open the jaws where they are. The arm stays put."""
+    ctx.shared_state.pop("grip_lock", None)
+    ctx.shared_state.pop("grip_lock_pos", None)
+    ctx.say("Released.")
+    ctx.arm.go_to(
+        {"gripper": JOINT_LIMITS["gripper"][1]}, duration_s=0.8, stop_check=ctx.stop_check,
+    )
+    return not ctx.stop_check()
+
+
 def register_manipulation(registry) -> None:
-    """Add grip, pick_place and fetch_block to ``registry``."""
+    """Add grip, release, pick_place and fetch_block to ``registry``."""
     registry.add(Intent.GRIP, run_grip)
+    registry.add(Intent.RELEASE, run_release)
     registry.add(Intent.PICK_PLACE, run_pick_place)
     registry.add(Intent.FETCH_BLOCK, run_fetch_block)

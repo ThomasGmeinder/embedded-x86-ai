@@ -153,6 +153,19 @@ def _h_dance(ctx: PipelineContext, cmd: ParsedCommand) -> None:
     run_dance(ctx.cfg, ctx.arm, stop_check=ctx.stop_check)
 
 
+@registry.register(Intent.RELEASE)
+def _h_release(ctx: PipelineContext, cmd: ParsedCommand) -> None:
+    """Dispatch to :func:`run_release`."""
+    from vla_pipeline.behaviors.grip import run_release
+
+    run_release(
+        ctx.arm,
+        shared_state=ctx.shared_state,
+        stop_check=ctx.stop_check,
+        feedback=ctx.say,
+    )
+
+
 @registry.register(Intent.GRIP)
 def _h_grip(ctx: PipelineContext, cmd: ParsedCommand) -> None:
     """Dispatch to :func:`run_grip`."""
