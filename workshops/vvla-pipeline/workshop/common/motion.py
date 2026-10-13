@@ -80,6 +80,12 @@ _PIPELINE_BACKSTOP = {
     "wrist_roll": (-100.0, 100.0),
 }
 
+# Standing grasps are solved and sent in this envelope. The workshop's 67.5°
+# wrist cap deletes the only approach that stays outside a bottle; the
+# pipeline backstop is the range that approach fits. Gripper stays on the
+# calibrated workshop span. Other behaviors keep JOINT_LIMITS.
+GRASP_LIMITS = {**JOINT_LIMITS, **_PIPELINE_BACKSTOP}
+
 _LIVE_LIMIT_SCALE = 1.25
 
 
@@ -148,6 +154,11 @@ class ArmClient(ABC):
     # the same behavior as the real pipeline's arm interface.
     _direct_goal: bool = False
 
+    # Limits for the command currently being sent. None keeps JOINT_LIMITS.
+    # A standing grasp sets this to GRASP_LIMITS for the move, so send_joints
+    # does not pull a 90° wrist back to the workshop's 67.5° cap.
+    _send_limits: dict | None = None
+
     # True when commands (may) reach real hardware. Gesture mimic uses this to
     # decide whether the 25%-extended LIVE_MIMIC_LIMITS envelope applies;
     # simulated arms stay on the base JOINT_LIMITS.
@@ -166,7 +177,8 @@ class ArmClient(ABC):
         return None
 
     def go_to(
-        self, target: dict, duration_s: float = 2.0, fps: float = 30.0, stop_check=None
+        self, target: dict, duration_s: float = 2.0, fps: float = 30.0, stop_check=None,
+        limits: dict | None = None,
     ) -> None:
         """Move to ``target`` (partial dicts allowed).
 
@@ -180,19 +192,25 @@ class ArmClient(ABC):
         """
         if self._direct_goal:
             return self.move_to(
-                target, timeout_s=max(duration_s * 2.0, 2.0), stop_check=stop_check
+                target, timeout_s=max(duration_s * 2.0, 2.0), stop_check=stop_check,
+                limits=limits,
             )
-        start = self.get_joints()
-        target = clamp_joints({**start, **target})
-        steps = max(int(duration_s * fps), 1)
-        deltas = {k: target[k] - start[k] for k in target}
-        interval = 1.0 / fps
-        for i in range(1, steps + 1):
-            if stop_check and stop_check():
-                return
-            a = i / steps
-            self.send_joints({k: start[k] + a * deltas[k] for k in target})
-            time.sleep(interval)
+        previous = self._send_limits
+        self._send_limits = limits
+        try:
+            start = self.get_joints()
+            target = clamp_joints({**start, **target}, limits)
+            steps = max(int(duration_s * fps), 1)
+            deltas = {k: target[k] - start[k] for k in target}
+            interval = 1.0 / fps
+            for i in range(1, steps + 1):
+                if stop_check and stop_check():
+                    return
+                a = i / steps
+                self.send_joints({k: start[k] + a * deltas[k] for k in target})
+                time.sleep(interval)
+        finally:
+            self._send_limits = previous
 
     def move_to(
         self,
@@ -204,6 +222,7 @@ class ArmClient(ABC):
         settle_dwell_s: float = 0.35,
         gripper_settle_s: float = 1.0,
         stop_check=None,
+        limits: dict | None = None,
     ) -> None:
         """Send an absolute goal ONCE and wait until the arm settles.
 
@@ -214,44 +233,49 @@ class ArmClient(ABC):
         reads exactly on target). The gripper's open-fraction readback needn't converge,
         so a gripper-only move just gets ``gripper_settle_s`` to travel. ``stop_check`` aborts and halts the arm where it is.
         """
-        target = clamp_joints(target)
-        self.send_joints(target)
-        wait = [k for k in target if k != "gripper"]
-        if not wait:  # gripper-only move
-            time.sleep(gripper_settle_s)
-            return
-
-        def _dist() -> float:
-            cur = self.get_joints()
-            return max(
-                (abs(cur.get(k, target[k]) - target[k]) for k in wait), default=0.0
-            )
-
-        deadline = time.time() + timeout_s
-        interval = 1.0 / poll_hz
-        ref_dist, ref_time, started = _dist(), time.time(), False
-        while time.time() < deadline:
-            if stop_check and stop_check():
-                try:  # halt here, don't finish the move
-                    self.send_joints(self.get_joints())
-                except Exception:
-                    pass
+        previous = self._send_limits
+        self._send_limits = limits
+        try:
+            target = clamp_joints(target, limits)
+            self.send_joints(target)
+            wait = [k for k in target if k != "gripper"]
+            if not wait:  # gripper-only move
+                time.sleep(gripper_settle_s)
                 return
-            time.sleep(interval)
-            dist = _dist()
-            if dist <= tolerance_deg:  # arrived
-                return
-            if ref_dist - dist > progress_eps_deg:
-                started = True  # still closing in - keep waiting
-                ref_dist, ref_time = dist, time.time()
-            elif time.time() - ref_time >= settle_dwell_s:
-                if started:  # moved, then stopped: settled
+
+            def _dist() -> float:
+                cur = self.get_joints()
+                return max(
+                    (abs(cur.get(k, target[k]) - target[k]) for k in wait), default=0.0
+                )
+
+            deadline = time.time() + timeout_s
+            interval = 1.0 / poll_hz
+            ref_dist, ref_time, started = _dist(), time.time(), False
+            while time.time() < deadline:
+                if stop_check and stop_check():
+                    try:  # halt here, don't finish the move
+                        self.send_joints(self.get_joints())
+                    except Exception:
+                        pass
                     return
-                self.send_joints(target)  # never moved: command may have
-                ref_dist, ref_time = (
-                    dist,
-                    time.time(),
-                )  # dropped - resend once per window
+                time.sleep(interval)
+                dist = _dist()
+                if dist <= tolerance_deg:  # arrived
+                    return
+                if ref_dist - dist > progress_eps_deg:
+                    started = True  # still closing in - keep waiting
+                    ref_dist, ref_time = dist, time.time()
+                elif time.time() - ref_time >= settle_dwell_s:
+                    if started:  # moved, then stopped: settled
+                        return
+                    self.send_joints(target)  # never moved: command may have
+                    ref_dist, ref_time = (
+                        dist,
+                        time.time(),
+                    )  # dropped - resend once per window
+        finally:
+            self._send_limits = previous
 
     def go_to_rest(self, duration_s: float = 3.0, stop_check=None) -> None:
         """Bring the whole arm to :data:`REST_POSE`."""
@@ -271,7 +295,7 @@ class DryRunArm(ArmClient):
         self._verbose = verbose
 
     def send_joints(self, joints: dict) -> None:
-        self._joints.update(clamp_joints(joints))
+        self._joints.update(clamp_joints(joints, self._send_limits))
         if self._verbose:
             pretty = " ".join(f"{k}={v:6.1f}" for k, v in self._joints.items())
             print(f"\r[dry-run] {pretty}", end="", flush=True)
@@ -348,7 +372,7 @@ class LeRobotArm(ArmClient):
             )
 
     def send_joints(self, joints: dict) -> None:
-        joints = clamp_joints(joints)
+        joints = clamp_joints(joints, self._send_limits)
         self._robot.send_action({f"{k}.pos": v for k, v in joints.items()})
 
     def get_joints(self) -> dict:
