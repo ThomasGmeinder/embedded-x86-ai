@@ -318,25 +318,30 @@ Install Ubuntu 24.04.4. Install Ryzen AI 1.7.1 once, outside this repository. Un
 
 ```bash
 mkdir -p ~/ryzen_ai-1.7.1
-cp ~/Downloads/ryzen_ai-1.7.1.tgz ~/ryzen_ai-1.7.1/
 cd ~/ryzen_ai-1.7.1
-tar -xvzf ryzen_ai-1.7.1.tgz
+tar -xvzf ~/Downloads/ryzen_ai-1.7.1.tgz
 ./install_ryzen_ai.sh -a yes -p $PWD/venv
 source /opt/xilinx/xrt/setup.sh
 ```
 
-`$PWD/venv` is `~/ryzen_ai-1.7.1/venv`. Then clone this repository once. The NPU compile cache is not in git. `./bootstrap.sh` exports the YOLO ONNX files and, when the SDK venv is present, compiles them:
+`$PWD/venv` is `~/ryzen_ai-1.7.1/venv`. Then clone this repository once. The NPU compile cache is not in git. Ultralytics is AGPL-3.0, so `./bootstrap.sh` does not install it or export the YOLO ONNX files. Export them with `scripts/export_yolo26s_pose.py` and `scripts/export_yolo26s_detect.py`, then compile:
 
 ```bash
 git clone https://github.com/amd/embedded-x86-ai
 export RYZEN_AI_WHEELS=~/ryzen_ai-1.7.1
 cd embedded-x86-ai/workshops/vvla-pipeline
-./bootstrap.sh
+./bootstrap.sh --skip-compile
+source .venv/bin/activate
+pip install 'ultralytics' 'numpy==1.26.4' 'opencv-contrib-python==4.11.0.86'
+python scripts/export_yolo26s_pose.py
+python scripts/export_yolo26s_detect.py
+deactivate
+./bootstrap.sh --skip-apt --skip-llama --skip-models
 source .venv/bin/activate
 source scripts/ryzen_ai_env.sh
 ```
 
-`./bootstrap.sh` creates `.venv`, downloads Whisper and the Llama GGUF, and exports `models/yolo26s-pose/yolo26s-pose.onnx` and `models/yolo26s/yolo26s.onnx`. It then compiles Whisper, YOLO-pose, and YOLO-detect into `cache/`. Those `.rai` files stay on the machine. Do not clone this repository again inside the workshop, and do not unpack the SDK into the repository.
+The first `bootstrap.sh` creates `.venv` and downloads the Whisper ONNX and the Llama GGUF. `--skip-compile` is only for that pass, because the YOLO ONNX files do not exist yet. The `pip install` and the two `scripts/export_yolo26s_*.py` commands export the YOLO ONNX files. The second `bootstrap.sh` compiles the NPU models into `cache/`. Those `.rai` files stay on the machine. Do not clone this repository again inside the workshop, and do not unpack the SDK into the repository.
 
 The NPU compile is the slow part of bootstrap. It runs once per model, and the log scrolls through VAIML tiling output the whole time. On a Ryzen AI APU with Ryzen AI SW 1.7.1, YOLOv26s-pose took about 16 minutes and YOLOv26s-detect about 3 minutes. That run reused an existing Whisper cache, so the two YOLO models took about 20 minutes. Whisper adds its own compile time on a first run. Once `cache/` holds a model's `.rai`, later sessions load it in about a second.
 
@@ -356,7 +361,7 @@ export RYZEN_AI_WHEELS=~/ryzen_ai-1.7.1
 5. Ryzen AI onnxruntime (VitisAI EP) from `$RYZEN_AI_WHEELS`
 6. LeRobot 0.5.2 `[feetech]` from source → `third_party/lerobot`
 7. llama.cpp HIP build (`-DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1100`, `llama-server`) → `third_party/llama.cpp`
-8. Model downloads: Llama-3.2-3B-Instruct Q4_K_M GGUF, AMD NPU-optimized Whisper-base ONNX, and the YOLOv26s-pose and YOLOv26s-detect ONNX exports (`scripts/export_yolo26s_pose.py`, `scripts/export_yolo26s_detect.py`).
+8. Model downloads: Llama-3.2-3B-Instruct Q4_K_M GGUF and Whisper-base ONNX. YOLO ONNX is exported with `python scripts/export_yolo26s_pose.py` and `python scripts/export_yolo26s_detect.py` (see the install steps above).
 9. Installs ROS2 Jazzy if it doesn't exist
 
 Flags: `--skip-apt`, `--skip-llama`, `--skip-models`, `--skip-compile`,

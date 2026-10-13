@@ -29,17 +29,18 @@
 #          LAST (section 4c) so nothing clobbers it; ROCm is never used for
 #          onnxruntime (llama.cpp + torch only)
 #   4. Builds llama.cpp with HIP/ROCm for the DETECTED arch into third_party/
-#   5. Downloads / exports the models:
-#        - Whisper-base → ONNX encoder/decoder      (scripts/export_whisper_onnx.py)
-#        - YOLOv26s-pose → ONNX FP32                (scripts/export_yolo26s_pose.py)
-#        - YOLOv26s-detect → ONNX FP32              (scripts/export_yolo26s_detect.py)
+#   5. Downloads the models:
+#        - Whisper-base ONNX encoder/decoder
 #        - Llama-3.2-3B-Instruct GGUF Q4_K_M        (hf download)
+#      YOLO ONNX export is manual (Ultralytics is AGPL-3.0). See the README:
+#        python scripts/export_yolo26s_pose.py
+#        python scripts/export_yolo26s_detect.py
 #   6. Verifies the environment and prints next steps
 #
 # Flags:
 #   --skip-apt      don't run apt (no sudo needed)
 #   --skip-llama    don't clone/build llama.cpp
-#   --skip-models   don't download/export models
+#   --skip-models   don't download models
 #   --skip-compile  don't compile NPU models (whisper/yolo) even if SDK venv present
 #   --cpu-only      no ROCm torch / no NPU wheels (dev machines; everything
 #                   still runs with --device cpu and --dry-run)
@@ -419,22 +420,6 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 4a. ultralytics, only when a YOLO ONNX file is still missing
-# -----------------------------------------------------------------------------
-# Not in requirements.txt: it is only needed to export the YOLO checkpoints.
-# The install can upgrade numpy to 2.x, swap in a headless OpenCV, and pull
-# stock onnxruntime over the VitisAI wheel. Sections 4b-4d re-pin those
-# immediately afterwards. The export scripts set YOLO_AUTOINSTALL=false.
-if [[ "$SKIP_MODELS" -eq 0 ]] && {
-  [[ ! -f "${MODELS_DIR}/yolo26s-pose/yolo26s-pose.onnx" ]] ||
-  [[ ! -f "${MODELS_DIR}/yolo26s/yolo26s.onnx" ]]
-}; then
-  log "Installing ultralytics to export the YOLO ONNX models"
-  uv pip install 'ultralytics' \
-    || die "Could not install ultralytics, required to export the YOLO ONNX models."
-fi
-
-# -----------------------------------------------------------------------------
 # 4b. Enforce numpy < 2 and huggingface-hub < 1.0
 # -----------------------------------------------------------------------------
 # onnxruntime and the AMD/Ryzen wheels are compiled against the numpy 1.x ABI;
@@ -551,14 +536,7 @@ print("encoder:", enc)
 print("decoder:", dec)
 PY
 
-  log "Exporting YOLOv26s-pose to ONNX FP32 (scripts/export_yolo26s_pose.py)"
-  pushd "$REPO_ROOT" >/dev/null
-  python scripts/export_yolo26s_pose.py \
-    || die "YOLOv26s-pose ONNX export failed. From ${REPO_ROOT}: python scripts/export_yolo26s_pose.py"
-  log "Exporting YOLOv26s-detect to ONNX FP32 (scripts/export_yolo26s_detect.py)"
-  python scripts/export_yolo26s_detect.py \
-    || die "YOLOv26s-detect ONNX export failed. From ${REPO_ROOT}: python scripts/export_yolo26s_detect.py"
-  popd >/dev/null
+  log "YOLO ONNX export is a manual setup step — see README"
 
   log "Downloading Llama-3.2-3B-Instruct GGUF (Q4_K_M)"
   if [[ -f "${LLAMA_OUT_DIR}/${LLAMA_GGUF_FILE}" ]]; then

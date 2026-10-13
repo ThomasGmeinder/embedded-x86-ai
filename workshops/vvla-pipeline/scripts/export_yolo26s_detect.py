@@ -9,8 +9,9 @@
 
 Mirror of ``scripts/export_yolo26s_pose.py`` for the 80-class detection
 checkpoint used by voice pick-and-place
-(``vla_pipeline.vision.yolo_detect_npu``). Safe to re-run (skips if output
-exists).
+(``vla_pipeline.vision.yolo_detect_npu``). Manual setup step: bootstrap.sh
+does not run this, because Ultralytics is AGPL-3.0. Safe to re-run (skips
+if output exists).
 
     python scripts/export_yolo26s_detect.py [--out models/yolo26s]
 
