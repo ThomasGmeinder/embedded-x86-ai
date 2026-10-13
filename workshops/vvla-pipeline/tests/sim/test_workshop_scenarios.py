@@ -41,6 +41,21 @@ def _assert_others_in_place(rig, handled: str):
     assert not moved, f"the arm moved objects it was not asked to pick up (m): {moved}"
 
 
+def _assert_held_out(rig, body: str, spoken: str, z0: float):
+    assert rig.said_any(f"Got the {spoken}"), f"robot said {rig.said}"
+    heights = rig.trace.heights(body)
+    assert heights.max() - z0 > 0.03, f"{spoken} never rose 3 cm"
+    assert heights.max() > 0.10, f"{spoken} peaked at {heights.max():.3f} m, below the other props"
+    assert rig.trace.grasped_seconds(body) >= 1.0, f"{spoken} not held for 1 s"
+    assert rig.world.is_grasped(body), f"{spoken} was dropped"
+    end = rig.world.body_pos(body)
+    assert abs(end[0] - 0.30) < 0.08 and abs(end[1]) < 0.08, (
+        f"{spoken} ended at ({end[0]:.3f}, {end[1]:.3f}), not held out in front"
+    )
+    assert end[2] > 0.08, f"{spoken} was set back down ({end[2]:.3f} m)"
+    _assert_others_in_place(rig, body)
+
+
 @pytest.mark.parametrize("spot", [None, (0.22, -0.04)], ids=["default", "near"])
 def test_workshop_pick_up_the_ball(workshop_rig, caplog, spot):
     rig = workshop_rig
@@ -48,11 +63,7 @@ def test_workshop_pick_up_the_ball(workshop_rig, caplog, spot):
 
     assert "IK reach: sports ball" in caplog.text and "-> solved" in caplog.text, "IK reach not used"
     assert rig.detector.calls > 0, "behavior never looked through the arm camera"
-    assert rig.said_any("Got the sports ball"), f"robot said {rig.said}"
-    assert rig.trace.heights("sports_ball").max() - z0 > 0.03, "ball never rose 3 cm"
-    assert rig.trace.grasped_seconds("sports_ball") >= 1.0, "ball not held for 1 s"
-    assert not rig.world.is_grasped("sports_ball"), "ball was never released at the handoff"
-    _assert_others_in_place(rig, "sports_ball")
+    _assert_held_out(rig, "sports_ball", "sports ball", z0)
 
 
 def test_workshop_pick_up_toothbrush_aligns_wrist(workshop_rig, caplog):
@@ -65,10 +76,7 @@ def test_workshop_pick_up_toothbrush_aligns_wrist(workshop_rig, caplog):
     assert "wrist alignment:" in caplog.text
     _, roll = rig.trace.series("wrist_roll")
     assert abs(roll).max() > 60.0, "wrist never turned across the toothbrush"
-    assert rig.said_any("Got the toothbrush"), f"robot said {rig.said}"
-    assert rig.trace.heights("toothbrush").max() - z0 > 0.03
-    assert rig.trace.grasped_seconds("toothbrush") >= 1.0
-    _assert_others_in_place(rig, "toothbrush")
+    _assert_held_out(rig, "toothbrush", "toothbrush", z0)
 
 
 def test_workshop_pick_up_the_bottle(workshop_rig, caplog):
@@ -80,13 +88,7 @@ def test_workshop_pick_up_the_bottle(workshop_rig, caplog):
 
     assert "IK reach: bottle" in caplog.text and "-> solved" in caplog.text, "IK reach not used"
     assert "using the fixed approach" not in caplog.text
-    assert rig.said_any("Got the bottle"), (
-        f"robot said {rig.said}; rise={rig.trace.heights('bottle').max() - z0:.3f} m, "
-        f"grasped={rig.trace.grasped_seconds('bottle'):.2f} s"
-    )
-    assert rig.trace.heights("bottle").max() - z0 > 0.03
-    assert rig.trace.grasped_seconds("bottle") >= 1.0
-    _assert_others_in_place(rig, "bottle")
+    _assert_held_out(rig, "bottle", "bottle", z0)
 
 
 def test_workshop_pick_ball_out_of_fixed_reach_says_so(workshop_rig):

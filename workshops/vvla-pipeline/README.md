@@ -126,7 +126,7 @@ Llama is constrained by `config/intent.gbnf` so it can only ever emit `{"command
 | Say something like | Intent | What happens |
 |---|---|---|
 | "mirror my arm", "copy my movements" | `gesture_mimic` | YOLO-pose tracks your wrist; a direct camera-frame mapping drives the arm joints to follow your hand (depth from MediaPipe hand size). MediaPipe tracks your thumb–index pinch → gripper. |
-| "pick up the ball", "grab the bottle and give it to me" | `pick_place` | YOLO-detect grounds the named object on the arm camera → pan-servo onto it → locate it on the table from its box → IK reach, straight down onto it → feedback grasp, checked after the lift → find you with YOLO-pose → hand it over. |
+| "pick up the ball", "grab the bottle and give it to me" | `pick_place` | YOLO-detect grounds the named object on the arm camera → pan-servo onto it → locate it on the table from its box → IK reach, straight down onto it → feedback grasp → lift it above the other objects and hold it out. The jaws stay closed. |
 | "fetch the block", "bring me the cube" | `fetch_block` | Approach the block at its taught pose → grasp → lift → find you (YOLO-pose) → extend → release → home. |
 | "hold this", "take this pencil" | `grip` | Closes until contact (current/stall + grace window), confirms with the arm camera, then **locks the grip**. A following `gesture_mimic` keeps the lock — so the arm can mimic you *while holding a pen to write*. Saying "grip" again releases. |
 | "dance", "show me some moves" | `dance` | BPM-paced keyframe choreography. |
@@ -298,7 +298,7 @@ strix-vla-pipeline/
     │   └── test_ros2_arm_motion.py  # ROS 2 per-joint full-range motion test
     ├── behaviors/
     │   ├── gesture_mimic.py      # camera-frame mapping loop, grip-lock aware, --calibrate-depth/-grip
-    │   ├── pick_place.py         # voice-grounded pick (locate on the table + IK reach) → hand to person
+    │   ├── pick_place.py         # voice-grounded pick (locate on the table + IK reach) → hold it out
     │   ├── fetch_block.py        # taught-pose fetch; exports the handoff helpers
     │   ├── grip.py               # feedback close (current/stall/grace) + camera verify
     │   ├── dance.py              # keyframe moves, BPM pacing
@@ -490,7 +490,7 @@ pause mid-sentence splits it: at 0.35 s, "pick up ... the cube" arrived as
 
 ## Voice pick-and-place
 
-"Pick up the ball" → `{"command": "pick_place", "object": "ball"}` → `vla_pipeline/behaviors/pick_place.py`: scan pose → YOLOv26s-detect on the arm camera grounds the name (synonym table: ball→sports ball, mug→cup, …) → proportional pan servoing turns the base until the box sits where an object between the jaws appears (`servo_target_x`) → **locate** → **IK reach** → the same feedback-based close as grip, a short settle, a holding check (one retry from the servoed pan) → straight back up → lift, holding checked again → find the person with YOLO-pose on the operator camera → extend → release → home.
+"Pick up the ball" → `{"command": "pick_place", "object": "ball"}` → `vla_pipeline/behaviors/pick_place.py`: scan pose → YOLOv26s-detect on the arm camera grounds the name (synonym table: ball→sports ball, mug→cup, …) → proportional pan servoing turns the base until the box sits where an object between the jaws appears (`servo_target_x`) → **locate** → **IK reach** → the same feedback-based close as grip, a short settle, a holding check (one retry from the servoed pan) → lift the grasp above the other objects and hold the object out toward the operator. The jaws stay closed.
 
 **Locate:** objects rest on the table, so one camera is enough. Forward kinematics of the SO-101 model (`so101_sim/kinematics.py`) at the current joint angles gives the wrist camera's pose; rays through the YOLO box meet the table plane, then a class-specific footprint is fitted: sphere for a sports ball, upright bottle, or flat footprint for a book/toothbrush. For the elongated toothbrush, YOLO supplies the crop but not an angle: PCA on the pixels inside that crop finds its long image axis and camera rays carry it onto the table. **IK reach:** one five-joint constrained SQP solve uses MuJoCo's analytic point and angular Jacobians to put the point between the open jaws on the object, keep the closing axis horizontal, and (for a toothbrush) make the jaws close across its long axis. Joint limits and a per-step trust region are hard constraints; geometric SO-101 elbow solutions seed the optimizer, while MuJoCo FK remains the source of truth. The same solver aims the eye-in-hand camera while rolling: short continuation waypoints move pan/lift/elbow/wrist-flex together, and every interpolated segment is checked for visibility, table clearance and branch continuity before motion. The jaws then open above the object and come straight down in short Cartesian steps. Reach is ~14–30 cm from the base. With no fix (box cut by the image edge) or out of reach, it falls back to the taught `approach_pose` + `descend_lift` (`reach: fixed` uses only those).
 

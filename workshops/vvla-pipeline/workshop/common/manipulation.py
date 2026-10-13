@@ -17,7 +17,8 @@ The pipeline's remaining voice commands, in the workshop's handler shape
   YOLO detection on the arm camera, line it up with the pan joint, locate it
   on the table from its box and reach it with IK
   (``so101_sim.kinematics``; the taught poses when that isn't possible),
-  grasp, then hand it over.
+  grasp, lift it above the other objects, and hold it out. The jaws stay
+  closed.
 - **fetch_block** - fetch the block from its taught pose, then hand it over.
 
 The handover finds you with YOLO-pose on the operator camera, aims the pan
@@ -345,8 +346,74 @@ def _detect(ctx, camera, name: str, duration_s: float = 2.0):
     return [], resolved, None
 
 
+# Grasp point high enough that a carried ball (its centre is the grasp
+# point) clears the bottle, the tallest prop on the table.
+_CARRY_Z = 0.12
+# Out toward the operator, who stands in front of the arm.
+_OFFER_XY = (0.30, 0.0)
+_OFFER_ERR_M = 0.015
+
+
+def _offer(arm, hold, stop_check, limits, say, resolved, still_holding) -> str:
+    """Lift above the other props and hold the object out. The jaws stay closed.
+
+    Two joint-space legs from the pose that is holding the object, keeping
+    its wrist roll. Returns ``offered``, ``dropped``, ``stopped``, or
+    ``unreachable``.
+    """
+    try:
+        from so101_sim.kinematics import joint_line, shared_kinematics
+    except Exception as e:
+        logger.warning("offer unavailable: %s", e)
+        return "unreachable"
+
+    def stopped() -> bool:
+        return bool(stop_check and stop_check())
+
+    def follow(steps, duration_s: float) -> bool:
+        for step in steps:
+            arm.go_to(
+                step,
+                duration_s=duration_s / len(steps),
+                stop_check=stop_check,
+                limits=limits,
+            )
+            if stopped():
+                return False
+        return True
+
+    kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
+    here = arm.get_joints()
+    roll = float(here.get("wrist_roll", 0.0))
+    origin = kin.world.grasp_point(here, 0.04)
+    targets = (
+        np.array([origin[0], origin[1], _CARRY_Z]),
+        np.array([_OFFER_XY[0], _OFFER_XY[1], _CARRY_Z]),
+    )
+    logger.info(
+        "offer: lift to %.2f m, then out to (%.2f, %.2f)",
+        _CARRY_Z, _OFFER_XY[0], _OFFER_XY[1],
+    )
+    seed = here
+    for target, duration_s in zip(targets, (2.5, 2.0)):
+        pose, err, _tilt = kin.ik(
+            target, 0.04, hold, seed, roll, limits=limits, one_branch=True,
+        )
+        if err > _OFFER_ERR_M:
+            logger.info("offer: no pose within 15 mm (err %.0f mm)", 1000 * err)
+            return "unreachable"
+        if not follow(joint_line(seed, {**pose, "gripper": hold}), duration_s):
+            return "stopped"
+        time.sleep(0.3)
+        if not still_holding():
+            return "dropped"
+        seed = arm.get_joints()
+    say(f"Got the {resolved}.")
+    return "offered"
+
+
 def run_pick_place(ctx, cmd) -> bool:
-    """Find the named object with the arm camera, grasp it, hand it over."""
+    """Find the named object, grasp it, and hold it out. The jaws stay closed."""
     pp, g = ctx.cfg["pick_place"], ctx.cfg["grip"]
     name = (cmd.object_name if cmd is not None else "") or ""
     if ctx.detector is None:
@@ -495,43 +562,23 @@ def run_pick_place(ctx, cmd) -> bool:
         park_open(ctx.arm)
         return False
 
-    # straight back up the way the jaws came down, so the object isn't dragged
-    lift_duration = (
-        float(pp.get("wrist_align_lift_duration_s", 4.0))
-        if resolved in pp.get("wrist_align_classes", [])
-        else 1.5
+    # The grasp limits allow the wrist to 90°, which the high carry needs
+    # for every object. The tighter workshop cap drops the hand back down.
+    status = _offer(
+        ctx.arm, hold, ctx.stop_check, GRASP_LIMITS, ctx.say, resolved,
+        lambda: holding(ctx.arm, g, hold),
     )
-    for step in way_up:
-        ctx.arm.go_to(
-            {**step, "gripper": hold},
-            duration_s=lift_duration / len(way_up),
-            stop_check=ctx.stop_check,
-            limits=send_limits,
-        )
-        if ctx.stop_check():
-            return False
-    lift_pose = {
-        "shoulder_pan": ctx.arm.get_joints()["shoulder_pan"],
-        "shoulder_lift": -80.0,
-        "elbow_flex": 85.0,
-        "wrist_flex": 50.0,
-        "wrist_roll": ctx.arm.get_joints()["wrist_roll"],
-        "gripper": hold,
-    }
-    # The reverse IK path already lifted a thin object 10 cm; folding into the
-    # lift pose twists it loose, so it stays in its top-down hold. The
-    # handover still reaches out from the lift pose, not from that low hold.
-    if resolved not in pp.get("wrist_align_classes", []):
-        ctx.arm.go_to(lift_pose, duration_s=2.0, stop_check=ctx.stop_check)
-    if ctx.stop_check():
+    if status == "stopped":
         return False
-    time.sleep(0.3)
-    if not holding(ctx.arm, g, hold):
+    if status == "dropped":
         ctx.say(f"I dropped the {resolved}.")
         park_open(ctx.arm)
         return False
-    ctx.say(f"Got the {resolved} - bringing it to you.")
-    hand_over(ctx, pp, lift_pose)
+    if status != "offered":
+        ctx.say(f"I can't lift the {resolved} clear of the other objects.")
+        return False
+    ctx.shared_state["grip_lock"] = True
+    ctx.shared_state["grip_lock_pos"] = hold
     ctx.say("Done.")
     return True
 

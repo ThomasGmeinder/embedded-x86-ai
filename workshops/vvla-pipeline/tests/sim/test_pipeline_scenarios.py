@@ -176,16 +176,20 @@ def _assert_others_in_place(rig, handled: str):
     assert not moved, f"the arm moved objects it was not asked to pick up (m): {moved}"
 
 
-def _assert_picked_and_handed_over(rig, z0: float):
+def _assert_held_out(rig, body: str, spoken: str, z0: float):
     assert rig.detector.calls > 0, "behavior never looked through the arm camera"
-    assert rig.said_any("Got the sports ball"), f"robot said {rig.said}"
-    assert rig.trace.heights("sports_ball").max() - z0 > 0.03, "ball never rose 3 cm"
-    assert rig.trace.grasped_seconds("sports_ball") >= 1.0, "ball not held for 1 s"
-    assert not rig.world.is_grasped("sports_ball"), "ball was never released at the handoff"
-    # handed toward the person on the left of the operator camera (mirrored -> +pan)
-    _, pan = rig.trace.series("shoulder_pan")
-    assert pan.max() > 10.0
-    _assert_others_in_place(rig, "sports_ball")
+    assert rig.said_any(f"Got the {spoken}"), f"robot said {rig.said}"
+    heights = rig.trace.heights(body)
+    assert heights.max() - z0 > 0.03, f"{spoken} never rose 3 cm"
+    assert heights.max() > 0.10, f"{spoken} peaked at {heights.max():.3f} m, below the other props"
+    assert rig.trace.grasped_seconds(body) >= 1.0, f"{spoken} not held for 1 s"
+    assert rig.world.is_grasped(body), f"{spoken} was dropped"
+    end = rig.world.body_pos(body)
+    assert abs(end[0] - 0.30) < 0.08 and abs(end[1]) < 0.08, (
+        f"{spoken} ended at ({end[0]:.3f}, {end[1]:.3f}), not held out in front"
+    )
+    assert end[2] > 0.08, f"{spoken} was set back down ({end[2]:.3f} m)"
+    _assert_others_in_place(rig, body)
 
 
 @pytest.mark.slow
@@ -206,7 +210,7 @@ def test_pick_up_the_ball(pipeline_rig, caplog, spot):
     rig.run([(0.3, "pick up the ball")], timeout=60)
 
     assert "IK reach: sports ball" in caplog.text and "-> solved" in caplog.text, "IK reach not used"
-    _assert_picked_and_handed_over(rig, z0)
+    _assert_held_out(rig, "sports_ball", "sports ball", z0)
     assert rig.event_times("behavior_end", intent="pick_place", ok=True)
 
 
@@ -221,14 +225,8 @@ def test_pick_up_toothbrush_aligns_wrist(pipeline_rig, caplog):
     assert "wrist alignment:" in caplog.text
     _, roll = rig.trace.series("wrist_roll")
     assert abs(roll).max() > 60.0, "wrist never turned across the toothbrush"
-    assert rig.said_any("Got the toothbrush"), (
-        f"robot said {rig.said}; rise={rig.trace.heights('toothbrush').max() - z0:.3f} m, "
-        f"grasped={rig.trace.grasped_seconds('toothbrush'):.2f} s"
-    )
-    assert rig.trace.heights("toothbrush").max() - z0 > 0.03
-    assert rig.trace.grasped_seconds("toothbrush") >= 1.0
+    _assert_held_out(rig, "toothbrush", "toothbrush", z0)
     assert rig.event_times("behavior_end", intent="pick_place", ok=True)
-    _assert_others_in_place(rig, "toothbrush")
 
 
 @pytest.mark.slow
@@ -240,14 +238,8 @@ def test_pick_up_bottle_without_knocking_it_over(pipeline_rig, caplog):
     rig.run([(0.3, "pick up the bottle")], timeout=90)
 
     assert "IK reach: bottle" in caplog.text and "-> solved" in caplog.text, "IK reach not used"
-    assert rig.said_any("Got the bottle"), (
-        f"robot said {rig.said}; rise={rig.trace.heights('bottle').max() - z0:.3f} m, "
-        f"grasped={rig.trace.grasped_seconds('bottle'):.2f} s"
-    )
-    assert rig.trace.heights("bottle").max() - z0 > 0.03
-    assert rig.trace.grasped_seconds("bottle") >= 1.0
+    _assert_held_out(rig, "bottle", "bottle", z0)
     assert rig.event_times("behavior_end", intent="pick_place", ok=True)
-    _assert_others_in_place(rig, "bottle")
 
 
 @pytest.mark.slow

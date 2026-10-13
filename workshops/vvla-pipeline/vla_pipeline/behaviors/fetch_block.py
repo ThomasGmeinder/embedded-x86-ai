@@ -14,9 +14,9 @@ HOME. The fixed block location is configured in joint space
 
 This revision takes a :class:`~vla_pipeline.vision.camera.CameraClient`
 instead of owning a ``cv2.VideoCapture``, and exports
-:func:`find_person_pan` / :func:`track_person_and_handoff` for reuse by
-``pick_place`` (both behaviors end with the same "hand it to the person"
-sequence).
+:func:`find_person_pan` / :func:`track_person_and_handoff`. ``fetch_block``
+hands the block to the person and lets go. ``pick_place`` holds its object
+out and keeps the jaws closed.
 
 Independent test
 ----------------

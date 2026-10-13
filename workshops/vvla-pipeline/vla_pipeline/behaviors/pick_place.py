@@ -6,7 +6,7 @@
 # content has been reviewed and validated by the authors.
 
 """Voice-grounded pick-and-place: "pick up the ball" → find it → grasp →
-hand it to the person.
+lift it clear → hold it out. The jaws stay closed.
 
 Pipeline
 --------
@@ -34,9 +34,9 @@ Pipeline
    uses (:func:`vla_pipeline.behaviors.grip.close_with_feedback`):
    effort/current when available, position stall + thin-object grace window
    otherwise; then settle and check the grip holds.
-6. **HANDOFF** - straight back up, lift, check the grip again, find the
-   person with YOLO-pose on the operator camera, extend, release, home
-   (shared with fetch_block).
+6. **OFFER** - lift the grasp point above the other props and hold the
+   object out toward the operator. The jaws stay closed, so the object can
+   be taken or left.
 
 Failure handling: every stage reports through the ``feedback`` callback
 ("I can't see a ball", "I see two cups, taking the clearest one", "the grasp
@@ -58,7 +58,7 @@ import time
 
 import numpy as np
 
-from vla_pipeline.behaviors.fetch_block import park_open, track_person_and_handoff
+from vla_pipeline.behaviors.fetch_block import park_open
 from vla_pipeline.behaviors.grip import close_with_feedback, holding
 from vla_pipeline.robot.arm_interface import (
     GRIPPER_CLOSED_FLOOR,
@@ -107,11 +107,72 @@ def _detect_with_retry(
     return [], resolved, None
 
 
+# Grasp point high enough that a carried ball (its centre is the grasp
+# point) clears the bottle, the tallest prop on the table.
+_CARRY_Z = 0.12
+# Out toward the operator, who stands in front of the arm.
+_OFFER_XY = (0.30, 0.0)
+_OFFER_ERR_M = 0.015
+
+
+def _offer(arm, hold, stop_check, limits, say, resolved, still_holding) -> str:
+    """Lift above the other props and hold the object out. The jaws stay closed.
+
+    Two joint-space legs from the pose that is holding the object, keeping
+    its wrist roll. Returns ``offered``, ``dropped``, ``stopped``, or
+    ``unreachable``.
+    """
+    try:
+        from so101_sim.kinematics import joint_line, shared_kinematics
+    except Exception as e:
+        logger.warning("offer unavailable: %s", e)
+        return "unreachable"
+
+    def stopped() -> bool:
+        return bool(stop_check and stop_check())
+
+    def follow(steps, duration_s: float) -> bool:
+        for step in steps:
+            arm.go_to(step, duration_s=duration_s / len(steps), stop_check=stop_check)
+            if stopped():
+                return False
+        return True
+
+    kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
+    here = arm.get_joints()
+    roll = float(here.get("wrist_roll", 0.0))
+    origin = kin.world.grasp_point(here, 0.04)
+    targets = (
+        np.array([origin[0], origin[1], _CARRY_Z]),
+        np.array([_OFFER_XY[0], _OFFER_XY[1], _CARRY_Z]),
+    )
+    logger.info(
+        "offer: lift to %.2f m, then out to (%.2f, %.2f)",
+        _CARRY_Z, _OFFER_XY[0], _OFFER_XY[1],
+    )
+    seed = here
+    for target, duration_s in zip(targets, (2.5, 2.0)):
+        pose, err, _tilt = kin.ik(
+            target, 0.04, hold, seed, roll, limits=limits, one_branch=True,
+        )
+        if err > _OFFER_ERR_M:
+            logger.info("offer: no pose within 15 mm (err %.0f mm)", 1000 * err)
+            return "unreachable"
+        if not follow(joint_line(seed, {**pose, "gripper": hold}), duration_s):
+            return "stopped"
+        time.sleep(0.3)
+        if not still_holding():
+            return "dropped"
+        seed = arm.get_joints()
+    say(f"Got the {resolved}.")
+    return "offered"
+
+
 def run_pick_place(
     cfg: dict,
     arm: ArmClient,
     detector: ObjectDetector,
-    pose,  # PoseEstimator | None - person finding
+    pose,  # PoseEstimator | None - kept for the dispatcher; the offer does not search for a person
     arm_camera,  # CameraClient | None
     operator_camera,  # CameraClient | None
     object_name: str,
@@ -119,7 +180,7 @@ def run_pick_place(
     stop_check=None,
     feedback=None,
 ) -> bool:
-    """Pick the named object and hand it to the person. True on success."""
+    """Pick the named object and hold it out. The jaws stay closed."""
     pp = cfg["behaviors"]["pick_place"]
     g = cfg["behaviors"]["grip"]
     say = feedback or (lambda m: logger.info("[pick] %s", m))
@@ -289,43 +350,21 @@ def run_pick_place(
         park_open(arm)
         return False
 
-    # ---------------- LIFT + HANDOFF ----------------
-    # straight back up the way the jaws came down, so the object isn't dragged
-    lift_duration = (
-        float(pp.get("wrist_align_lift_duration_s", 4.0))
-        if resolved in pp.get("wrist_align_classes", [])
-        else 1.5
+    status = _offer(
+        arm, hold, stop_check, JOINT_LIMITS, say, resolved,
+        lambda: holding(arm, g, hold),
     )
-    for step in way_up:
-        arm.go_to(
-            {**step, "gripper": hold},
-            duration_s=lift_duration / len(way_up),
-            stop_check=stop_check,
-        )
-        if stopped():
-            return False
-    lift_pose = {
-        "shoulder_pan": arm.get_joints()["shoulder_pan"],
-        "shoulder_lift": -80.0,
-        "elbow_flex": 85.0,
-        "wrist_flex": 50.0,
-        "wrist_roll": arm.get_joints()["wrist_roll"],
-        "gripper": hold,
-    }
-    # The reverse IK path already lifted a thin object 10 cm; folding into the
-    # lift pose twists it loose, so it stays in its top-down hold. The
-    # handover still reaches out from the lift pose, not from that low hold.
-    if resolved not in pp.get("wrist_align_classes", []):
-        arm.go_to(lift_pose, duration_s=2.0, stop_check=stop_check)
-    if stopped():
+    if status == "stopped":
         return False
-    time.sleep(0.3)
-    if not holding(arm, g, hold):
+    if status == "dropped":
         say(f"I dropped the {resolved}.")
         park_open(arm)
         return False
-    say(f"Got the {resolved} - bringing it to you.")
-    track_person_and_handoff(pp, arm, pose, operator_camera, lift_pose, stop_check)
+    if status != "offered":
+        say(f"I can't lift the {resolved} clear of the other objects.")
+        return False
+    shared_state["grip_lock"] = True
+    shared_state["grip_lock_pos"] = hold
     say("Done.")
     return True
 
