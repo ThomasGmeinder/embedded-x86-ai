@@ -95,8 +95,10 @@ cd solution && python -m models.selftest && python -m ros.selftest \
 The two AMD-specific lessons to hammer home during the session:
 
 1. **Verify the execution provider.** Requesting the NPU isn't getting it.
-   A silent CPU fallback runs correctly and 10-30x slower. Session built ->
-   provider printed. Always.
+   A silent CPU fallback is a bug: the session still builds, so the student
+   thinks the model is on the NPU while it runs on the CPU, and CPU and NPU
+   look like the same speed. Pass `device="cpu"` or `device="npu"` on purpose
+   and print the provider the session got.
 2. **The NPU context budget.** Too many resident models for the concurrent
    XDNA2 hardware contexts fails with `HW context creation unsuccessful`.
    It's not a stale cache; move a model to CPU deliberately (camera-rate
