@@ -184,6 +184,56 @@ def test_analytic_grasp_jacobian_matches_forward_difference(kin):
         assert np.allclose(jac[:5, j], numeric, atol=1e-6)
 
 
+def _goal_list(kin, joints, box, size, shape):
+    """Locate, solve, then the joint-space goals the behavior sends."""
+    from so101_sim.kinematics import joint_line
+    from vla_pipeline.robot.arm_interface import JOINT_LIMITS
+
+    loc = kin.locate_on_table(box, joints, image_size=size, shape=shape)
+    assert loc is not None, f"no fix for {shape} box {box}"
+    p = loc["xyz"].copy()
+    if shape == "flat":
+        p[2] = max(p[2], -0.005 + 0.011)
+    obstacle = None
+    limits = None
+    if shape == "bottle":
+        obstacle = (*loc["xyz"][:2], 0.5 * loc["width"], -0.005 + loc["height"])
+        limits = JOINT_LIMITS
+    elif shape == "flat":
+        limits = JOINT_LIMITS
+    plan = kin.solve_grasp(
+        p, above_m=0.06, width=loc["width"], table_z=-0.005, limits=limits, obstacle=obstacle,
+    )
+    assert plan is not None, f"no grasp of {shape} at {np.round(p, 3)}"
+    pre, grasp = plan
+    keys = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
+    goals = [*joint_line(joints, pre), *joint_line(pre, grasp)]
+    return [[pose[k] for k in keys] for pose in goals]
+
+
+@pytest.mark.parametrize(
+    "obj,xy,shape",
+    [
+        ("sports_ball", (0.28, 0.06), "sphere"),
+        ("bottle", (0.2, 0.2), "bottle"),
+        ("toothbrush", (0.12, -0.24), "flat"),
+    ],
+    ids=["ball", "bottle", "toothbrush"],
+)
+def test_grasp_path_is_deterministic(twins, pipeline_cfg, kin, obj, xy, shape):
+    """Same joints and the same box: the same goals. A two-pixel shift keeps the elbow."""
+    twin = twins("pipeline", pipeline_cfg)
+    pos = np.array([xy[0], xy[1], twin.world.model.body(obj).pos[2]])
+    joints = _aimed_scan_pose(kin, pipeline_cfg, pos)
+    _cls, box, size, _truth = _look(twin, obj, pos, joints)
+    first = _goal_list(kin, joints, box, size, shape)
+    second = _goal_list(kin, joints, box, size, shape)
+    assert first == second
+    shifted = (box[0] + 2, box[1], box[2] + 2, box[3])
+    other = _goal_list(kin, joints, shifted, size, shape)
+    assert (first[-1][2] > 0) == (other[-1][2] > 0)
+
+
 def test_oriented_sqp_is_deterministic_and_does_not_flip_roll_branch(kin):
     from vla_pipeline.robot.arm_interface import JOINT_LIMITS
 

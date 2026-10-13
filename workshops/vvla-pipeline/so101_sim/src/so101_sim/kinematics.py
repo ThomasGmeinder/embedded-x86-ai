@@ -319,11 +319,13 @@ class Kinematics:
 
         ``box`` is ``(x1, y1, x2, y2)`` pixels in a frame of ``image_size``
         ``(w, h)`` taken at ``joints``. The box bottom's ray meets the table
-        at the object's front edge; from there a resting sphere
-        (``shape="sphere"``), upright cylinder (``"upright"``), or thin
-        table-plane footprint (``"flat"``) is fitted to the box. A box cut by
-        the image's sides or bottom gives ``None``; a cut top edge is ignored
-        only for upright objects.
+        at the object's front edge. A bottle is the known cylinder, one radius
+        back from that edge, with one linear correction onto the box. A resting
+        sphere (``shape="sphere"``),
+        upright cylinder (``"upright"``), or thin table-plane footprint
+        (``"flat"``) is fitted to the box. A box cut by the image's sides or
+        bottom gives ``None``; a cut top edge is ignored only for upright
+        objects.
         """
         x1, y1, x2, y2 = (float(v) for v in box)
         top_cut = False
@@ -363,6 +365,11 @@ class Kinematics:
         horiz /= max(np.linalg.norm(horiz), 1e-9)
         c0 = front + horiz * half_w
         if shape == "bottle":
+            # Known mustard-bottle cylinder. The bottom-edge ray meets the table
+            # at the near side of the silhouette. The centre is one radius
+            # further along that ray, then shifted so the known cylinder's
+            # left, right, and bottom edges sit on the box. One linear step:
+            # the same box and the same joints always give this centre.
             radius, height = 0.02, 0.085
             centre = front + horiz * radius
             observed = self._normalized(edges, K, dist)
@@ -374,17 +381,14 @@ class Kinematics:
                 return np.array([uv[:, 0].min(), uv[:, 0].max(), uv[:, 1].max()])
 
             xy = centre[:2].copy()
-            for _ in range(12):
-                residual = bottle_edges(xy) - target
-                jac = np.empty((3, 2))
-                for j in range(2):
-                    step = np.zeros(2)
-                    step[j] = 1e-4
-                    jac[:, j] = (bottle_edges(xy + step) - bottle_edges(xy)) / 1e-4
-                delta = -np.linalg.solve(jac.T @ jac + 1e-4 * np.eye(2), jac.T @ residual)
-                xy += delta
-                if np.abs(delta).max() < 1e-6:
-                    break
+            residual = bottle_edges(xy) - target
+            jac = np.empty((3, 2))
+            for j in range(2):
+                step = np.zeros(2)
+                step[j] = 1e-4
+                jac[:, j] = (bottle_edges(xy + step) - bottle_edges(xy)) / 1e-4
+            delta = -np.linalg.solve(jac.T @ jac + 1e-4 * np.eye(2), jac.T @ residual)
+            xy = xy + delta
             return {
                 "xyz": np.array([xy[0], xy[1], table_z + 0.5 * height]),
                 "width": 2 * radius,
@@ -568,12 +572,8 @@ class Kinematics:
         }
         return r, J, metrics
 
-    def _geometric_seeds(self, target, roll, seed=None):
-        """SO-101 elbow branches, initialized by planar triangle geometry.
-
-        The exact calibrated offsets are model-specific, so these closed-form
-        candidates are only seeds; MuJoCo FK and SQP produce the final answer.
-        """
+    def _elbow_pair(self, target, roll) -> list[list[float]]:
+        """The two closed-form elbow branches for ``target``, as joint lists."""
         target = np.asarray(target, float)
         d0 = self.world.fk({})
         shoulder = d0.body("upper_arm").xpos
@@ -584,18 +584,42 @@ class Kinematics:
         radial = float(np.linalg.norm(target[:2] - shoulder[:2]))
         dz = float(target[2] - shoulder[2])
         D = np.clip(math.hypot(radial, dz), abs(l1 - l2) + 1e-6, l1 + l2 - 1e-6)
-        interior = math.degrees(math.acos(np.clip((l1*l1 + l2*l2 - D*D) / (2*l1*l2), -1, 1)))
-        gamma = math.degrees(math.acos(np.clip((l1*l1 + D*D - l2*l2) / (2*l1*D), -1, 1)))
+        interior = math.degrees(math.acos(np.clip((l1 * l1 + l2 * l2 - D * D) / (2 * l1 * l2), -1, 1)))
+        gamma = math.degrees(math.acos(np.clip((l1 * l1 + D * D - l2 * l2) / (2 * l1 * D), -1, 1)))
         line = math.degrees(math.atan2(radial, dz))
         pan = -math.degrees(math.atan2(target[1] - shoulder[1], target[0] - shoulder[0]))
         out = []
-        if seed:
-            out.append([seed[k] for k in IK5_JOINTS])
         for elbow_sign in (1.0, -1.0):
             lift = line - elbow_sign * gamma
             flex = elbow_sign * (180.0 - interior)
             wrist_flex = 180.0 - lift - flex
             out.append([pan, lift, flex, wrist_flex, roll])
+        return out
+
+    def _overhead_elbow(self, target, roll, lo, hi) -> np.ndarray:
+        """The one elbow branch that cocks the wrist so the hand comes from above.
+
+        Larger ``wrist_flex`` is that branch. The other elbow, and the
+        hand-tuned seeds, are not started: the same target then always
+        finishes in the same pose.
+        """
+        pair = [np.clip(np.asarray(q, float), lo, hi) for q in self._elbow_pair(target, roll)]
+        return max(pair, key=lambda q: (float(q[3]), -abs(float(q[2]))))
+
+    def _geometric_seeds(self, target, roll, seed=None):
+        """SO-101 elbow branches, initialized by planar triangle geometry.
+
+        The exact calibrated offsets are model-specific, so these closed-form
+        candidates are only seeds; MuJoCo FK and SQP produce the final answer.
+        """
+        target = np.asarray(target, float)
+        d0 = self.world.fk({})
+        shoulder = d0.body("upper_arm").xpos[:2]
+        pan = -math.degrees(math.atan2(target[1] - shoulder[1], target[0] - shoulder[0]))
+        out = []
+        if seed:
+            out.append([seed[k] for k in IK5_JOINTS])
+        out.extend(self._elbow_pair(target, roll))
         out.extend([[pan, *s, roll] for s in _SEEDS])
         return out
 
@@ -632,12 +656,14 @@ class Kinematics:
 
     def ik(self, target, width: float = 0.04, gripper: float = OPEN_GRIPPER, seed: dict | None = None,
            wrist_roll: float | None = None, iters: int = 80,
-           limits: dict | None = None, object_axis=None) -> tuple[dict, float, float]:
+           limits: dict | None = None, object_axis=None, one_branch: bool = False) -> tuple[dict, float, float]:
         """Best top-down pose for grasp point ``target``: ``(pose, pos_err_m, axis_z)``.
 
         ``wrist_roll`` stays fixed (it spins the jaws without changing the
         arm's reach). It defaults to the seed pose's roll. ``limits``
         (``{joint: (lo, hi)}``) narrows the model's joint range to the arm's.
+        ``one_branch`` starts from the overhead elbow only, or from ``seed``
+        once a pose on that branch already exists.
         """
         target = np.asarray(target, float)
         roll = float((seed or {}).get("wrist_roll", 0.0) if wrist_roll is None else wrist_roll)
@@ -646,15 +672,21 @@ class Kinematics:
             # Backwards-compatible fixed-roll solve.
             lo[4] = hi[4] = float(np.clip(roll, lo[4], hi[4]))
         roll0 = float(np.clip(roll, lo[4], hi[4]))
-        roll_candidates = [roll0]
-        if object_axis is not None:
-            roll_candidates += [
-                float(np.clip(roll0 + d, lo[4], hi[4]))
-                for d in (-180.0, -90.0, 90.0, 180.0)
-            ]
-        seeds = []
-        for candidate in dict.fromkeys(round(v, 8) for v in roll_candidates):
-            seeds.extend(self._geometric_seeds(target, candidate, seed if candidate == roll0 else None))
+        if one_branch:
+            if seed is not None:
+                seeds = [[float(seed[k]) for k in IK5_JOINTS]]
+            else:
+                seeds = [self._overhead_elbow(target, roll0, lo, hi)]
+        else:
+            roll_candidates = [roll0]
+            if object_axis is not None:
+                roll_candidates += [
+                    float(np.clip(roll0 + d, lo[4], hi[4]))
+                    for d in (-180.0, -90.0, 90.0, 180.0)
+                ]
+            seeds = []
+            for candidate in dict.fromkeys(round(v, 8) for v in roll_candidates):
+                seeds.extend(self._geometric_seeds(target, candidate, seed if candidate == roll0 else None))
         reference = np.array(
             [float((seed or {}).get(k, 0.0)) for k in IK5_JOINTS], float
         )
@@ -709,6 +741,10 @@ class Kinematics:
         def clear(pose, margin):
             return obstacle is None or self.hand_clearance(pose, obstacle) >= margin
 
+        # A standing object has one elbow branch. Searching the other one,
+        # or the hand-tuned seeds, is what made the same bottle come down
+        # on a different angle.
+        one_branch = obstacle is not None
         if obstacle is not None:
             max_raise_m = max(max_raise_m, float(obstacle[3]) - _MIN_HOLD_M - p[2])
         grasp = None
@@ -716,7 +752,7 @@ class Kinematics:
         for raise_m in np.arange(0.0, max_raise_m + 1e-9, 0.003):
             pose, err, tilt = self.ik(
                 p + [0.0, 0.0, raise_m], width, gripper, solve_seed, wrist_roll,
-                limits=limits, object_axis=object_axis,
+                limits=limits, object_axis=object_axis, one_branch=one_branch,
             )
             if err <= tol_m and abs(tilt) <= max_tilt:
                 solve_seed = pose
@@ -731,6 +767,7 @@ class Kinematics:
             pre, err, tilt = self.ik(
                 top + [0.0, 0.0, above_m + extra], width, gripper, grasp,
                 grasp["wrist_roll"], limits=limits, object_axis=object_axis,
+                one_branch=one_branch,
             )
             if ok(pre, err, tilt) and clear(pre, obstacle_clearance_m):
                 return pre, grasp
