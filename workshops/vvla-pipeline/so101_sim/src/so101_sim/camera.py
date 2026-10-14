@@ -60,6 +60,14 @@ class SimCamera:
         self._recent: collections.OrderedDict[int, int] = collections.OrderedDict()
         self._open = True
 
+    def read_after(self, settled_at: float):
+        """Frame rendered after this call.
+
+        ``settled_at`` is when the arm finished moving. The render sequence,
+        not that clock, says whether the pixels show the settled pose.
+        """
+        return self.read(fresh=True)
+
     def read(self, fresh: bool = False):
         """Next (blocking) or newest frame as ``(ok, bgr)``; never raises.
 
@@ -69,16 +77,11 @@ class SimCamera:
         if not self._open:
             return False, None
         if fresh:
-            seq, _ = self.view.latest()
-            timeout = max(3.0 / self.fps, 0.5)
-            seq, frame = self.view.wait(seq + 1, timeout=timeout)
-            self._last_seq = seq
-            if frame is None:
-                return False, None
-            out = frame.copy()
-            self._recent[id(out)] = seq
-            return True, out
-        if self.blocking:
+            start, _ = self.view.latest()
+            seq, frame = self.view.wait(start + 1, timeout=max(3.0 / self.fps, 0.5))
+            if seq <= start + 1:  # timed out: the newest frame may predate this call
+                frame = None
+        elif self.blocking:
             seq, frame = self.view.wait(self._last_seq, timeout=max(3.0 / self.fps, 0.25))
         else:
             seq, frame = self.view.latest()

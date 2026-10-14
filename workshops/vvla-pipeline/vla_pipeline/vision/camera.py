@@ -118,6 +118,24 @@ class DirectCamera(CameraClient):
             return False, None
         return True, frame
 
+    def read_after(self, settled_at: float) -> tuple[bool, np.ndarray | None]:
+        """Discard buffered frames until a read blocks for a new exposure.
+
+        ``settled_at`` is when the arm finished moving. A buffered frame
+        returns immediately; the frame that blocks for the next exposure was
+        captured after the move.
+        """
+        period = 1.0 / max(self._fps, 1.0)
+        ok, frame = False, None
+        for _ in range(8):
+            started = time.perf_counter()
+            ok, frame = self.read()
+            if not ok or frame is None:
+                return False, None
+            if time.perf_counter() - started >= 0.5 * period:
+                return True, frame
+        return bool(ok), frame
+
     def close(self) -> None:
         """Release the OpenCV capture device."""
         if self._cap is not None:
@@ -180,6 +198,16 @@ class Ros2Camera(CameraClient):
                 return False, None
             return True, self._frame
 
+    def read_after(self, settled_at: float) -> tuple[bool, np.ndarray | None]:
+        """Newest cached frame whose stamp is later than ``settled_at``."""
+        deadline = time.time() + max(self._stale_after, 0.5)
+        while time.time() < deadline:
+            with self._lock:
+                if self._frame is not None and self._stamp > settled_at:
+                    return True, self._frame
+            time.sleep(0.02)
+        return False, None
+
     def close(self) -> None:
         """Shut down the executor and destroy the subscriber node."""
         self._executor.shutdown()
@@ -205,6 +233,10 @@ class SimCameraClient(CameraClient):
     def read(self) -> tuple[bool, np.ndarray | None]:
         """Next rendered frame (paced at the camera fps, like a V4L2 read)."""
         return self._cam.read()
+
+    def read_after(self, settled_at: float) -> tuple[bool, np.ndarray | None]:
+        """Frame rendered after the arm finished moving at ``settled_at``."""
+        return self._cam.read_after(settled_at)
 
     def ok(self) -> bool:
         """Return True once the renderer has produced a frame."""

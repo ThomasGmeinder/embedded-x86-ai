@@ -69,6 +69,7 @@ class FanoutCamera:
         self._frame: np.ndarray | None = None
         self._seq = 0
         self._stamp = 0.0
+        self._wall = 0.0
         self._seen: dict[int, int] = {}
         self._running = True
         self._thread = threading.Thread(
@@ -92,7 +93,7 @@ class FanoutCamera:
                 continue
             last = frame
             with self._cond:
-                self._frame, self._stamp = frame, time.monotonic()
+                self._frame, self._stamp, self._wall = frame, time.monotonic(), time.time()
                 self._seq += 1
                 self._cond.notify_all()
 
@@ -104,6 +105,18 @@ class FanoutCamera:
             ):
                 return False, None
             self._seen[tid] = self._seq
+            return True, self._frame
+
+    def read_after(self, settled_at: float) -> tuple[bool, np.ndarray | None]:
+        """Next pumped frame whose arrival is later than ``settled_at``."""
+        deadline = time.monotonic() + max(self._timeout, 0.5)
+        with self._cond:
+            while self._frame is None or self._wall <= settled_at:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False, None
+                self._cond.wait(timeout=remaining)
+            self._seen[threading.get_ident()] = self._seq
             return True, self._frame
 
     def latest(self) -> np.ndarray | None:

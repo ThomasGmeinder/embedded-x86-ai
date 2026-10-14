@@ -39,6 +39,7 @@ class DirectCamera:
         import cv2
 
         self.role = role
+        self._fps = float(fps)
         self._cap = cv2.VideoCapture(device)
         if self._cap.isOpened():
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(width))
@@ -51,6 +52,19 @@ class DirectCamera:
             return False, None
         ok, frame = self._cap.read()
         return (ok, frame if ok else None)
+
+    def read_after(self, settled_at):
+        """Discard buffered frames until a read blocks for a new exposure."""
+        period = 1.0 / max(self._fps, 1.0)
+        ok, frame = False, None
+        for _ in range(8):
+            started = time.perf_counter()
+            ok, frame = self.read()
+            if not ok or frame is None:
+                return False, None
+            if time.perf_counter() - started >= 0.5 * period:
+                return True, frame
+        return bool(ok), frame
 
     def close(self):
         """Release the OpenCV capture."""
@@ -120,6 +134,16 @@ class Ros2Camera:
             if self._frame is None or (time.time() - self._stamp) > self._stale_after:
                 return False, None
             return True, self._frame
+
+    def read_after(self, settled_at):
+        """Newest cached frame whose stamp is later than ``settled_at``."""
+        deadline = time.time() + max(self._stale_after, 0.5)
+        while time.time() < deadline:
+            with self._lock:
+                if self._frame is not None and self._stamp > settled_at:
+                    return True, self._frame
+            time.sleep(0.02)
+        return False, None
 
     def close(self) -> None:
         """Stop the executor and destroy the client node."""
