@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 
 _SPEED_REGS = ("Goal_Velocity", "Goal_Speed", "Maximum_Speed_Limit")
 _ACCEL_REGS = ("Acceleration", "Maximum_Acceleration")
-# Accepted and stored, but no physical effect in the twin.
+# Accepted and stored, but no physical effect in the twin. Max_Torque_Limit
+# is EEPROM: the servo copies it into Torque_Limit only at power-on.
 _PASSIVE_REGS = {
     "Operating_Mode": 0,
     "P_Coefficient": 32,
@@ -44,24 +45,41 @@ _PASSIVE_REGS = {
     "D_Coefficient": 32,
     "Return_Delay_Time": 0,
     "Protection_Current": 500,
-    "Overload_Torque": 80,
+    "Max_Torque_Limit": 1000,
     "Lock": 0,
     "Min_Position_Limit": 0,
     "Max_Position_Limit": 4095,
     "Homing_Offset": 0,
 }
+# Overload protection: register -> (factory value, SimWorld.set_protection
+# keyword, scale to a fraction of stall torque or to seconds).
+_PROTECTION_REGS = {
+    "Overload_Torque": (80, "threshold", 0.01),
+    "Protective_Torque": (20, "protective", 0.01),
+    "Protection_Time": (200, "time_s", 0.01),
+}
 _MOTOR_IDS = {m: i + 1 for i, m in enumerate(MOTOR_NAMES)}
 
 
 class SimBus:
-    """Feetech bus emulation over a :class:`~so101_sim.world.SimWorld`."""
+    """Feetech bus emulation over a :class:`~so101_sim.world.SimWorld`.
+
+    Creating one is a power-on: ``Torque_Limit`` loads from
+    ``Max_Torque_Limit`` and the protection registers take their factory values.
+    """
 
     def __init__(self, world):
         self.world = world
         self.motors = dict(_MOTOR_IDS)
-        self._regs = {m: dict(_PASSIVE_REGS) for m in MOTOR_NAMES}
-        self._torque_limit = {m: 1000 for m in MOTOR_NAMES}
-        self._full_force = world.force_full
+        self._regs = {
+            m: {**_PASSIVE_REGS, **{k: v[0] for k, v in _PROTECTION_REGS.items()}}
+            for m in MOTOR_NAMES
+        }
+        self._torque_limit = {}
+        for m in MOTOR_NAMES:
+            self.write("Torque_Limit", m, self._regs[m]["Max_Torque_Limit"])
+            for reg in _PROTECTION_REGS:
+                self.write(reg, m, self._regs[m][reg])
 
     # -- helpers ------------------------------------------------------------
     def _motors(self, motors) -> list[str]:
@@ -92,11 +110,13 @@ class SimBus:
                 w.servo.set_accel(i, float(value))
         elif data_name == "Torque_Enable":
             w.set_torque(motor, bool(value))
-        elif data_name in ("Max_Torque_Limit", "Torque_Limit"):
-            frac = min(max(float(value), 0.0), 1000.0) / 1000.0
-            self._torque_limit[motor] = int(value)
-            with w.lock:
-                w.model.actuator_forcerange[w._act[i]] = self._full_force[i] * frac
+        elif data_name == "Torque_Limit":
+            self._torque_limit[motor] = int(min(max(int(value), 0), 1000))
+            w.set_torque_limit(motor, self._torque_limit[motor] / 1000.0)
+        elif data_name in _PROTECTION_REGS:
+            _, key, scale = _PROTECTION_REGS[data_name]
+            self._regs[motor][data_name] = int(value)
+            w.set_protection(motor, **{key: int(value) * scale})
         elif data_name in _PASSIVE_REGS:
             self._regs[motor][data_name] = int(value)
         else:
@@ -147,17 +167,21 @@ class SimBus:
             return {m: int(w.servo.accel_raw[i]) for m, i in zip(names, idx)}
         if data_name == "Torque_Enable":
             return {m: int(w.servo.torque[i]) for m, i in zip(names, idx)}
-        if data_name in ("Max_Torque_Limit", "Torque_Limit"):
+        if data_name == "Torque_Limit":
             return {m: self._torque_limit[m] for m in names}
+        if data_name == "Status":
+            with w.lock:
+                tripped = w.protection.tripped.copy()
+            return {m: 0x20 if tripped[i] else 0 for m, i in zip(names, idx)}
         if data_name == "Moving":
             with w.lock:
                 moving = np.abs(w.servo.v_ref) > 1e-4
             return {m: int(moving[i]) for m, i in zip(names, idx)}
         if data_name == "Present_Voltage":
-            return {m: 120 for m in names}  # 12.0 V supply
+            return {m: 74 for m in names}  # 7.4 V supply
         if data_name == "Present_Temperature":
             return {m: 32 for m in names}
-        if data_name in _PASSIVE_REGS:
+        if data_name in _PASSIVE_REGS or data_name in _PROTECTION_REGS:
             return {m: self._regs[m][data_name] for m in names}
         raise KeyError(f"register {data_name!r} not in the STS3215 control table")
 
@@ -222,7 +246,9 @@ class SimFollower:
             self.bus.write("I_Coefficient", m, 0)
             self.bus.write("D_Coefficient", m, 32)
             if m == "gripper":
-                self.bus.write("Max_Torque_Limit", m, 500)  # 50 % torque
+                # EEPROM, so Torque_Limit stays at its power-on value until
+                # the grip writes it.
+                self.bus.write("Max_Torque_Limit", m, 500)
                 self.bus.write("Protection_Current", m, 250)
                 self.bus.write("Overload_Torque", m, 25)
 

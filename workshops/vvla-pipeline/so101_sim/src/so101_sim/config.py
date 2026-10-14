@@ -38,8 +38,7 @@ DEFAULTS: dict = {
         # transports then write their own profile (1000 / 50) like on the rig.
         "speed_raw": 0,
         "accel_raw": 254,
-        "max_speed_raw": 3073,  # STS3215 no-load speed at 7.4 V (~270 deg/s)
-        "deg_per_step": 360.0 / 4096.0,
+        "max_speed_raw": 3073,  # ~270 deg/s, the 12 V no-load speed (7.4 V: ~312 deg/s)
         "accel_unit_steps": 100.0,  # one Acceleration unit = 100 steps/s^2
     },
     "joint_map": {
@@ -57,9 +56,14 @@ DEFAULTS: dict = {
         "counts_span": 2271,  # raw encoder span of the 0-100 gripper range
     },
     "current_model": {
-        "idle_a": 0.05,  # holding current with no load
-        "stall_a": 2.7,  # STS3215 stall current at 7.4 V
-        "stall_torque_nm": 2.94,  # matches the actuator forcerange
+        # 7.4 V STS3215 datasheet; current is interpolated through
+        # (0, rated_nm, stall_torque_nm) -> (idle or moving, rated_a, stall_a).
+        "idle_a": 0.006,  # stopped, no load
+        "moving_a": 0.15,  # running, no load
+        "rated_nm": 0.49,  # rated torque, 5 kg·cm
+        "rated_a": 0.65,
+        "stall_a": 2.5,
+        "stall_torque_nm": 1.91,  # 19.5 kg·cm, matches the actuator forcerange
         "ma_per_unit": 6.5,  # Present_Current LSB
         "noise_units": 3.0,  # 1-sigma readback noise
         "lpf_hz": 20.0,

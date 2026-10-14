@@ -1,5 +1,8 @@
 <mujoco model="so101">
-  <option integrator="implicitfast" timestep="0.002" cone="elliptic" iterations="10" ls_iterations="20" impratio="10"/>
+  <!-- noslip: without it the soft friction lets a held object creep down the
+       fingers (~0.4 mm/s for the bottle) at any grip force. -->
+  <option integrator="implicitfast" timestep="0.002" cone="elliptic" iterations="10" ls_iterations="20" impratio="10"
+    noslip_iterations="10"/>
 
   <compiler angle="radian" meshdir="assets" autolimits="true"/>
 
@@ -34,8 +37,9 @@
       <!-- These gains are not a 1-to-1 mapping of the servo gains used in
            Lerobot. These position gains and forces were calculated according to
            https://github.com/Gregory119/RBE501-RL-arm-project/blob/main/gymnasium_env/README.md,
-           assuming that the servo proportional gain is set to 16. -->
-      <position kp="998.22" kv="2.731" forcerange="-2.94 2.94"/>
+           assuming that the servo proportional gain is set to 16.
+           forcerange is the 7.4 V STS3215 stall torque, 19.5 kg·cm. -->
+      <position kp="998.22" kv="2.731" forcerange="-1.91 1.91"/>
     </default>
 
     <default class="backlash">

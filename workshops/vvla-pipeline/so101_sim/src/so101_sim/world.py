@@ -11,7 +11,8 @@
 that steps physics at ``physics_hz`` (500 Hz) locked to the wall clock, so
 behaviors that ``time.sleep`` between commands see the arm move exactly as
 fast as the real one. Every step runs the servo profiles
-(:class:`~so101_sim.servo.ServoBank`) and the current model.
+(:class:`~so101_sim.servo.ServoBank`), the current model and the servos'
+overload protection.
 
 All access to ``data`` goes through ``world.lock``; the render thread only
 holds it long enough to copy the scene (``mjv_updateScene``), never while
@@ -35,7 +36,7 @@ import numpy as np
 from so101_sim import MOTOR_NAMES, gl
 from so101_sim.config import MODELS_DIR, load_sim_config, scene_path
 from so101_sim.mapping import JointMap
-from so101_sim.servo import CurrentModel, ServoBank
+from so101_sim.servo import CurrentModel, OverloadProtection, ServoBank
 
 logger = logging.getLogger(__name__)
 
@@ -108,9 +109,10 @@ class SimWorld:
         self._gain_on = m.actuator_gainprm[self._act].copy()
         self._bias_on = m.actuator_biasprm[self._act].copy()
         self._jrange = m.jnt_range[[m.joint(n).id for n in MOTOR_NAMES]].copy()
-        self.force_full = m.actuator_forcerange[self._act].copy()  # Max_Torque_Limit 1000
+        self.force_full = m.actuator_forcerange[self._act].copy()  # Torque_Limit 1000
         self.servo = ServoBank(self.jmap, self.cfg["servo"], kv / kp)
         self.current = CurrentModel(self.cfg["current_model"])
+        self.protection = OverloadProtection(len(MOTOR_NAMES))
         self._ctrl = np.zeros(len(MOTOR_NAMES))
 
         self.rest_pose = dict(rest_pose or self.cfg.get("rest_pose") or DEFAULT_REST_POSE)
@@ -153,6 +155,8 @@ class SimWorld:
             self.servo.reset(q)
             self.data.ctrl[self._act] = q
             self.current.reset()
+            self.protection.reset()
+            self._apply_torque_caps()
             self._sync_epoch()
 
     # ------------------------------------------------------------------
@@ -193,8 +197,15 @@ class SimWorld:
             self.data.actuator_force[self._act] + self.data.qfrc_damper[self._dadr]
         )
         tau = np.where(self.servo.torque, tau, 0.0)
-        self.current.update(tau, self.dt)
+        self.current.update(tau, self.dt, moving=np.abs(self.servo.v_ref) > 1e-4)
+        if self.protection.update(self.current.load_frac(), self.dt):
+            self._apply_torque_caps()
         self.steps += 1
+
+    def _apply_torque_caps(self) -> None:
+        self.model.actuator_forcerange[self._act] = (
+            self.force_full * self.protection.cap()[:, None]
+        )
 
     def advance(self, seconds: float) -> None:
         """Step ``seconds`` of physics synchronously (thread must be stopped)."""
@@ -265,6 +276,30 @@ class SimWorld:
                 i = MOTOR_NAMES.index(name)
                 lo, hi = self._jrange[i]
                 self.servo.goal[i] = min(max(self.jmap.to_rad(name, cal), lo), hi)
+                if self.protection.clear(i):
+                    self._apply_torque_caps()
+
+    def set_torque_limit(self, name: str, frac: float) -> None:
+        """Torque_Limit: cap one servo's output at ``frac`` of stall torque."""
+        i = MOTOR_NAMES.index(name)
+        with self.lock:
+            self.protection.limit[i] = min(max(float(frac), 0.0), 1.0)
+            self._apply_torque_caps()
+
+    def set_protection(
+        self, name: str, threshold=None, protective=None, time_s=None
+    ) -> None:
+        """Overload_Torque / Protective_Torque / Protection_Time, as fractions and seconds."""
+        i = MOTOR_NAMES.index(name)
+        p = self.protection
+        with self.lock:
+            if threshold is not None:
+                p.threshold[i] = threshold
+            if protective is not None:
+                p.protective[i] = protective
+            if time_s is not None:
+                p.time_s[i] = time_s
+            self._apply_torque_caps()
 
     def goal_cal(self) -> dict[str, float]:
         with self.lock:

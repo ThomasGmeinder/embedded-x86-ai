@@ -17,10 +17,14 @@ position actuator the setpoint plus a velocity feed-forward
 tracking error rather than braking the whole move.
 
 :class:`CurrentModel` turns actuator torque into ``Present_Current`` (6.5 mA
-LSB) and ``Present_Load`` (0.1 % of stall) the way the motor would draw it:
-a few counts while moving freely, ~400 counts when the jaws stall on an
-object. Back-EMF is already in the joint damping, so it is subtracted out of
-the actuator force before conversion.
+LSB) and ``Present_Load`` (0.1 % of stall) from the 7.4 V STS3215 datasheet:
+6 mA idle, 150 mA running free, 650 mA at the rated 0.49 N·m, 2.5 A at the
+1.91 N·m stall. Back-EMF is already in the joint damping, so it is
+subtracted out of the actuator force before conversion.
+
+:class:`OverloadProtection` is the firmware's burnout guard: a load at or
+above ``Overload_Torque`` % for ``Protection_Time`` drops the output to
+``Protective_Torque`` % until the next position command.
 """
 
 from __future__ import annotations
@@ -108,25 +112,41 @@ class CurrentModel:
     """Actuator torque -> Present_Current / Present_Load register values."""
 
     def __init__(self, cm_cfg: dict, n: int = len(MOTOR_NAMES)):
-        self.idle_a = float(cm_cfg.get("idle_a", 0.05))
-        self.stall_a = float(cm_cfg.get("stall_a", 2.7))
-        self.stall_torque = float(cm_cfg.get("stall_torque_nm", 2.94))
+        self.idle_a = float(cm_cfg.get("idle_a", 0.006))
+        self.moving_a = float(cm_cfg.get("moving_a", 0.15))
+        self.rated_nm = float(cm_cfg.get("rated_nm", 0.49))
+        self.rated_a = float(cm_cfg.get("rated_a", 0.65))
+        self.stall_a = float(cm_cfg.get("stall_a", 2.5))
+        self.stall_torque = float(cm_cfg.get("stall_torque_nm", 1.91))
         self.ma_per_unit = float(cm_cfg.get("ma_per_unit", 6.5))
         self.noise_units = float(cm_cfg.get("noise_units", 3.0))
         self.lpf_hz = float(cm_cfg.get("lpf_hz", 20.0))
         self._rng = np.random.default_rng(cm_cfg.get("seed", 0))
         self._tau = np.zeros(n)  # low-passed |net motor torque|
+        self._moving = np.zeros(n, dtype=bool)
 
     def reset(self) -> None:
         self._tau[:] = 0.0
+        self._moving[:] = False
 
-    def update(self, tau_motor: np.ndarray, dt: float) -> None:
+    def update(self, tau_motor: np.ndarray, dt: float, moving=None) -> None:
         alpha = 1.0 - math.exp(-2.0 * math.pi * self.lpf_hz * dt)
         self._tau += alpha * (np.abs(tau_motor) - self._tau)
+        if moving is not None:
+            self._moving[:] = moving
 
     def amps(self) -> np.ndarray:
-        frac = np.clip(self._tau / self.stall_torque, 0.0, 1.2)
-        return self.idle_a + frac * (self.stall_a - self.idle_a)
+        base = np.where(self._moving, self.moving_a, self.idle_a)
+        tau = np.minimum(self._tau, self.stall_torque)
+        low = base + tau / self.rated_nm * (self.rated_a - base)
+        high = self.rated_a + (tau - self.rated_nm) / (
+            self.stall_torque - self.rated_nm
+        ) * (self.stall_a - self.rated_a)
+        return np.where(tau <= self.rated_nm, low, high)
+
+    def load_frac(self) -> np.ndarray:
+        """Low-passed |torque| as a fraction of stall (``Present_Load`` / 1000)."""
+        return np.clip(self._tau / self.stall_torque, 0.0, 1.0)
 
     def present_current(self) -> np.ndarray:
         """Raw ``Present_Current`` counts (6.5 mA LSB) with readback noise."""
@@ -137,5 +157,52 @@ class CurrentModel:
 
     def present_load(self) -> np.ndarray:
         """Raw ``Present_Load`` (0.1 % of stall torque, 0..1000)."""
-        frac = np.clip(self._tau / self.stall_torque, 0.0, 1.0)
-        return np.round(frac * 1000.0).astype(int)
+        return np.round(self.load_frac() * 1000.0).astype(int)
+
+
+class OverloadProtection:
+    """Per-servo overload guard; ``cap()`` is the output fraction of stall torque.
+
+    ``limit`` is ``Torque_Limit`` / 1000. While the load stays at or above
+    ``threshold`` (``Overload_Torque`` / 100) for ``time_s``
+    (``Protection_Time``), the servo trips and its output is capped at
+    ``protective`` (``Protective_Torque`` / 100) until :meth:`clear`, which a
+    ``Goal_Position`` write calls.
+    """
+
+    def __init__(self, n: int = len(MOTOR_NAMES)):
+        self.limit = np.ones(n)
+        self.threshold = np.full(n, 0.80)
+        self.protective = np.full(n, 0.20)
+        self.time_s = np.full(n, 2.0)
+        self.tripped = np.zeros(n, dtype=bool)
+        self._over_s = np.zeros(n)
+
+    def reset(self) -> None:
+        self.tripped[:] = False
+        self._over_s[:] = 0.0
+
+    def update(self, load_frac: np.ndarray, dt: float) -> bool:
+        """Advance the timers; True when a servo trips on this step."""
+        over = load_frac >= self.threshold
+        self._over_s = np.where(over, self._over_s + dt, 0.0)
+        trip = over & (self._over_s >= self.time_s) & ~self.tripped
+        self.tripped |= trip
+        return bool(trip.any())
+
+    def clear(self, idx: int) -> bool:
+        """Drop servo ``idx``'s protection; True when it had tripped.
+
+        A goal stream must not keep an overloaded servo from tripping, so the
+        timer only restarts after a trip.
+        """
+        was = bool(self.tripped[idx])
+        if was:
+            self.tripped[idx] = False
+            self._over_s[idx] = 0.0
+        return was
+
+    def cap(self) -> np.ndarray:
+        return np.where(
+            self.tripped, np.minimum(self.limit, self.protective), self.limit
+        )
