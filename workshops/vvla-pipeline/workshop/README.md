@@ -81,16 +81,12 @@ cd solution && python -m models.selftest && python -m ros.selftest \
   && python app.py --dry-run --synthetic --no-llm --headless --frames 60
 ```
 
-Two AMD-specific lessons for the session:
+AMD-specific lessons for the session:
 
-1. **Choose the device on purpose.** YOLO-pose and YOLO-detect already fill
-   the NPU. Another model, such as Whisper, can run on the CPU while those
-   two stay there. Pass `device="cpu"` or `device="npu"`, then print the
-   provider the session got so the student sees where it landed.
-2. **Leave room on the NPU.** The XDNA2 has a small number of hardware
-   contexts. With both vision models resident, a further NPU session does
-   not fit. Keep camera-rate vision on the NPU and place the extra model
-   on the CPU.
+**Choose the device on purpose.** YOLO-pose and YOLO-detect already fill
+the NPU. Another model, such as Whisper, can run on the CPU while those
+two stay there. Pass `device="cpu"` or `device="npu"`, then print the
+provider the session got in order to verify where it landed.
 
 Generated dirs (`_artifacts/`, `logs/`, `__pycache__/`) are disposable -
 see `.gitignore`.
