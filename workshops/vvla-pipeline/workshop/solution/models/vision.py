@@ -110,7 +110,6 @@ class ObjectDetector:
     def __init__(self, cfg: dict, device=None):
         y = cfg["yolo_detect"]
         self.imgsz = int(y["imgsz"])
-        self.conf_threshold = float(y["conf_threshold"])
         requested = device or y["device"]
         size_npu(cfg, device)
         self.session = build_npu_session(
@@ -120,6 +119,10 @@ class ObjectDetector:
             cache_key=y["cache_key"],
         )
         self.provider = report_placement(self.session, requested, "yolo26s-detect")
+        on_npu = "VitisAIExecutionProvider" in self.session.get_providers()
+        self.conf_threshold = float(
+            y.get("npu_conf_threshold", y["conf_threshold"]) if on_npu else y["conf_threshold"]
+        )
         self.input_name = self.session.get_inputs()[0].name
 
     def infer(self, frame_bgr, conf=None):

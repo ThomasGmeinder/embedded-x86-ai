@@ -203,7 +203,6 @@ class ObjectDetector:
     def __init__(self, cfg: dict, device: str | None = None):
         y = cfg["yolo_detect"]
         self.imgsz: int = int(y["imgsz"])
-        self.conf_threshold: float = float(y["conf_threshold"])
         size_npu(cfg, device)
         self.session = build_session(
             y["onnx"],
@@ -211,6 +210,10 @@ class ObjectDetector:
             vitisai_config=y.get("vitisai_config", "config/vaiep_config.json"),
             cache_dir=cfg.get("system", {}).get("cache_dir", "cache"),
             cache_key=y["cache_key"],
+        )
+        on_npu = "VitisAIExecutionProvider" in self.session.get_providers()
+        self.conf_threshold: float = float(
+            y.get("npu_conf_threshold", y["conf_threshold"]) if on_npu else y["conf_threshold"]
         )
         self.input_name = self.session.get_inputs()[0].name
 

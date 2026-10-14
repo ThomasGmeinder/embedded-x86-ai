@@ -31,7 +31,8 @@ yolo_detect:                        # eyes (what to grab) - NPU
   device: npu
   vitisai_config: config/vaiep_config.json
   imgsz: 640
-  conf_threshold: 0.35
+  conf_threshold: 0.35              # FP32 on the CPU
+  npu_conf_threshold: 0.2           # the NPU runs it in BF16, which scores the same frame up to 0.2 lower
   cache_key: yolo26s_detect_fp32
 
 mediapipe:                          # fingers (pinch) - CPU

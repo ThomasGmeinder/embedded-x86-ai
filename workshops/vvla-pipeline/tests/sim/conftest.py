@@ -49,7 +49,8 @@ def pytest_addoption(parser):
                 help="arm-camera detector: the stack's YOLOv26s on the rendered frames, as in the "
                      "notebook (default), or ground-truth boxes from the twin's segmentation")
     g.addoption("--sim-yolo-device", choices=("cpu", "npu"), default="cpu",
-                help="where the YOLO eyes run (the notebook uses npu)")
+                help="where the YOLO eyes run (the notebook uses npu; source "
+                     "scripts/ryzen_ai_env.sh first, else the eyes fail instead of running on the CPU)")
 
 
 def pytest_configure(config):
@@ -216,6 +217,13 @@ def eyes(request, pipeline_cfg, workshop_cfg):
                 from models.vision import ObjectDetector
 
                 made[target] = ObjectDetector(workshop_cfg, device=device)
+        providers = made[target].session.get_providers()
+        if device == "npu" and "VitisAIExecutionProvider" not in providers:
+            pytest.fail(
+                f"--sim-yolo-device npu, but the {target} detector runs on {providers}: "
+                "source scripts/ryzen_ai_env.sh with RYZEN_AI_WHEELS set",
+                pytrace=False,
+            )
         return made[target]
 
     return get
