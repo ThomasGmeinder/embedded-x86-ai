@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Every model lands on the NPU whatever order the stack builds them in.
+"""YOLO-pose and YOLO-detect land on the NPU when the detector is built first.
 
     source scripts/ryzen_ai_env.sh && pytest tests/npu
 

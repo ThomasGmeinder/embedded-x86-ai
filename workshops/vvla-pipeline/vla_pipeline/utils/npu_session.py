@@ -7,10 +7,9 @@
 
 """ONNX Runtime session factory for the Ryzen AI NPU (VitisAIExecutionProvider).
 
-All three NPU models (Whisper-base, YOLOv26s-pose, and YOLOv26s object
-detection) build their sessions through :func:`build_session` so the VitisAI
-compiler config, cache directory, and provider verification live in exactly one
-place.
+YOLO-pose and YOLO-detect build their NPU sessions through
+:func:`build_session` so the VitisAI compiler config, cache directory, and
+provider verification live in exactly one place.
 
 Notes for Ryzen AI SW 1.7.1 on Linux (Strix Halo / XDNA2):
 - ``onnxruntime`` must be the Ryzen AI build that ships
@@ -18,11 +17,11 @@ Notes for Ryzen AI SW 1.7.1 on Linux (Strix Halo / XDNA2):
   Ryzen AI wheel directory, see ``RYZEN_AI_WHEELS``).
 - The first compile of a model for the NPU can take tens of minutes; the
   result is cached under ``cache_dir/cache_key`` and reloads in ~1 s.
-- The models on the NPU share buffers within a process, created by its
-  first NPU session and freed when the last one closes: a larger model
-  opened while a smaller one is open fails with ``HW context creation
+- The two YOLO sessions share buffers within a process, created by its
+  first NPU session and freed when the last one closes. YOLO-pose opened
+  while YOLO-detect is open fails with ``HW context creation
   unsuccessful`` (``sub buffer size and offset``). :func:`size_npu` opens
-  the largest first and keeps it open, so all of them fit, in any order.
+  YOLO-pose first and keeps that session.
 """
 
 from __future__ import annotations
@@ -36,8 +35,8 @@ from vla_pipeline.utils.config import resolve
 
 logger = logging.getLogger(__name__)
 
-# The NPU models, largest buffers first: (config section, ONNX key, VitisAI
-# config key, cache key, VitisAI target - each loaded as its own wrapper does).
+# First entry whose device is npu is opened and held. (config section, ONNX
+# key, VitisAI config key, cache key, VitisAI target.)
 _BY_SIZE = (
     ("whisper", "encoder_onnx", "encoder_vitisai_config", "cache_key_encoder", None),
     ("whisper", "decoder_onnx", "decoder_vitisai_config", "cache_key_decoder", None),
@@ -60,11 +59,11 @@ def active_provider(session: ort.InferenceSession) -> str:
 
 
 def size_npu(cfg: dict, device: str | None = None) -> None:
-    """Open the largest model ``cfg`` puts on the NPU and keep it open, once per process.
+    """Open the first model whose device is ``npu`` and keep that session, once per process.
 
-    Call it before building any NPU session. The buffers it sizes fit every
-    smaller model, whatever order they load in. ``device`` overrides every
-    model's configured device, as ``--device`` does.
+    With the shipped config that model is YOLO-pose. Call it before building
+    any other NPU session. ``device`` overrides every model's configured
+    device, as ``--device`` does.
     """
     global _npu_sized, _sizer
     if _npu_sized or not npu_available():

@@ -80,5 +80,5 @@ always-on-top resource HUD - **CPU %**, **GPU %**, and **NPU inferences/sec**
 - Two debugging lessons to keep taped to your monitor:
   - **Verify the execution provider.** Asking for the NPU isn't getting it.
   - **Mind the NPU load order.** The first model opened sizes the NPU's
-    shared buffers while it stays open; open the largest first, keep it
-    open, and everything fits.
+    shared buffers while it stays open. Open YOLO-pose first and keep it
+    open, so YOLO-detect can load after it.

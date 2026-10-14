@@ -17,7 +17,7 @@ flowchart TB
         ARMCAM([Arm camera<br/>end effector]):::io
 
         VAD["VAD listener thread<br/>0.35 s end-of-speech<br/>(always hot)"]:::cpu
-        WHISPER["Whisper-base<br/>speech → text<br/>(CPU default; NPU optional)"]:::cpu
+        WHISPER["Whisper-base<br/>speech → text<br/>(CPU)"]:::cpu
         POSE["YOLOv26s-pose<br/>17 body keypoints"]:::npu
         DETECT["YOLOv26s-detect<br/>80-class objects"]:::npu
         HANDS["MediaPipe Hands<br/>thumb/index pinch"]:::cpu
@@ -82,7 +82,7 @@ flowchart TB
     classDef gate fill:#f5f5f5,stroke:#666,color:#000;
 ```
 
-Legend — <span title="NPU">🟧 NPU (VitisAI EP)</span> · 🟦 iGPU (ROCm) · 🟪 CPU · 🟩 behavior · 🟥 robot/transport. YOLO-pose and YOLO-detect target the NPU by default; Whisper defaults to CPU, where a short command transcribes in a few hundred ms. All four ONNX models fit on the NPU together, so Whisper can use its compiled NPU cache when explicitly selected; see [Compute placement → NPU load order](#npu-load-order-important).
+Legend — <span title="NPU">🟧 NPU (VitisAI EP)</span> · 🟦 iGPU (ROCm) · 🟪 CPU · 🟩 behavior · 🟥 robot/transport. YOLO-pose and YOLO-detect target the NPU by default; Whisper defaults to CPU, where a short command transcribes in a few hundred ms. See [Compute placement → NPU load order](#npu-load-order-important).
 
 ## The robot's senses → an SO-101
 
@@ -100,7 +100,7 @@ flowchart LR
         BASE --- SHOULDER --- ELBOW --- WRIST --- JAW
     end
 
-    EARS["👂 EARS<br/><b>Whisper-base · CPU default / NPU optional</b><br/>speech → text"]:::ear
+    EARS["👂 EARS<br/><b>Whisper-base · CPU</b><br/>speech → text"]:::ear
     BRAIN["🧠 BRAIN<br/><b>Llama 3.2 3B · iGPU</b><br/>intent + object<br/>(GBNF-constrained)"]:::brain
     EYES["👁 EYES<br/><b>YOLOv26s · NPU</b><br/>pose = where you are<br/>detect = what to grab"]:::eye
     TOUCH["✋ TOUCH<br/><b>Feedback gripper</b><br/>current + position stall<br/>+ camera verify"]:::touch
@@ -118,7 +118,7 @@ flowchart LR
     classDef touch fill:#f8cecc,stroke:#b85450,color:#000,font-size:14px;
 ```
 
-**Ears (Whisper) → Brain (Llama):** the microphone is gated by an always-hot VAD listener; Whisper turns speech to text on the NPU or CPU, and Llama — constrained by a GBNF grammar so it can only emit `{"command", "object"}` — decides which behavior to run. **Eyes (YOLO) → the arm's aim and reach:** YOLO-pose finds *where you are* (drives `shoulder_pan` and the up/down reach for mimicry and handoff), while YOLO-detect finds *what to grab* (grounds "the ball" on a settled sweep, and one stored frame — the camera ray through the box's bottom meeting the table — gives the object's position for one IK reach). **Touch (gripper) → the jaws:** the feedback close loop senses contact through servo current and position stall, confirms with the arm camera, and keeps the goal a little past contact at `Torque_Limit` 500 while both fingers seat, then eases to `hold_torque_limit` for the carry — which is why a pen no longer slips.
+**Ears (Whisper) → Brain (Llama):** the microphone is gated by an always-hot VAD listener; Whisper turns speech to text on the CPU, and Llama — constrained by a GBNF grammar so it can only emit `{"command", "object"}` — decides which behavior to run. **Eyes (YOLO) → the arm's aim and reach:** YOLO-pose finds *where you are* (drives `shoulder_pan` and the up/down reach for mimicry and handoff), while YOLO-detect finds *what to grab* (grounds "the ball" on a settled sweep, and one stored frame — the camera ray through the box's bottom meeting the table — gives the object's position for one IK reach). **Touch (gripper) → the jaws:** the feedback close loop senses contact through servo current and position stall, confirms with the arm camera, and keeps the goal a little past contact at `Torque_Limit` 500 while both fingers seat, then eases to `hold_torque_limit` for the carry — which is why a pen no longer slips.
 
 ## Voice commands → behaviors
 
@@ -153,7 +153,7 @@ Llama is constrained by `config/intent.gbnf` so it can only ever emit `{"command
 
 | Model | Sense | Device | Runtime |
 |---|---|---|---|
-| Whisper-base (`amd/whisper-base-onnx-npu`) | ears | **NPU or CPU** (see below) | ONNX Runtime, VitisAI EP |
+| Whisper-base (`amd/whisper-base-onnx-npu`) | ears | **CPU** | ONNX Runtime |
 | Llama 3.2 3B Instruct (Q4_K_M) | brain | **iGPU** | `llama.cpp` `llama-server` (`-DGGML_HIP=ON`) |
 | YOLOv26s-pose | eyes (where) | **NPU** | ONNX Runtime, VitisAI EP |
 | YOLOv26s-detect | eyes (what) | **NPU** | ONNX Runtime, VitisAI EP |
@@ -164,17 +164,9 @@ Every NPU session is built through one shared factory (`vla_pipeline/utils/npu_s
 
 ### NPU load order (important)
 
-The models on the NPU share buffers within a process: the first NPU session a process opens **sizes them**, and they last until its last NPU session closes. A larger model opened while a smaller one is open fails with `HW context creation unsuccessful / sub buffer size and offset` — not a stale cache and not a full NPU. Opened largest first (Whisper encoder, Whisper decoder, YOLO-pose, YOLO-detect), **all four ONNX models fit** and run together.
+YOLO-pose and YOLO-detect run on the NPU. Whisper stays on the CPU.
 
-`size_npu` in `vla_pipeline/utils/npu_session.py` takes care of it: before the first NPU session, it opens the largest model the config puts on the NPU and keeps it open for the life of the process (one extra session of that model), so the others can load in any order. `tests/npu` checks the orders the pipeline and the workshop use.
-
-The default split keeps the **latency-sensitive vision** models on the NPU (pose runs at camera rate for mimicry) and runs **Whisper on CPU**, where a short command still transcribes in a few hundred ms — well under the VAD budget. Bootstrap does not compile Whisper for the NPU. To put Whisper on the NPU as well, compile it with `scripts/compile_npu_models.sh --only whisper`, then:
-
-```yaml
-whisper:    {device: npu}
-yolo_pose:  {device: npu}
-yolo_detect:{device: npu}
-```
+Those two sessions share buffers within a process. The first one sizes them, and they last until the last one closes. Opening YOLO-pose while YOLO-detect is already open fails with `HW context creation unsuccessful / sub buffer size and offset`. `size_npu` opens YOLO-pose first and keeps that session for the life of the process, so the detector can load after it.
 
 A model set to `npu` still falls back to CPU, with a warning, if the VitisAI runtime can't give it a session; the startup logs say where each model landed.
 
@@ -587,7 +579,7 @@ All tunables live in `config/pipeline.yaml`:
 
 - **"VitisAI EP not available — falling back to CPU"** — set `RYZEN_AI_WHEELS` and rerun `./bootstrap.sh`, and confirm the XDNA driver is loaded (`ls /dev/accel/`).
 - **torch sees no GPU** — add yourself to `render`/`video` groups (`sudo usermod -a -G render,video $USER`) and reboot.
-- **`HW context creation unsuccessful` / `sub buffer size and offset` when loading a model on the NPU** — a larger model was opened on the NPU while a smaller one was already open in the same process, and the first one sized the buffers they share. This is *not* a stale cache and *not* a full NPU. The pipeline and the workshop open the largest first (`size_npu`); code that builds its own sessions must open the largest first and keep it open. See **Compute placement → NPU load order**.
+- **`HW context creation unsuccessful` / `sub buffer size and offset` when loading a model on the NPU** — YOLO-pose was opened while YOLO-detect was already open in the same process. Open YOLO-pose first and keep that session (`size_npu`). See **Compute placement → NPU load order**.
 - **NPU model falls back to CPU unexpectedly** — check the startup logs; a model set to `npu` that can't get a session logs a warning and runs on CPU rather than crashing.
 - **`EOFError` / "No calibration … not a TTY" from the server node** — the arm has no calibration file and the server is backgrounded (no terminal to run interactive calibration). Run `python -m vla_pipeline.robot.arm_interface --calibrate` once in the foreground; `run_pipeline.sh` now does this automatically before launch.
 - **Camera preview shows "no frames — camera offline"** — with `use_ros2: true` the preview *subscribes* to a topic, so it needs the camera node publishing. Start the nodes (`./run_pipeline.sh` or `python -m vla_pipeline.vision.camera_node --role operator`), or test the raw device directly by setting that role's `use_ros2: false`. Confirm the device captures at all with `v4l2-ctl -d <by-id path> --list-formats-ext`.

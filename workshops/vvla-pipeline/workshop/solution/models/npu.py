@@ -20,9 +20,8 @@ here:
    created by its first NPU session and freed when the last one closes. A
    larger model opened while a smaller one is open fails with ``HW context
    creation unsuccessful / sub buffer size and offset``. That is NOT a stale
-   cache and NOT a full NPU: open the largest first, keep it open, and
-   everything fits (``models.vision.size_npu`` does this for the two YOLO
-   models).
+   cache and NOT a full NPU: open YOLO-pose first and keep it open, so
+   YOLO-detect can load after it (``models.vision.size_npu`` does this).
 
 Compiled NPU artifacts are keyed by ``cache_dir + cache_key`` and are
 portable: the first compile can take tens of minutes (done once, from the

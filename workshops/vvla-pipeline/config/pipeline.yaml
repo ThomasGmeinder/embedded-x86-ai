@@ -74,7 +74,7 @@ yolo_pose:
 
 yolo_detect:                  # object detection for voice pick-and-place
   onnx: models/yolo26s/yolo26s.onnx        # exported by scripts/export_yolo26s_detect.py
-  device: npu                 # npu | cpu (both YOLO models + Whisper share the NPU)
+  device: npu                 # npu | cpu
   vitisai_config: config/vaiep_config.json
   imgsz: 640
   conf_threshold: 0.35        # FP32 on the CPU
