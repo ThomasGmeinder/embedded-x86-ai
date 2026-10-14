@@ -81,17 +81,16 @@ cd solution && python -m models.selftest && python -m ros.selftest \
   && python app.py --dry-run --synthetic --no-llm --headless --frames 60
 ```
 
-The two AMD-specific lessons to hammer home during the session:
+Two AMD-specific lessons for the session:
 
-1. **Verify the execution provider.** Requesting the NPU isn't getting it.
-   A silent CPU fallback is a bug: the session still builds, so the student
-   thinks the model is on the NPU while it runs on the CPU, and CPU and NPU
-   look like the same speed. Pass `device="cpu"` or `device="npu"` on purpose
-   and print the provider the session got.
-2. **The NPU context budget.** Too many resident models for the concurrent
-   XDNA2 hardware contexts fails with `HW context creation unsuccessful`.
-   It's not a stale cache; move a model to CPU deliberately (camera-rate
-   vision stays on the NPU).
+1. **Choose the device on purpose.** YOLO-pose and YOLO-detect already fill
+   the NPU. Another model, such as Whisper, can run on the CPU while those
+   two stay there. Pass `device="cpu"` or `device="npu"`, then print the
+   provider the session got so the student sees where it landed.
+2. **Leave room on the NPU.** The XDNA2 has a small number of hardware
+   contexts. With both vision models resident, a further NPU session does
+   not fit. Keep camera-rate vision on the NPU and place the extra model
+   on the CPU.
 
 Generated dirs (`_artifacts/`, `logs/`, `__pycache__/`) are disposable -
 see `.gitignore`.
