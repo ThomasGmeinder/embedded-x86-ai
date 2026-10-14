@@ -86,10 +86,11 @@ _PIPELINE_BACKSTOP = {
     "wrist_roll": (-100.0, 100.0),
 }
 
-# Standing grasps are solved and sent in this envelope. The workshop's 67.5°
-# wrist cap deletes the only approach that stays outside a bottle; the
-# pipeline backstop is the range that approach fits. Gripper stays on the
-# calibrated workshop span. Other behaviors keep JOINT_LIMITS.
+# IK grasps and the carry are sent in this envelope, and standing grasps are
+# solved in it. The workshop's 67.5° wrist cap deletes the only approach that
+# stays outside a bottle and tilts every pre-grasp; the pipeline backstop is
+# the range those fit. Gripper stays on the calibrated workshop span. Other
+# behaviors keep JOINT_LIMITS.
 GRASP_LIMITS = {**JOINT_LIMITS, **_PIPELINE_BACKSTOP}
 
 _LIVE_LIMIT_SCALE = 1.25

@@ -48,6 +48,7 @@ import numpy as np
 
 from vla_pipeline.robot.arm_interface import (
     GRIPPER_CLOSED_FLOOR,
+    GRIPPER_TORQUE_LIMIT,
     JOINT_LIMITS,
     ArmClient,
     DryRunArm,
@@ -110,7 +111,7 @@ def object_in_jaws(
 
 
 def close_with_feedback(
-    arm: ArmClient, g: dict, stop_check=None, start_from: float | None = None
+    arm: ArmClient, g: dict, stop_check=None, start_from: float | None = None, ease: bool = True
 ) -> tuple[bool, float]:
     """Close the gripper until contact. Returns ``(gripped, hold_position)``.
 
@@ -118,16 +119,26 @@ def close_with_feedback(
     provides effort feedback) OR a position stall (the jaws stopped short of
     the command) - with a grace window after full close so thin objects are
     still detected.
+
+    The close runs at :data:`GRIPPER_TORQUE_LIMIT`. After contact the goal
+    trails ``hold_past_contact`` below the jaw for ``reseat_s`` while both
+    fingers seat, then :func:`ease_grip` drops the limit for the hold. The
+    goal stays past the object, so the torque limit sets the grip force.
+
+    ``ease=False`` keeps the close limit for an object that still rests on
+    the table: there the hold force lets it settle against one jaw and the
+    table, and the lift leaves it behind. The caller eases once the first
+    lift step is done.
     """
     step = float(g["close_step_deg"])
     eps = float(g["stall_eps_deg"])
     need_ticks = int(g["stall_ticks"])
-    extra = float(g["settle_extra_deg"])
     load_threshold = float(g.get("load_threshold", 120.0))
     load_ticks_needed = int(g.get("load_ticks", 3))
     grace_s = float(g.get("stall_grace_s", 0.6))
     tick_s = 0.05
 
+    arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
     use_load = arm.get_gripper_load() is not None
     logger.info(
         "[grip] closing with %s feedback...",
@@ -183,19 +194,39 @@ def close_with_feedback(
 
     if not gripped:
         return False, 0.0
-    # Hold slightly tighter than where contact happened (bounded at closed).
-    measured = float(arm.get_joints().get("gripper", commanded))
-    hold = max(min(measured, commanded) - extra, floor)
-    arm.send_joints({"gripper": hold})
+    hold = _reseat(arm, g, stop_check, tick_s)
+    if ease:
+        ease_grip(arm, g)
     return True, hold
 
 
+def ease_grip(arm: ArmClient, g: dict) -> None:
+    """Drop to ``hold_torque_limit``: below the 25 % ``Overload_Torque``
+    LeRobot sets for the gripper, which would otherwise cut the grip to 20 %
+    about 2 s into a squeeze at the close limit."""
+    arm.set_gripper_torque_limit(int(g.get("hold_torque_limit", 240)))
+
+
+def _reseat(arm: ArmClient, g: dict, stop_check, tick_s: float) -> float:
+    """Keep the goal ``hold_past_contact`` below the jaw for ``reseat_s``.
+    Contact can register while one jaw still pushes the object; the trailing
+    goal lets both fingers seat. Returns the last goal."""
+    past = float(g.get("hold_past_contact", 6.0))
+    deadline = time.time() + float(g.get("reseat_s", 0.6))
+    while True:
+        jaw = float(arm.get_joints()["gripper"])
+        hold = max(jaw - past, GRIPPER_CLOSED_FLOOR)
+        arm.send_joints({"gripper": hold})
+        if time.time() >= deadline or (stop_check and stop_check()):
+            return hold
+        time.sleep(tick_s)
+
+
 def holding(arm: ArmClient, g: dict, hold: float) -> bool:
-    """Once the jaws have settled: an object loads the servo or keeps the jaws
-    open past where they were sent (the arm clamps a goal below its floor)."""
-    load = arm.get_gripper_load()
-    if load is not None and load >= float(g.get("load_threshold", 120.0)):
-        return True
+    """The jaws stopped more than ``stall_eps_deg`` short of the held goal.
+    The goal is past the object, so an empty jaw closes onto it within a
+    fraction of a second. Current is not used: at the hold limit it reads
+    below the close's contact level."""
     target = max(hold, GRIPPER_CLOSED_FLOOR)
     return float(arm.get_joints().get("gripper", target)) - target > float(g["stall_eps_deg"])
 
@@ -285,6 +316,7 @@ def run_release(arm: ArmClient, shared_state: dict | None = None, stop_check=Non
     shared_state.pop("grip_lock", None)
     shared_state.pop("grip_lock_pos", None)
     say("Released.")
+    arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
     arm.go_to(
         {"gripper": JOINT_LIMITS["gripper"][1]}, duration_s=0.8, stop_check=stop_check,
     )

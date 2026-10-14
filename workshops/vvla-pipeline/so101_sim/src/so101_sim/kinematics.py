@@ -33,7 +33,7 @@ import threading
 
 import numpy as np
 
-from so101_sim.world import TABLE_Z
+from so101_sim.world import _FIXED_PAD_X, TABLE_Z
 
 __all__ = [
     "Kinematics",
@@ -792,10 +792,13 @@ class Kinematics:
     ) -> tuple[dict, dict] | None:
         """``(pregrasp, grasp)`` joint poses for an object centred at ``p``, or ``None``.
 
-        The grasp puts ``p`` between the open jaws with the closing axis
-        horizontal (within ``max_tilt``); if the jaw tips would touch the
-        table it grasps up to ``max_raise_m`` higher. The pre-grasp is the
-        same grasp ``above_m`` straight above. With ``object_axis`` all five
+        The grasp puts ``p`` on the midpoint of the two inner faces with the
+        jaws still open (``gripper``, default the full open angle) and the
+        closing axis horizontal (within ``max_tilt``). The jaw stays that open
+        through the approach and the descent; it closes only after the hand
+        is there. If the jaw tips would touch the table it grasps up to
+        ``max_raise_m`` higher. The pre-grasp is the same grasp ``above_m``
+        straight above. With ``object_axis`` all five
         joints are solved together so the jaws close perpendicular to that
         table-plane axis; otherwise ``wrist_roll`` is fixed. ``None`` means
         out of reach (within ``limits``, see :meth:`ik`).
@@ -846,6 +849,45 @@ class Kinematics:
             if ok(pre, err, tilt) and clear(pre, obstacle_clearance_m):
                 return pre, grasp
         return None
+
+    def grasp_beside(
+        self,
+        grasp: dict,
+        p,
+        gap_m: float,
+        width: float = 0.04,
+        table_z: float = TABLE_Z,
+        clearance_m: float = 0.003,
+        tol_m: float = 0.003,
+        max_tilt: float = 0.3,
+        limits: dict | None = None,
+    ) -> dict | None:
+        """``grasp`` moved along the closing axis until the fixed finger's inner
+        face is ``gap_m`` from the object at ``p``, or ``None`` when it already
+        is that close or the moved pose does not solve.
+
+        The hand comes down centred, where a lagging joint cannot put a finger
+        on the object, and then moves sideways at grasp height. The moving jaw
+        then pushes the object only ``gap_m`` into the fixed finger. From the
+        centre it has to shove the object across half the open jaw, and an
+        object that neither slides nor rolls drags the arm over and tilts the
+        fingers instead.
+        """
+        p = np.asarray(p, float)
+        with self._lock:
+            b = self.world.fk(grasp).body("gripper")
+            R = b.xmat.reshape(3, 3).copy()
+            gap = float((R.T @ (p - b.xpos))[0]) - 0.5 * width - _FIXED_PAD_X
+            point = self.world.grasp_point(grasp, width)
+        if gap <= gap_m:
+            return None
+        pose, err, tilt = self.ik(
+            point + R[:, 0] * (gap - gap_m), width, float(grasp["gripper"]), grasp,
+            limits=limits, one_branch=True,
+        )
+        if err > tol_m or abs(tilt) > max_tilt or self.lowest_point(pose) < table_z + clearance_m:
+            return None
+        return pose
 
     # ------------------------------------------------------------------
     # viewing an oriented object

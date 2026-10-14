@@ -220,38 +220,22 @@ behaviors:
     scan_near_pans: [0.0, -14.0, 14.0]
     # ik: locate the object on the table from its box (camera ray meets the
     # table plane) and solve the reach; fixed: approach_pose + descend_lift.
-    # ik falls back to fixed when there is no fix or the object is out of reach.
+    # With ik, no fix or no solve means out of reach; fixed also runs when the arm camera is offline.
     reach: ik
     table_z: -0.005           # table surface height in the arm's base frame (m)
-    pregrasp_above_m: 0.06    # ik: jaws open this far above the grasp, then straight down
+    pregrasp_above_m: 0.06    # ik: jaws open this far above the grasp, then descend in joint space
     max_grasp_height_m: 0.03  # ik: grasp tall objects no higher than this above the table
-    # Fixed reach, after the pan servo: jaws ~12 cm above the table;
-    # descend_lift brings them down to a ~4 cm object at ~28 cm range with
-    # the closing axis horizontal.
+    fixed_jaw_gap_m: 0.005    # ik: after the descent, the hand moves sideways until the fixed finger is this far from a lying object
+    # Fixed reach: jaws ~12 cm above the table; descend_lift brings them down
+    # to a ~4 cm object at ~28 cm range with the closing axis horizontal.
     approach_pose: {shoulder_lift: -15.0, elbow_flex: 20.0, wrist_flex: 54.0}
     descend_lift: 9.0         # shoulder_lift while descending onto the object
-    # deg of pan per unit of normalized horizontal error. The sign follows the
-    # wrist camera mount: negative when the fixed jaw shows bottom-right in the
-    # arm image (twin and stock mount).
-    servo_gain_pan: -10.0
-    servo_target_x: -0.24     # image x (normalized) of an object that sits between the jaws
-    servo_tolerance: 0.06     # |normalized error| considered centered
-    servo_timeout_s: 6.0
     wrist_align_classes: [toothbrush]
     wrist_align_pregrasp_above_m: 0.10  # pre-grasp height above a thin object
-    wrist_align_grasp_width_m: 0.024     # toothbrush handle width across the aligned jaws
+    wrist_align_grasp_width_m: 0.024     # toothbrush handle width across the jaws
     wrist_align_center_offset_m: 0.018   # shift from silhouette midpoint toward the narrow handle end
     wrist_align_fixed_jaw_bias_m: 0.024  # moving finger presses the handle into the fixed finger
-    wrist_align_settle_extra_deg: 8.0    # extra squeeze for the thin handle before lifting
-    wrist_align_lift_duration_s: 4.0     # slow vertical withdrawal so the thin handle does not slip
-    wrist_axis_tolerance_deg: 6.0        # converged when a fresh view asks for less roll than this
-    wrist_axis_max_rounds: 4             # measure-and-move rounds before giving up
     wrist_axis_min_elongation: 1.6
-    # While the wrist rolls, the whole arm keeps the camera aimed at the object
-    wrist_view_distance_m: 0.17          # camera-to-object distance
-    wrist_view_look_down: 0.85           # downward component of the camera axis (1 = straight down)
-    wrist_view_roll_step_deg: 15.0       # roll per look-at waypoint
-    wrist_view_step_s: 0.5               # seconds per waypoint
     min_box_area_frac: 0.002  # detections smaller than this are noise
     ambiguous_ratio: 1.25     # top-2 score ratio below this = "which one?"
     handoff_reach: 55.0       # same semantics as fetch_block
@@ -264,7 +248,9 @@ behaviors:
     close_step_deg: 1.5
     stall_eps_deg: 0.4
     stall_ticks: 5
-    settle_extra_deg: 2.0
+    hold_past_contact: 6.0    # after contact the goal trails this far below the jaw (< max_relative_target)
+    reseat_s: 0.6             # ...for this long at Torque_Limit 500 while both fingers seat
+    hold_torque_limit: 240    # Torque_Limit once the object hangs from the fingers: under LeRobot's 25 % Overload_Torque
     stall_grace_s: 0.6        # NEW: keep stall-sampling after full close (thin objects)
     load_threshold: 120.0     # NEW: effort/current contact level (raw Feetech units)
     load_ticks: 3             # NEW: consecutive over-threshold reads = contact

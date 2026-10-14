@@ -32,11 +32,22 @@ import time
 
 import numpy as np
 
-from vla_pipeline.robot.arm_interface import JOINT_LIMITS, REST_POSE, ArmClient, DryRunArm, make_arm
+from vla_pipeline.robot.arm_interface import (
+    GRIPPER_TORQUE_LIMIT,
+    JOINT_LIMITS,
+    REST_POSE,
+    ArmClient,
+    DryRunArm,
+    make_arm,
+)
 from vla_pipeline.utils.config import load_config
 from vla_pipeline.vision.yolo_pose_npu import KP, PoseEstimator
 
 logger = logging.getLogger(__name__)
+
+# The lift runs this long at the close limit, so the block hangs from the
+# fingers before the grip eases to the hold limit.
+_BREAKAWAY_S = 0.3
 
 
 def person_pan_target(pose: PoseEstimator, frame: np.ndarray) -> float | None:
@@ -94,8 +105,13 @@ def track_person_and_handoff(
     operator_camera,
     lift_pose: dict,
     stop_check=None,
-) -> None:
-    """Shared EXTEND → RELEASE → HOME tail used by fetch_block and pick_place."""
+    still_holding=lambda: True,
+) -> bool:
+    """Shared EXTEND → RELEASE → HOME tail used by fetch_block and pick_place.
+
+    Returns False, with the jaws left closed, when ``still_holding()`` finds
+    them empty after the extend: there is nothing to hand over.
+    """
     pan, _found = find_person_pan(pose, operator_camera, arm, stop_check=stop_check)
 
     logger.info("[handoff] EXTEND toward person")
@@ -110,19 +126,24 @@ def track_person_and_handoff(
         duration_s=2.5,
         stop_check=stop_check,
     )
+    if not still_holding():
+        return False
 
     logger.info("[handoff] RELEASE - take it!")
     time.sleep(min(float(cfg_section["release_timeout_s"]), 6.0) * 0.5)
+    arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
     arm.go_to({"gripper": JOINT_LIMITS["gripper"][1]}, duration_s=1.0)
     time.sleep(1.0)
 
     logger.info("[handoff] HOME")
     park_open(arm)
+    return True
 
 
 def park_open(arm: ArmClient, stop_check=None) -> None:
     """Go to the rest pose with the jaws wide open. Closing them on the way
     home can catch the object just let go of and drag it across the table."""
+    arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
     arm.go_to({**REST_POSE, "gripper": JOINT_LIMITS["gripper"][1]}, duration_s=3.0, stop_check=stop_check)
 
 
@@ -140,7 +161,7 @@ def run_fetch_block(
     is checked twice, after closing and after the lift; if the block isn't
     held, the arm says so and parks instead of handing over empty jaws.
     """
-    from vla_pipeline.behaviors.grip import close_with_feedback, holding
+    from vla_pipeline.behaviors.grip import close_with_feedback, ease_grip, holding
 
     fb = cfg["behaviors"]["fetch_block"]
     g = cfg["behaviors"]["grip"]
@@ -158,27 +179,37 @@ def run_fetch_block(
         return False
 
     logger.info("[fetch] GRASP")
-    gripped, hold = close_with_feedback(arm, g, stop_check=stop_check, start_from=70.0)
+    gripped, hold = close_with_feedback(arm, g, stop_check=stop_check, start_from=70.0, ease=False)
     if stopped():
         return False
-    time.sleep(0.3)
     if not (gripped and holding(arm, g, hold)):
         say("I couldn't get a grip on the block - is it in its usual spot?")
+        arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
         arm.go_to({"gripper": 70.0}, duration_s=0.8)
         arm.go_to_rest()
         return False
 
     logger.info("[fetch] LIFT")
+    arm.send_joints({**lift_pose, "gripper": hold})
+    time.sleep(_BREAKAWAY_S)
+    ease_grip(arm, g)
     arm.go_to({**lift_pose, "gripper": hold}, duration_s=2.5, stop_check=stop_check)
     if stopped():
         return False
     time.sleep(0.3)
     if not holding(arm, g, hold):
         say("I dropped the block.")
-        arm.go_to_rest()
+        park_open(arm)
         return False
 
-    track_person_and_handoff(fb, arm, pose, operator_camera, lift_pose, stop_check)
+    if not track_person_and_handoff(
+        fb, arm, pose, operator_camera, lift_pose, stop_check, lambda: holding(arm, g, hold),
+    ):
+        if stopped():
+            return False
+        say("I dropped the block.")
+        park_open(arm)
+        return False
     return True
 
 

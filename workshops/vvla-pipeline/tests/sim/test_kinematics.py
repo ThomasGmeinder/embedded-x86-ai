@@ -8,8 +8,8 @@
 """``so101_sim.kinematics``: locating objects from arm-camera boxes, grasp IK,
 and the hand-eye solve behind ``scripts/calibrate_arm_camera.py``.
 
-Localization runs on the twin: the arm looks from ``scan_pose`` (panned the
-way the servo would), the box comes from the twin's segmentation, and the
+Localization runs on the twin: the arm looks from ``scan_pose`` (panned so the
+object sits between the jaws), the box comes from the twin's segmentation, and the
 result is compared with where the object really is.
 """
 
@@ -64,13 +64,14 @@ def test_principal_axis_rejects_square_or_clipped_crop():
 
 
 def _aimed_scan_pose(kin, cfg, p) -> dict:
-    """scan_pose with the pan that puts ``p`` where the servo would (servo_target_x)."""
+    """scan_pose with the pan that puts ``p`` at the image x between the jaws."""
     pp = cfg["behaviors"]["pick_place"]
+    jaws_x = -0.24  # normalized image x of an object sitting between the jaws
     best = None
     for pan in np.arange(-60.0, 40.0, 0.5):
         pose = {**pp["scan_pose"], "shoulder_pan": float(pan)}
         u = kin.project(p, pose)[0, 0]
-        err = abs(u / 640 * 2 - 1 - pp["servo_target_x"])
+        err = abs(u / 640 * 2 - 1 - jaws_x)
         if best is None or err < best[0]:
             best = (err, pose)
     return best[1]

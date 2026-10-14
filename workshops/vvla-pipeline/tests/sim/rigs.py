@@ -37,6 +37,14 @@ from scripted import (
 logger = logging.getLogger(__name__)
 
 MOTORS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
+_GRIPPER = MOTORS.index("gripper")
+
+HOLD_WATCH_S = 5.0  # how long a picked object is watched after the robot says "Got the ..."
+SLIP_TOL_M = 0.002  # how far it may move in the gripper frame once it is off the table
+LIFT_SLIP_TOL_M = 0.004  # how far while the fingers take its weight (the pads give a little)
+CARRY_TOL_M = 0.01  # object rise vs hand rise; the wrist tilts a little on the way up
+_LIFT_SETTLE_S = 0.3  # the object takes its weight on the fingers just after lift-off
+_GOAL_TOL = 0.5  # gripper goal units; a carry keeps one goal from the lift to the end
 
 
 @dataclass
@@ -47,6 +55,9 @@ class Sample:
     current: float  # gripper Present_Current (raw counts)
     grasped: dict = field(default_factory=dict)
     heights: dict = field(default_factory=dict)
+    in_hand: dict = field(default_factory=dict)  # body -> position in the gripper frame (m)
+    hand_z: float = 0.0  # gripper body height (m)
+    overload: bool = False  # the gripper's overload protection has cut its torque
 
 
 class Trace:
@@ -78,7 +89,13 @@ class Trace:
             cur = snap["current_a"]["gripper"] * 1000.0 / w.current.ma_per_unit
             grasped = {b: w.is_grasped(b) for b in self.watch}
             heights = {b: float(w.body_pos(b)[2]) for b in self.watch}
-            self.samples.append(Sample(self.clock(), snap["joints"], snap["goal"], cur, grasped, heights))
+            in_hand = {b: w.in_gripper(b) for b in self.watch}
+            hand_z = float(w.body_pos("gripper")[2])
+            overload = bool(w.protection.tripped[_GRIPPER])
+            self.samples.append(
+                Sample(self.clock(), snap["joints"], snap["goal"], cur, grasped, heights, in_hand, hand_z,
+                       overload)
+            )
             time.sleep(1.0 / self.hz)
 
     # -- queries ------------------------------------------------------------
@@ -90,8 +107,15 @@ class Trace:
         key = "goal" if goal else "joints"
         return np.array([s.t for s in win]), np.array([getattr(s, key)[joint] for s in win])
 
-    def currents(self, t0: float = 0.0, t1: float = float("inf")) -> np.ndarray:
-        return np.array([s.current for s in self.window(t0, t1)])
+    def held_current(self, hold_s: float = 0.3) -> float:
+        """Highest gripper current held for ``hold_s``: a squeeze keeps it up,
+        the jaw's own moves only spike it."""
+        best = 0.0
+        for i, s in enumerate(self.samples):
+            win = [x.current for x in self.samples[i:] if x.t <= s.t + hold_s]
+            if self.samples[-1].t - s.t >= hold_s:
+                best = max(best, min(win))
+        return best
 
     def heights(self, body: str) -> np.ndarray:
         return np.array([s.heights[body] for s in self.samples])
@@ -108,6 +132,165 @@ class Trace:
                 run = 0.0
             prev = s.t
         return best
+
+    def lift_off(self, body: str, z0: float, dz: float = 0.005) -> float | None:
+        """First time ``body`` is ``dz`` above its resting height ``z0``."""
+        for s in self.samples:
+            if s.heights[body] > z0 + dz:
+                return s.t
+        return None
+
+    def grasp_start(self, body: str, at: float) -> float | None:
+        """Start of the unbroken stretch, up to ``at``, with ``body`` between both fingers."""
+        start = None
+        for s in self.window(0.0, at):
+            if s.grasped.get(body):
+                start = s.t if start is None else start
+            else:
+                start = None
+        return start
+
+    def hand_rise(self, t0: float, t1: float, dz: float = 0.0005) -> float | None:
+        """Last time in ``[t0, t1]`` that the hand was at its lowest: the lift
+        starts right after it."""
+        win = self.window(t0, t1)
+        if not win:
+            return None
+        low = min(s.hand_z for s in win)
+        return max(s.t for s in win if s.hand_z <= low + dz)
+
+    def first_overload(self) -> float | None:
+        """When the gripper's overload protection first cut its torque."""
+        return next((s.t for s in self.samples if s.overload), None)
+
+    def goal_span(self, joint: str, t0: float, t1: float = float("inf")) -> float:
+        """How far the commanded ``joint`` goal ranged over the window."""
+        goals = [s.goal[joint] for s in self.window(t0, t1)]
+        return max(goals) - min(goals) if goals else 0.0
+
+    def drift(self, body: str, t0: float, t1: float = float("inf")) -> float:
+        """Largest move (m) of ``body`` in the gripper frame away from where it
+        was at ``t0``. A held object that does not slip stays at ~0."""
+        win = self.window(t0, t1)
+        if not win:
+            return float("inf")
+        ref = win[0].in_hand[body]
+        return max(float(np.linalg.norm(s.in_hand[body] - ref)) for s in win)
+
+    def longest_release(self, body: str, t0: float, t1: float = float("inf")) -> float:
+        """Longest stretch (s) in the window with ``body`` not between both fingers."""
+        best = 0.0
+        since = None
+        for s in self.window(t0, t1):
+            if s.grasped.get(body):
+                since = None
+            else:
+                since = s.t if since is None else since
+                best = max(best, s.t - since)
+        return best
+
+
+def hold_problem(rig, body: str, z0: float, watch_s: float = HOLD_WATCH_S,
+                 slip_m: float = SLIP_TOL_M, lift_slip_m: float = LIFT_SLIP_TOL_M,
+                 until: float | None = None) -> str | None:
+    """Why ``body`` was not held still from the lift to the end of the run
+    (or ``until``, e.g. a hand-over opening the jaws), or ``None``.
+
+    Held still means: between both fingers the whole time; in the gripper
+    frame, within ``lift_slip_m`` of where it sat when the hand started to
+    rise until just after it left the table, and within ``slip_m`` of that
+    spot from then on; a gripper goal that never moves while it is carried;
+    and no overload trip. The run must go on ``watch_s`` past "Got the ...".
+    """
+    tr = rig.trace
+    lift = tr.lift_off(body, z0)
+    if lift is None:
+        return f"{body} never left the table"
+    end = tr.samples[-1].t if until is None else until
+    got = [t for t, e, d in rig.events if e == "say" and "got the" in str(d.get("text", "")).lower()]
+    if got and end - got[-1] < watch_s - 0.1:
+        return f"the run ended {end - got[-1]:.1f} s after 'Got the ...', not {watch_s:.0f} s"
+    grip = tr.grasp_start(body, lift)
+    if grip is None:
+        return f"{body} was not between both fingers when it left the table"
+    rise = tr.hand_rise(grip, lift)
+    t0 = lift + _LIFT_SETTLE_S
+    seated = tr.drift(body, rise, t0)
+    gap = tr.longest_release(body, rise, end)
+    moved = tr.drift(body, t0, end)
+    loosened = tr.goal_span("gripper", lift, end)
+    logger.info(
+        "hold check: %s moved %.2f mm taking its weight, then drifted %.2f mm; "
+        "gripper goal ranged %.1f; longest release %.2f s, watched %.1f s after lift-off",
+        body, 1000 * seated, 1000 * moved, loosened, gap, end - lift,
+    )
+    tripped = tr.first_overload()
+    if tripped is not None and tripped <= end:
+        return (
+            f"the gripper's overload protection cut the grip to Protective_Torque "
+            f"{tripped - lift:+.1f} s from lift-off"
+        )
+    if gap > 0.1:
+        return f"{body} was out of the fingers for {gap:.2f} s after the lift started"
+    if loosened > _GOAL_TOL:
+        return f"the gripper goal moved {loosened:.1f} while it carried the {body}"
+    if seated > lift_slip_m:
+        return (
+            f"{body} slid {1000 * seated:.1f} mm in the gripper while it was lifted "
+            f"(tolerance {1000 * lift_slip_m:.1f} mm)"
+        )
+    if moved > slip_m:
+        return (
+            f"{body} slipped {1000 * moved:.1f} mm in the gripper after lift-off "
+            f"(tolerance {1000 * slip_m:.1f} mm)"
+        )
+    return None
+
+
+def carry_problem(rig, body: str, z0: float, tol: float = CARRY_TOL_M) -> str | None:
+    """Why ``body`` did not rise as far as the hand that picked it up, or ``None``.
+
+    Measured from where the hand gripped it, so a tall bottle held high up
+    its body is judged like a ball.
+    """
+    tr = rig.trace
+    lift = tr.lift_off(body, z0)
+    if lift is None:
+        return f"{body} never left the table"
+    grip = tr.grasp_start(body, lift)
+    if grip is None:
+        return f"{body} was not between both fingers when it left the table"
+    win = tr.window(tr.hand_rise(grip, lift))
+    hand = max(s.hand_z for s in win) - win[0].hand_z
+    obj = max(s.heights[body] for s in win) - z0
+    logger.info("carry check: %s rose %.1f mm, the hand %.1f mm after picking it up",
+                body, 1000 * obj, 1000 * hand)
+    if abs(obj - hand) > tol:
+        return f"{body} rose {1000 * obj:.0f} mm, the hand {1000 * hand:.0f} mm after picking it up"
+    return None
+
+
+def assert_ordered_high_scan(caplog, pans, *, allow_near=False):
+    """Logged pans are an ordered prefix of the list, and the reach follows them."""
+    text = caplog.text
+    at = []
+    for pan in pans:
+        token = f"scan pan {float(pan):.1f}"
+        i = text.find(token)
+        if i < 0:
+            break
+        at.append(i)
+    assert at, "the arm never scanned"
+    assert at == sorted(at), "scan pans were not visited in order"
+    for pan in pans[len(at):]:
+        assert f"scan pan {float(pan):.1f}" not in text
+    solved = text.find("-> solved")
+    assert solved > at[-1], "the reach started before the scan stopped"
+    near = text.find("scan near pan")
+    if allow_near:
+        assert near < 0 or near > at[-1]
+    else:
+        assert near < 0, "the high sweep already stored a view"
 
 
 class _Rig:
@@ -243,6 +426,45 @@ class _Rig:
         th = threading.Thread(target=run, daemon=True)
         th.start()
         return th
+
+    def when(self, pred, action, timeout: float = 60.0):
+        """Run ``action()`` on a thread once ``pred()`` holds."""
+
+        def run():
+            if self.wait_until(pred, timeout):
+                action()
+
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        return th
+
+    def when_lifted(self, obj: str, z0: float, action, dz: float = 0.03, timeout: float = 60.0):
+        """Run ``action()`` on a thread once ``obj`` is ``dz`` above ``z0``."""
+        return self.when(lambda: self.world.body_pos(obj)[2] > z0 + dz, action, timeout)
+
+    def slicken(self, obj: str, mu: float = 0.01) -> None:
+        """Make ``obj`` slide out of any grip; :meth:`finish` restores it.
+
+        MuJoCo takes the larger friction of two touching geoms unless one has
+        the higher priority, so the object's geoms get that too.
+        """
+        w = self.world
+        body = w.model.body(obj)
+        geoms = range(int(body.geomadr[0]), int(body.geomadr[0] + body.geomnum[0]))
+        with w.lock:
+            saved = [(g, w.model.geom_friction[g].copy(), int(w.model.geom_priority[g])) for g in geoms]
+            for g, _, _ in saved:
+                w.model.geom_friction[g, 0] = mu
+                w.model.geom_priority[g] = 10
+
+        def restore():
+            with w.lock:
+                for g, friction, priority in saved:
+                    w.model.geom_friction[g] = friction
+                    w.model.geom_priority[g] = priority
+
+        self._closers.append(restore)
+        self.on_event("slicken", object=obj, mu=mu)
 
     # -- lifecycle --------------------------------------------------------------
     def finish(self, status: str, message: str = "", keep: bool = True):

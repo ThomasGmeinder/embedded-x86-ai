@@ -176,7 +176,9 @@ grip:                               # close until contact, confirm with the arm 
   close_step_deg: 1.5
   stall_eps_deg: 0.4                # measured lagging the command by this much = stalled
   stall_ticks: 5
-  settle_extra_deg: 2.0             # hold this much tighter than the contact point
+  hold_past_contact: 6.0            # after contact the goal trails this far below the jaw
+  reseat_s: 0.6                     # ...for this long at Torque_Limit 500 while both fingers seat
+  hold_torque_limit: 240            # Torque_Limit once the object hangs from the fingers: under the 25 % Overload_Torque
   stall_grace_s: 0.6                # keep sampling after full close (thin objects)
   load_threshold: 120.0             # Present_Current counts that mean contact
   load_ticks: 3
@@ -188,30 +190,19 @@ pick_place:                         # "pick up the ball": detect on the arm came
   scan_pans: [0.0, -14.0, 39.0, -52.0, 71.0]  # sweep workspace; tune for the real camera/FOV
   scan_near_pose: {shoulder_pan: 0.0, shoulder_lift: -57.3, elbow_flex: 63.2, wrist_flex: 67.5, wrist_roll: 0.0, gripper: 70.0}
   scan_near_pans: [0.0, -14.0, 14.0]  # fallback for near objects hidden behind the jaws
-  reach: ik                         # ik: locate on the table + IK (falls back to fixed) | fixed
+  reach: ik                         # ik: locate on the table + IK (no solve = out of reach) | fixed
   table_z: -0.005                   # table surface height in the arm's base frame (m)
-  pregrasp_above_m: 0.06            # ik: jaws open this far above the grasp, then straight down
+  pregrasp_above_m: 0.06            # ik: jaws open this far above the grasp, then descend in joint space
   max_grasp_height_m: 0.03          # ik: grasp tall objects no higher than this
+  fixed_jaw_gap_m: 0.005            # ik: after the descent, the hand moves sideways until the fixed finger is this far from a lying object
   approach_pose: {shoulder_lift: -15.0, elbow_flex: 20.0, wrist_flex: 54.0}  # fixed: jaws ~12 cm up
   descend_lift: 9.0                 # down to a ~4 cm object, closing axis horizontal
-  servo_gain_pan: -10.0             # deg of pan per unit of image error; sign follows the camera mount
-  servo_target_x: -0.24             # image x of an object that sits between the jaws
-  servo_tolerance: 0.06
-  servo_timeout_s: 6.0
   wrist_align_classes: [toothbrush]
   wrist_align_pregrasp_above_m: 0.10
   wrist_align_grasp_width_m: 0.024
   wrist_align_center_offset_m: 0.018
   wrist_align_fixed_jaw_bias_m: 0.024
-  wrist_align_settle_extra_deg: 8.0
-  wrist_align_lift_duration_s: 4.0
-  wrist_axis_tolerance_deg: 6.0
-  wrist_axis_max_rounds: 4
   wrist_axis_min_elongation: 1.6
-  wrist_view_distance_m: 0.17       # whole arm keeps the camera aimed while the wrist rolls
-  wrist_view_look_down: 0.85
-  wrist_view_roll_step_deg: 15.0
-  wrist_view_step_s: 0.5
   min_box_area_frac: 0.002
   ambiguous_ratio: 1.25
   handoff_reach: 55.0
