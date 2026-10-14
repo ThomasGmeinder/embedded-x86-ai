@@ -9,8 +9,9 @@
 
 Mirror of ``scripts/export_yolo26s_pose.py`` for the 80-class detection
 checkpoint used by voice pick-and-place
-(``vla_pipeline.vision.yolo_detect_npu``). Safe to re-run (skips if output
-exists).
+(``vla_pipeline.vision.yolo_detect_npu``). Manual setup step: bootstrap.sh
+does not run this, because Ultralytics is AGPL-3.0. Safe to re-run (skips
+if output exists).
 
     python scripts/export_yolo26s_detect.py [--out models/yolo26s]
 
@@ -43,6 +44,8 @@ def export_to_onnx(pt_path: Path, onnx_path: Path) -> None:
 
     print(f"Exporting {pt_path} to ONNX FP32...")
     model = YOLO(str(pt_path))
+    # nms must be False, not omitted. Ultralytics sets end2end = (nms is False);
+    # the default None exports the raw [1, 84, 8400] head instead of [1, 300, 6].
     model.export(
         format="onnx",
         imgsz=IMG_SIZE,
@@ -50,6 +53,7 @@ def export_to_onnx(pt_path: Path, onnx_path: Path) -> None:
         simplify=True,
         dynamic=False,
         batch=1,
+        nms=False,
     )
     default_name = Path(str(pt_path).replace(".pt", ".onnx"))
     if default_name.exists():

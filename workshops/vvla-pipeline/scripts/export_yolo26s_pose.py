@@ -7,7 +7,8 @@
 
 """Export YOLOv26s-pose to FP32 ONNX for the Ryzen AI NPU.
 
-Run by bootstrap.sh; safe to re-run (skips if output exists).
+Manual setup step. bootstrap.sh does not run this: Ultralytics is AGPL-3.0.
+Safe to re-run (skips if output exists).
 
     python scripts/export_yolo26s_pose.py [--out models/yolo26s-pose]
 
@@ -37,6 +38,8 @@ def export_to_onnx(pt_path: Path, onnx_path: Path) -> None:
 
     print(f"Exporting {pt_path} to ONNX FP32...")
     model = YOLO(str(pt_path))
+    # nms must be False, not omitted. Ultralytics sets end2end = (nms is False);
+    # the default None exports the raw [1, 56, 8400] head instead of [1, 300, 57].
     model.export(
         format="onnx",
         imgsz=IMG_SIZE,
@@ -44,6 +47,7 @@ def export_to_onnx(pt_path: Path, onnx_path: Path) -> None:
         simplify=True,
         dynamic=False,
         batch=1,
+        nms=False,
     )
     default_name = Path(str(pt_path).replace(".pt", ".onnx"))
     if default_name.exists():

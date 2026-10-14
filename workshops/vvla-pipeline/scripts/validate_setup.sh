@@ -166,8 +166,6 @@ PY
 fi
 
 VAIML_KEYS=(
-  whisper_base_encoder
-  whisper_base_decoder
   yolo26s_pose_fp32
   yolo26s_detect_fp32
 )
