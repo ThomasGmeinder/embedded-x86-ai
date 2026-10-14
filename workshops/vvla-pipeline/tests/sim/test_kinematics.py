@@ -116,7 +116,7 @@ def test_locate_on_table(twins, pipeline_cfg, kin, obj, xy):
     loc = kin.locate_on_table(box, pose, image_size=size, shape=shape)
     assert loc is not None, f"no fix for box {box}"
     err = loc["xyz"] - truth
-    xy_tol = 0.025 if shape == "flat" else 0.015 if shape == "bottle" else 0.01
+    xy_tol = 0.025 if shape == "flat" else 0.005 if shape == "bottle" else 0.01
     assert np.linalg.norm(err[:2]) < xy_tol, (
         f"{obj} at {np.round(truth, 3)} located at {np.round(loc['xyz'], 3)}"
     )

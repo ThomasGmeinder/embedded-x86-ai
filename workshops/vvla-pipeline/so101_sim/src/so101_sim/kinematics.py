@@ -198,6 +198,7 @@ class Kinematics:
         lo, hi = (world.jmap.to_cal("wrist_roll", v) for v in world._jrange[4])
         self._limits["wrist_roll"] = (min(lo, hi), max(lo, hi))
         self._dofs = np.array([m.joint(name).dofadr[0] for name in IK5_JOINTS], int)
+        self._bottle = self._bottle_silhouette()
         # MuJoCo Jacobians are per radian. Public poses are calibrated degrees.
         self._rad_per_cal = np.array(
             [world.jmap.to_rad(name, 1.0) - world.jmap.to_rad(name, 0.0) for name in IK5_JOINTS]
@@ -304,6 +305,75 @@ class Kinematics:
         ring = np.column_stack([R * _RING, np.zeros(len(_RING))]) + [cx, cy, table_z]
         return np.vstack([ring + [0.0, 0.0, f * H] for f in np.linspace(0.0, 1.0, 9)])
 
+    def _bottle_silhouette(self):
+        """Visual-mesh samples of the resting bottle, in the body frame.
+
+        Returns ``(points, height of the body origin above the table)``, or
+        ``(None, 0)`` when this model has no bottle. The points are a fixed
+        stride of the mesh, so the fit below does not depend on iteration order.
+        """
+        import mujoco
+
+        m = self.model
+        gid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "bottle_visual")
+        bid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, "bottle")
+        if gid < 0 or bid < 0 or int(m.geom_dataid[gid]) < 0:
+            return None, 0.0
+        rot = np.zeros(9)
+        mujoco.mju_quat2Mat(rot, m.geom_quat[gid])
+        rot = rot.reshape(3, 3)
+        mesh = int(m.geom_dataid[gid])
+        adr = int(m.mesh_vertadr[mesh])
+        count = int(m.mesh_vertnum[mesh])
+        verts = np.asarray(m.mesh_vert[adr:adr + count], float)[::8]
+        return verts @ rot.T + np.asarray(m.geom_pos[gid], float), float(m.body_pos[bid][2]) - TABLE_Z
+
+    def _fit_bottle_centre(self, seed_xy, target, R, t, table_z, focal):
+        """Bottle centre that puts the visual mesh on the box, or ``None``.
+
+        ``target`` is the box's left, right, and bottom in normalized image
+        coordinates. A residual above 4 px means the mesh does not explain
+        this box, and the caller keeps the cylinder step.
+        """
+        pts, above = self._bottle
+        if pts is None:
+            return None
+        origin_z = float(table_z) + float(above)
+
+        def edges(xy):
+            pc = (pts + (float(xy[0]), float(xy[1]), origin_z) - t) @ R
+            pc = pc[pc[:, 2] > 1e-3]
+            if len(pc) < 8:
+                return None
+            uv = pc[:, :2] / pc[:, 2:3]
+            return np.array([uv[:, 0].min(), uv[:, 0].max(), uv[:, 1].max()])
+
+        xy = np.asarray(seed_xy, float).copy()
+        for _ in range(8):
+            edge = edges(xy)
+            if edge is None:
+                return None
+            residual = edge - np.asarray(target, float)
+            jac = np.empty((3, 2))
+            for j in range(2):
+                step = np.zeros(2)
+                step[j] = 1e-4
+                moved = edges(xy + step)
+                if moved is None:
+                    return None
+                jac[:, j] = (moved - edge) / 1e-4
+            try:
+                delta = -np.linalg.solve(jac.T @ jac + 1e-4 * np.eye(2), jac.T @ residual)
+            except np.linalg.LinAlgError:
+                return None
+            xy = xy + delta
+            if np.abs(delta).max() < 1e-6:
+                break
+        edge = edges(xy)
+        if edge is None or np.abs(edge - np.asarray(target, float)).max() * float(focal) > 4.0:
+            return None
+        return xy
+
     def locate_on_table(
         self,
         box,
@@ -319,13 +389,13 @@ class Kinematics:
 
         ``box`` is ``(x1, y1, x2, y2)`` pixels in a frame of ``image_size``
         ``(w, h)`` taken at ``joints``. The box bottom's ray meets the table
-        at the object's front edge. A bottle is the known cylinder, one radius
-        back from that edge, with one linear correction onto the box. A resting
-        sphere (``shape="sphere"``),
-        upright cylinder (``"upright"``), or thin table-plane footprint
-        (``"flat"``) is fitted to the box. A box cut by the image's sides or
-        bottom gives ``None``; a cut top edge is ignored only for upright
-        objects.
+        at the object's front edge. A bottle is the visual mesh resting on the
+        table (the collision cylinder left the centre about 13 mm off, and the
+        jaws closed beside it); a model with no bottle mesh keeps the cylinder
+        step. A resting sphere (``shape="sphere"``), upright cylinder
+        (``"upright"``), or thin table-plane footprint (``"flat"``) is fitted
+        to the box. A box cut by the image's sides or bottom gives ``None``; a
+        cut top edge is ignored only for upright objects.
         """
         x1, y1, x2, y2 = (float(v) for v in box)
         top_cut = False
@@ -365,11 +435,12 @@ class Kinematics:
         horiz /= max(np.linalg.norm(horiz), 1e-9)
         c0 = front + horiz * half_w
         if shape == "bottle":
-            # Known mustard-bottle cylinder. The bottom-edge ray meets the table
-            # at the near side of the silhouette. The centre is one radius
-            # further along that ray, then shifted so the known cylinder's
-            # left, right, and bottom edges sit on the box. One linear step:
-            # the same box and the same joints always give this centre.
+            # The camera sees the mustard bottle's visual mesh, an oval, not
+            # the r=0.02 collision cylinder. Matching that cylinder to the box
+            # left the centre 13 mm off along the table and the jaws closed
+            # beside the bottle. Fit the mesh. The cylinder step is the
+            # fallback when this model has no bottle mesh, or the mesh cannot
+            # explain the box. Either way one box and one pose give one centre.
             radius, height = 0.02, 0.085
             centre = front + horiz * radius
             observed = self._normalized(edges, K, dist)
@@ -389,6 +460,9 @@ class Kinematics:
                 jac[:, j] = (bottle_edges(xy + step) - bottle_edges(xy)) / 1e-4
             delta = -np.linalg.solve(jac.T @ jac + 1e-4 * np.eye(2), jac.T @ residual)
             xy = xy + delta
+            fitted = self._fit_bottle_centre(centre[:2], target, R, t, table_z, K[0, 0])
+            if fitted is not None:
+                xy = fitted
             return {
                 "xyz": np.array([xy[0], xy[1], table_z + 0.5 * height]),
                 "width": 2 * radius,
