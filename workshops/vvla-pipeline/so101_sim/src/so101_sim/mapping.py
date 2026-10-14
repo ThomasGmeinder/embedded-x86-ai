@@ -64,12 +64,6 @@ class JointMap:
             )
         return math.degrees(float(rad)) * self._sign[name] + self._off[name]
 
-    def rad_per_cal(self, name: str) -> float:
-        """d(rad)/d(cal unit) - converts calibrated speeds to joint speeds."""
-        if name == "gripper":
-            return abs(self._g_rad_per_unit)
-        return math.radians(1.0)
-
     # -- calibrated <-> raw encoder counts (normalize=False) ------------------
     def cal_to_raw(self, name: str, cal: float) -> int:
         if name == "gripper":

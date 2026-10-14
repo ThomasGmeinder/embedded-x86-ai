@@ -179,10 +179,6 @@ def _read_settled(camera, settled_at: float):
     read_after = getattr(camera, "read_after", None)
     if callable(read_after):
         return read_after(settled_at)
-    try:
-        return camera.read(fresh=True)
-    except TypeError:
-        pass
     period = 1.0 / 30.0
     ok, frame = False, None
     for _ in range(8):
@@ -614,11 +610,6 @@ def run_pick_place(
     if len(by_score) > 1 and by_score[0].score / max(by_score[1].score, 1e-6) < float(pp["ambiguous_ratio"]):
         say(f"I see {len(by_score)} of those - taking the clearest one.")
 
-    if use_ik and plan is None:
-        say(f"The {resolved} is out of reach.")
-        arm.go_to_rest()
-        return False
-
     attempts = 1 + int(pp.get("retries", 1))
     gripped, hold = False, 0.0
     for attempt in range(attempts):
@@ -721,11 +712,9 @@ def main() -> None:
 
     cfg = load_config(args.config)
     from vla_pipeline.vision.camera import make_camera
-    from vla_pipeline.vision.yolo_pose_npu import PoseEstimator
 
     arm: ArmClient = DryRunArm() if args.dry_run_arm else make_arm(cfg)
     detector = ObjectDetector(cfg, device=args.device)
-    pose = PoseEstimator(cfg, device=args.device)
     arm_cam = make_camera(cfg, "arm")
     operator_cam = make_camera(cfg, "operator")
     try:
@@ -733,7 +722,7 @@ def main() -> None:
             cfg,
             arm,
             detector,
-            pose,
+            None,
             arm_cam,
             operator_cam,
             args.object,

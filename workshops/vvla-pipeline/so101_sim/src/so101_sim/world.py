@@ -113,7 +113,6 @@ class SimWorld:
         self.servo = ServoBank(self.jmap, self.cfg["servo"], kv / kp)
         self.current = CurrentModel(self.cfg["current_model"])
         self.protection = OverloadProtection(len(MOTOR_NAMES))
-        self._ctrl = np.zeros(len(MOTOR_NAMES))
 
         self.rest_pose = dict(rest_pose or self.cfg.get("rest_pose") or DEFAULT_REST_POSE)
         self._free = {}  # body name -> (qposadr, dofadr)
@@ -129,8 +128,6 @@ class SimWorld:
         self._thread: threading.Thread | None = None
         self._viewer = None
         self._closed = False
-        self.steps = 0
-        self.overruns = 0  # times real time outran physics (time dropped)
         self.reset()
         if start:
             self.start()
@@ -200,7 +197,6 @@ class SimWorld:
         self.current.update(tau, self.dt, moving=np.abs(self.servo.v_ref) > 1e-4)
         if self.protection.update(self.current.load_frac(), self.dt):
             self._apply_torque_caps()
-        self.steps += 1
 
     def _apply_torque_caps(self) -> None:
         self.model.actuator_forcerange[self._act] = (
@@ -225,7 +221,6 @@ class SimWorld:
             lag = target - self.data.time
             n = int(lag / self.dt)
             if lag > max_lag:  # stalled (GC, debugger, heavy load): drop time
-                self.overruns += 1
                 with self.lock:
                     self._sync_epoch()
                 n = 1
@@ -339,10 +334,6 @@ class SimWorld:
     def body_quat(self, name: str) -> np.ndarray:
         with self.lock:
             return self.data.body(name).xquat.copy()
-
-    def site_pos(self, name: str) -> np.ndarray:
-        with self.lock:
-            return self.data.site(name).xpos.copy()
 
     def place(self, name: str, pos, quat=(1.0, 0.0, 0.0, 0.0)) -> None:
         """Teleport a free prop body and zero its velocity."""

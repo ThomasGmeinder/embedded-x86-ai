@@ -62,14 +62,11 @@ class View:
         self.scene = mujoco.MjvScene(model, maxgeom=4000)
         self._set_camera(model, camera)
         self.seq = 0
-        self.t_sim = 0.0
-        self.t_wall = 0.0
         self._frame: np.ndarray | None = None
         self._segs: collections.deque = collections.deque(maxlen=8)
         self._cond = threading.Condition()
         self.next_due = 0.0
         self.refs = 0
-        self.overlays: list = []  # callables(frame_bgr, view) drawn in place
 
     def _set_camera(self, model, camera) -> None:
         mj = self._mj
@@ -111,12 +108,10 @@ class View:
             return self._segs[0][1]
 
     # -- producer side ------------------------------------------------------
-    def _publish(self, frame, seg, t_sim) -> None:
+    def _publish(self, frame, seg) -> None:
         with self._cond:
             self.seq += 1
             self._frame = frame
-            self.t_sim = t_sim
-            self.t_wall = time.time()
             if seg is not None:
                 self._segs.append((self.seq, seg))
             self._cond.notify_all()
@@ -178,13 +173,6 @@ class RenderService:
             v.refs -= 1
             if v.refs <= 0:
                 del self._views[name]
-
-    def view(self, name: str) -> View:
-        return self._views[name]
-
-    @property
-    def views(self) -> dict[str, View]:
-        return dict(self._views)
 
     def add_hook(self, fn) -> None:
         """``fn(service, rendered_views, t_sim)`` after every pass (render thread)."""
@@ -304,13 +292,7 @@ class RenderService:
                 self.pass_ms = 1000.0 * (time.perf_counter() - t0)
                 self.passes += 1
                 for v in due:
-                    f = frames[v.name]
-                    for ov in list(v.overlays):
-                        try:
-                            ov(f, v)
-                        except Exception as e:  # pragma: no cover
-                            logger.debug("overlay failed: %s", e)
-                    v._publish(f, segs.get(v.name), t_sim)
+                    v._publish(frames[v.name], segs.get(v.name))
                 for fn in list(self._hooks):
                     try:
                         fn(self, due, t_sim)

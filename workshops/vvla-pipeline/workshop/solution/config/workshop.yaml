@@ -205,8 +205,6 @@ pick_place:                         # "pick up the ball": detect on the arm came
   wrist_axis_min_elongation: 1.6
   min_box_area_frac: 0.002
   ambiguous_ratio: 1.25
-  handoff_reach: 55.0
-  release_timeout_s: 6.0
   retries: 1
 
 fetch_block:                        # "bring me the block": taught pose, grasp, hand over

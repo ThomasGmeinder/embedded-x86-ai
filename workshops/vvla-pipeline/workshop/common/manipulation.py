@@ -477,10 +477,6 @@ def _read_settled(camera, settled_at: float):
     read_after = getattr(camera, "read_after", None)
     if callable(read_after):
         return read_after(settled_at)
-    try:
-        return camera.read(fresh=True)
-    except TypeError:
-        pass
     period = 1.0 / 30.0
     ok, frame = False, None
     for _ in range(8):
@@ -900,11 +896,6 @@ def run_pick_place(ctx, cmd) -> bool:
     by_score = sorted(winner["dets"], key=lambda det: det.score, reverse=True)
     if len(by_score) > 1 and by_score[0].score / max(by_score[1].score, 1e-6) < float(pp["ambiguous_ratio"]):
         ctx.say(f"I see {len(by_score)} of those - taking the clearest one.")
-
-    if use_ik and plan is None:
-        ctx.say(f"The {resolved} is out of reach.")
-        ctx.arm.go_to_rest()
-        return False
 
     gripped, hold = False, 0.0
     attempts = 1 + int(pp.get("retries", 1))

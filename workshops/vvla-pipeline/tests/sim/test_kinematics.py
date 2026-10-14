@@ -257,46 +257,6 @@ def test_oriented_sqp_is_deterministic_and_does_not_flip_roll_branch(kin):
         assert abs(a[0]["wrist_roll"] - a[1]["wrist_roll"]) < 5.0
 
 
-def test_view_path_keeps_the_object_in_view(kin):
-    """Rolling the wrist alone over the pre-grasp swings the eye-in-hand
-    camera so the toothbrush runs off the image; the look-at path moves the
-    other joints so all of it stays in view, also between waypoints where
-    the servos interpolate each joint."""
-    from vla_pipeline.robot.arm_interface import JOINT_LIMITS
-
-    p = np.array([0.12, -0.24, 0.006])
-    yaw = math.radians(112.9)
-    axis = np.array([math.cos(yaw), math.sin(yaw), 0.0])
-    ends = np.array([p - axis * 0.06, p + axis * 0.06])
-    K = kin.default_intrinsics(640, 480)
-    roll = kin.ik(p + [0, 0, 0.005], 0.024, wrist_roll=0.0, limits=JOINT_LIMITS, object_axis=axis)[0]["wrist_roll"]
-
-    def in_view(pose, margin):
-        uv = kin.project(ends, pose, K)
-        return bool(((uv >= margin) & (uv <= [640 - margin, 480 - margin])).all())
-
-    pre, _ = kin.solve_grasp(p + [0, 0, 0.005], above_m=0.10, width=0.024, limits=JOINT_LIMITS)
-    assert not in_view({**pre, "wrist_roll": roll}, 0), "roll-only should lose the object"
-
-    scan = {"shoulder_pan": 71.0, "shoulder_lift": -55.0, "elbow_flex": 65.0, "wrist_flex": 45.0, "wrist_roll": 0.0}
-    start, err = kin.look_at(p, 0.0, seed=scan, limits=JOINT_LIMITS)
-    assert err < 0.01
-    path = kin.view_path(p, start, roll, limits=JOINT_LIMITS)
-    assert path is not None and abs(path[-1]["wrist_roll"] - roll) < 1e-6
-    assert max(abs(pose["wrist_roll"] - start["wrist_roll"]) for pose in path) < 120.0
-    prev = start
-    for pose in path:
-        for k, (lo, hi) in JOINT_LIMITS.items():
-            if k in pose and k != "gripper":
-                assert lo - 1e-6 <= pose[k] <= hi + 1e-6, f"{k} {pose[k]:.1f} outside the arm's limits"
-        assert kin._centre_error(pose, p) < 0.01
-        assert kin.lowest_point(pose) > 0.02
-        for a in (0.25, 0.5, 0.75):
-            mid = {k: prev[k] + a * (pose[k] - prev[k]) for k in pose}
-            assert in_view(mid, 10), "object leaves the image between waypoints"
-        prev = pose
-
-
 def test_ik_out_of_reach(kin):
     assert kin.solve_grasp([0.50, 0.0, 0.02]) is None
     assert kin.solve_grasp([0.25, 0.0, -0.05]) is None  # below the table
