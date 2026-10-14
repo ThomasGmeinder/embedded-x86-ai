@@ -56,6 +56,15 @@ DEFAULT_REST_POSE = {
 _FIXED_PAD_X = -0.0098
 _GRASP_DEPTH_Z = -0.086
 
+# Collision geoms of the fixed finger, by geom name or (unnamed) mesh name.
+# The palm (fixed_jaw_box1), the block above the finger (fixed_jaw_box2), and
+# the wrist box are left out: an object resting on them is not held.
+_FIXED_FINGER = frozenset({
+    "fixed_jaw_box3", "fixed_jaw_box4", "fixed_jaw_box5", "fixed_jaw_box6", "fixed_jaw_box7",
+    "fixed_jaw_sph_tip1", "fixed_jaw_sph_tip2", "fixed_jaw_sph_tip3",
+    "wrist_roll_follower_so101_gripper_part0_v1",
+})
+
 TABLE_Z = -0.005  # tabletop surface height in scene_vvla.xml
 
 STANDS = ("stand_a", "stand_b")
@@ -111,6 +120,8 @@ class SimWorld:
                 body = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, m.jnt_bodyid[j])
                 self._free[body] = (int(m.jnt_qposadr[j]), int(m.jnt_dofadr[j]))
         self._scratch = mujoco.MjData(m)  # FK without touching live state
+        self._fixed_finger = self._collision_geoms("gripper", _FIXED_FINGER)
+        self._moving_finger = self._collision_geoms("moving_jaw_so101_v1")
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -423,21 +434,6 @@ class SimWorld:
             p = p + push * 0.002  # slide away from the fixed jaw, toward the open side
         return p
 
-    def contacts_with(self, body: str) -> set[str]:
-        """Names of bodies currently touching ``body``."""
-        mj = self._mj
-        bid = self.model.body(body).id
-        out = set()
-        with self.lock:
-            for k in range(self.data.ncon):
-                c = self.data.contact[k]
-                b1 = self.model.geom_bodyid[c.geom1]
-                b2 = self.model.geom_bodyid[c.geom2]
-                if b1 == bid or b2 == bid:
-                    other = b2 if b1 == bid else b1
-                    out.add(mj.mj_id2name(self.model, mj.mjtObj.mjOBJ_BODY, other))
-        return out
-
     def contact_report(self, body: str) -> list[tuple[str, str, float]]:
         """``(other_body, other_geom, penetration_m)`` for each contact on ``body``."""
         mj = self._mj
@@ -455,10 +451,79 @@ class SimWorld:
                         out.append((bname, gname, round(-float(c.dist), 4)))
         return out
 
+    def _collision_geoms(self, body: str, names=None) -> frozenset[int]:
+        """Colliding geom ids on ``body``, only those in ``names`` when given."""
+        mj, m = self._mj, self.model
+        bid = m.body(body).id
+        out = set()
+        for g in range(m.ngeom):
+            if m.geom_bodyid[g] != bid or not (m.geom_contype[g] or m.geom_conaffinity[g]):
+                continue
+            if names is not None:
+                label = mj.mj_id2name(m, mj.mjtObj.mjOBJ_GEOM, g)
+                if label is None and m.geom_type[g] == mj.mjtGeom.mjGEOM_MESH:
+                    label = mj.mj_id2name(m, mj.mjtObj.mjOBJ_MESH, int(m.geom_dataid[g]))
+                if label not in names:
+                    continue
+            out.add(g)
+        return frozenset(out)
+
     def is_grasped(self, body: str) -> bool:
-        """Both jaws (fixed on ``gripper``, moving jaw body) touch ``body``."""
-        c = self.contacts_with(body)
-        return "gripper" in c and "moving_jaw_so101_v1" in c
+        """Both fingers touch ``body``: the fixed finger and the moving jaw.
+        Contact with the palm or the wrist does not count."""
+        m = self.model
+        bid = m.body(body).id
+        fixed = moving = False
+        with self.lock:
+            for k in range(self.data.ncon):
+                c = self.data.contact[k]
+                if m.geom_bodyid[c.geom1] == bid:
+                    other = c.geom2
+                elif m.geom_bodyid[c.geom2] == bid:
+                    other = c.geom1
+                else:
+                    continue
+                fixed = fixed or other in self._fixed_finger
+                moving = moving or other in self._moving_finger
+        return fixed and moving
+
+    def grip_report(self) -> str:
+        """Which finger pads touch what, and where each touched object's
+        centre sits in the jaw frame (``gripperframe``, mm)."""
+        mj, m = self._mj, self.model
+        fingers = self._fixed_finger | self._moving_finger
+        pads: dict[str, set[str]] = {}
+        with self.lock:
+            for k in range(self.data.ncon):
+                c = self.data.contact[k]
+                for finger, other in ((c.geom1, c.geom2), (c.geom2, c.geom1)):
+                    if finger not in fingers or other in fingers:
+                        continue
+                    body = mj.mj_id2name(m, mj.mjtObj.mjOBJ_BODY, m.geom_bodyid[other])
+                    label = mj.mj_id2name(m, mj.mjtObj.mjOBJ_GEOM, finger)
+                    if label is None:
+                        label = mj.mj_id2name(m, mj.mjtObj.mjOBJ_MESH, int(m.geom_dataid[finger]))
+                    pads.setdefault(body, set()).add(label or f"geom{finger}")
+            site = self.data.site("gripperframe")
+            rot, centre = site.xmat.reshape(3, 3), site.xpos.copy()
+            where = {b: 1000.0 * rot.T @ (self.data.body(b).xpos - centre) for b in pads if b != "table"}
+        if not pads:
+            return "nothing on the fingers"
+        parts = []
+        for body in sorted(pads):
+            text = f"{body} on {'+'.join(sorted(pads[body]))}"
+            if body in where:
+                x, y, z = where[body]
+                text += f", centre ({x:+.1f}, {y:+.1f}, {z:+.1f}) mm in the jaw frame"
+            parts.append(text)
+        return "; ".join(parts)
+
+    def in_gripper(self, body: str) -> np.ndarray:
+        """``body``'s position in the gripper body frame (m). It stays put
+        while the object is held; any change is the object slipping."""
+        with self.lock:
+            g = self.data.body("gripper")
+            return g.xmat.reshape(3, 3).T @ (self.data.body(body).xpos - g.xpos)
 
     def snapshot(self) -> dict:
         """Compact state for logs / video HUD (calibrated units)."""

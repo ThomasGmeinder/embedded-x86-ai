@@ -193,8 +193,10 @@
                   pos="-0.009 0 -0.0982"/>
                 <geom name="fixed_jaw_box5" class="collision_gripper" type="box" size="0.001 0.005 0.006"
                   pos="-0.0108 0 -0.0905"/>
-                <geom name="fixed_jaw_box6" class="collision_gripper" type="box" size="0.001 0.009 0.008"
-                  pos="-0.0125 0 -0.0727"/>
+                <!-- Inner face on the visible finger (x=-0.0115), 10 mm deep inside it:
+                     a 2 mm pad let the closing jaw push the ball through. -->
+                <geom name="fixed_jaw_box6" class="collision_gripper" type="box" size="0.005 0.009 0.008"
+                  pos="-0.0165 0 -0.0727"/>
                 <geom name="fixed_jaw_box7" class="collision_gripper" type="box" size="0.001 0.01 0.008"
                   pos="-0.0143 0 -0.053"/>
                 <!-- Frame gripperframe -->
