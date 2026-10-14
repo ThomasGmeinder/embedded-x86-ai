@@ -7,7 +7,8 @@
 
 """Export YOLOv26s-pose to FP32 ONNX for the Ryzen AI NPU.
 
-Run by bootstrap.sh; safe to re-run (skips if output exists).
+Manual setup step. bootstrap.sh does not run this: Ultralytics is AGPL-3.0.
+Safe to re-run (skips if output exists).
 
     python scripts/export_yolo26s_pose.py [--out models/yolo26s-pose]
 
