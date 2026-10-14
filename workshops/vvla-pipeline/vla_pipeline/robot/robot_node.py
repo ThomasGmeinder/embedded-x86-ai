@@ -61,6 +61,7 @@ try:  # ROS 2 is optional at import time so non-ROS machines can run dry tests
     from rclpy.node import Node
     from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
     from sensor_msgs.msg import JointState
+    from std_msgs.msg import Int32
 
     ROS2_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -77,6 +78,9 @@ EFFORT_SAMPLE_EVERY_N_TICKS = 3
 # (power/wiring) fails every tick, so cap the log rate - warn on the first
 # failure, then once every Nth after that - instead of flooding the console.
 BUS_ERROR_LOG_EVERY_N = 30
+
+# Gripper Torque_Limit (std_msgs/Int32, 0-1000). Reliable: one write, not a stream.
+GRIPPER_TORQUE_TOPIC = "/so101/gripper_torque_limit"
 
 
 def _require_ros2() -> None:
@@ -171,10 +175,12 @@ class So101ServerNode(Node):
         # value actually written so unchanged ticks are skipped.
         self._direct_goal = r.get("max_relative_target", 8.0) is None
         self._last_sent_target: dict[str, float] | None = None
+        self._torque_limit: int | None = None  # next gripper Torque_Limit to write
 
         self.create_subscription(
             JointState, r["command_topic"], self._on_command, _best_effort_qos()
         )
+        self.create_subscription(Int32, GRIPPER_TORQUE_TOPIC, self._on_torque_limit, 10)
         if getattr(self._arm, "world", None) is not None:
             from std_srvs.srv import Trigger
 
@@ -216,6 +222,11 @@ class So101ServerNode(Node):
             self._target.update(clamp_joints(joints))
             self._last_cmd_time = time.time()
 
+    def _on_torque_limit(self, msg: "Int32") -> None:
+        """Queue a gripper Torque_Limit for the control loop (the only bus thread)."""
+        with self._target_lock:
+            self._torque_limit = int(msg.data)
+
     def _control_loop(self) -> None:
         """Sequential observe → act loop (one thread on the bus, no contention).
 
@@ -247,8 +258,11 @@ class So101ServerNode(Node):
                 target = dict(self._target)
                 fresh = (time.time() - self._last_cmd_time) < 1.0
                 generation = self._target_gen
+                torque_limit, self._torque_limit = self._torque_limit, None
 
             try:
+                if torque_limit is not None:
+                    self._arm.set_gripper_torque_limit(torque_limit)
                 if fresh:  # hold last pose silently when commands stop
                     with self._target_lock:
                         if generation != self._target_gen:
@@ -364,6 +378,7 @@ class Ros2ArmClient(ArmClient):
         self._pub = self._node.create_publisher(
             JointState, r["command_topic"], _best_effort_qos()
         )
+        self._torque_pub = self._node.create_publisher(Int32, GRIPPER_TORQUE_TOPIC, 10)
         self._state_lock = threading.Lock()
         self._state: dict[str, float] | None = None
         self._effort: float | None = None
@@ -435,6 +450,13 @@ class Ros2ArmClient(ArmClient):
         """Return the most recently received gripper effort, if any."""
         with self._state_lock:
             return self._effort
+
+    def set_gripper_torque_limit(self, value: int) -> None:
+        """Publish the gripper Torque_Limit; the server writes it on its next tick."""
+        msg = Int32()
+        msg.data = int(min(max(int(value), 0), 1000))
+        self._torque_pub.publish(msg)
+        self.gripper_torque_limit = msg.data
 
     def close(self) -> None:
         """Shut down the executor and destroy the client node."""

@@ -38,6 +38,7 @@ import cv2
 import numpy as np
 
 from common.imaging import draw_skeleton
+from common.motion import GRIPPER_TORQUE_LIMIT
 
 logger = logging.getLogger(__name__)
 
@@ -377,14 +378,16 @@ class TwinConsole:
         except Exception:
             joints = None
         cv2.line(p, (12, y - 16), (PANEL_W - 12, y - 16), DIM, 1)
+        full = 2.0 * self.load_threshold
+        # load_threshold is the close's level at GRIPPER_TORQUE_LIMIT; a hold runs lower
+        level = self.load_threshold * getattr(self.arm, "gripper_torque_limit", GRIPPER_TORQUE_LIMIT) / GRIPPER_TORQUE_LIMIT
         if load is None:
             cv2.putText(p, "gripper current: n/a", (12, y), FONT, 0.45, GRAY, 1, cv2.LINE_AA)
         else:
-            grasp = load >= self.load_threshold
-            text = f"gripper current {load:5.0f} / {self.load_threshold:.0f}"
+            grasp = load >= level
+            text = f"gripper current {load:5.0f} / {level:.0f}"
             cv2.putText(p, text, (12, y), FONT, 0.45, GREEN if grasp else WHITE, 1, cv2.LINE_AA)
-            _bar(p, 12, y + 8, PANEL_W - 24, 8, load / (2.0 * self.load_threshold),
-                 GREEN if grasp else GRAY, mark=0.5)
+            _bar(p, 12, y + 8, PANEL_W - 24, 8, load / full, GREEN if grasp else GRAY, mark=level / full)
         if joints:
             parts = [f"{SHORT.get(n, n)} {v:+.0f}" for n, v in joints.items()]
             for i in range(0, len(parts), 3):

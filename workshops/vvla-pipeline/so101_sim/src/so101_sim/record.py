@@ -39,6 +39,8 @@ from so101_sim import MOTOR_NAMES
 logger = logging.getLogger(__name__)
 
 _HUD_H = 60
+_GRIPPER = MOTOR_NAMES.index("gripper")
+_CLOSE_LIMIT = 0.5  # the Torque_Limit (fraction) load_threshold is set for; a hold runs lower
 _SHORT = {
     "shoulder_pan": "pan",
     "shoulder_lift": "lift",
@@ -315,10 +317,13 @@ class SimRecorder:
         x0, x1 = width - 210, width - 10
         cv2.rectangle(hud, (x0, 40), (x1, 52), (70, 70, 70), 1)
         frac = min(counts / 450.0, 1.0)
-        color = (0, 200, 255) if (self.load_threshold and counts >= self.load_threshold) else (0, 200, 0)
+        level = self.load_threshold
+        if level:
+            level *= float(self.world.protection.limit[_GRIPPER]) / _CLOSE_LIMIT
+        color = (0, 200, 255) if (level and counts >= level) else (0, 200, 0)
         cv2.rectangle(hud, (x0 + 1, 41), (x0 + 1 + int(frac * (x1 - x0 - 2)), 51), color, -1)
-        if self.load_threshold:
-            tx = x0 + int(min(self.load_threshold / 450.0, 1.0) * (x1 - x0))
+        if level:
+            tx = x0 + int(min(level / 450.0, 1.0) * (x1 - x0))
             cv2.line(hud, (tx, 37), (tx, 55), (255, 255, 255), 1)
         cv2.putText(hud, f"gripper current {counts:4.0f}", (x0, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1)
         return hud

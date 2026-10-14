@@ -69,6 +69,12 @@ _MOTOR_POS_KEYS = [(m, f"{m}.pos") for m in MOTOR_NAMES]
 # commanded gripper position at or above it so the servo never sits jammed shut.
 GRIPPER_CLOSED_FLOOR = 43.0
 
+# Gripper Torque_Limit (0-1000 of stall torque) for closing and opening: the
+# Max_Torque_Limit LeRobot's configure writes. That register is EEPROM and
+# reaches the live Torque_Limit only at power-on, so transports write this at
+# connect and grips restore it before every open.
+GRIPPER_TORQUE_LIMIT = 500
+
 # Safe rest pose (degrees) - identical to amd_accel_native_node.REST_POSE.
 REST_POSE = {
     "shoulder_pan": 0.0,
@@ -125,6 +131,9 @@ class ArmClient(ABC):
     # degrees.
     _direct_goal: bool = False
 
+    # Last Torque_Limit sent to the gripper; displays scale the grasp level by it.
+    gripper_torque_limit: int = GRIPPER_TORQUE_LIMIT
+
     @abstractmethod
     def send_joints(self, joints: dict[str, float]) -> None:
         """Command absolute joint targets (degrees); partial dicts allowed."""
@@ -139,6 +148,14 @@ class ArmClient(ABC):
         Returns ``None`` when this transport can't provide effort feedback -
         callers must treat that as "use position-stall detection instead".
         """
+        return None
+
+    def set_gripper_torque_limit(self, value: int) -> None:  # noqa: B027 - optional override
+        """Cap the gripper at ``value`` (0-1000) of stall torque: the servo's
+        RAM ``Torque_Limit``. A no-op on transports without one."""
+
+    def grip_report(self) -> str | None:
+        """What touches the fingers, where the transport can tell (the twin)."""
         return None
 
     def go_to(
@@ -467,6 +484,7 @@ class DirectArm(ArmClient):
             self.set_motion_profile(
                 speed=DIRECT_MODE_SPEED_RAW, acceleration=DIRECT_MODE_ACCEL_RAW
             )
+        self.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
 
     def set_motion_profile(
         self, speed: int | None = None, acceleration: int | None = None
@@ -680,6 +698,23 @@ class DirectArm(ArmClient):
             logger.debug("Effort read failed (%s) - disabling effort feedback.", e)
             self._effort_register = None
             return None
+
+    def set_gripper_torque_limit(self, value: int) -> None:
+        """Write the gripper's ``Torque_Limit`` (address 48, RAM), retried on
+        transient errors. ``Max_Torque_Limit`` (16) is EEPROM: the servo copies
+        it into 48 only at power-on, so writing it would not change the grip."""
+        bus = getattr(self._robot, "bus", None)
+        if bus is None:
+            return
+        v = int(min(max(int(value), 0), 1000))
+        try:
+            self._bus_retry(
+                lambda: bus.write("Torque_Limit", "gripper", v, normalize=False),
+                "Torque_Limit",
+            )
+            self.gripper_torque_limit = v
+        except Exception as e:
+            logger.warning("Could not set the gripper Torque_Limit to %d: %s", v, e)
 
     def close(self) -> None:
         """Park the arm at rest and disconnect from the bus."""

@@ -42,6 +42,12 @@ MOTOR_NAMES = [
 
 GRIPPER_CLOSED_FLOOR = 38.0  # the jaws' physical closed point (calibration space)
 
+# Gripper Torque_Limit (0-1000 of stall torque) for closing and opening: the
+# Max_Torque_Limit LeRobot's configure writes. That register is EEPROM and
+# reaches the live Torque_Limit only at power-on, so transports write this at
+# connect and grips restore it before every open.
+GRIPPER_TORQUE_LIMIT = 500
+
 # Safe rest pose (degrees) - same values the real pipeline parks at.
 REST_POSE = {
     "shoulder_pan": 0.0,
@@ -164,6 +170,9 @@ class ArmClient(ABC):
     # simulated arms stay on the base JOINT_LIMITS.
     is_live: bool = False
 
+    # Last Torque_Limit sent to the gripper; displays scale the grasp level by it.
+    gripper_torque_limit: int = GRIPPER_TORQUE_LIMIT
+
     @abstractmethod
     def send_joints(self, joints: dict) -> None:
         """Command absolute joint targets (degrees); partial dicts allowed."""
@@ -174,6 +183,14 @@ class ArmClient(ABC):
 
     def get_gripper_load(self):
         """Gripper servo effort/current, or ``None`` when not readable."""
+        return None
+
+    def set_gripper_torque_limit(self, value: int) -> None:  # noqa: B027 - optional override
+        """Cap the gripper at ``value`` (0-1000) of stall torque: the servo's
+        RAM ``Torque_Limit``. A no-op on transports without one."""
+
+    def grip_report(self):
+        """What touches the fingers, where the transport can tell (the twin)."""
         return None
 
     def go_to(
@@ -339,6 +356,7 @@ class LeRobotArm(ArmClient):
         self._direct_goal = max_relative_target is None
         if self._direct_goal:
             self._set_motion_profile(speed=1000, acceleration=50)
+        self.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
 
     def _set_motion_profile(self, speed=None, acceleration=None) -> None:
         """Best-effort servo speed/accel setup for direct-goal mode."""
@@ -401,6 +419,24 @@ class LeRobotArm(ArmClient):
         except Exception:
             return None
 
+    def set_gripper_torque_limit(self, value: int) -> None:
+        """Write the gripper's ``Torque_Limit`` (address 48, RAM). LeRobot's
+        configure writes ``Max_Torque_Limit`` (16), which is EEPROM and only
+        reaches 48 at power-on."""
+        bus = getattr(self._robot, "bus", None)
+        if bus is None:
+            return
+        v = int(min(max(int(value), 0), 1000))
+        for _ in range(3):
+            try:
+                bus.write("Torque_Limit", "gripper", v, normalize=False)
+                self.gripper_torque_limit = v
+                return
+            except Exception as e:
+                err = e
+                time.sleep(0.004)
+        logger.warning("could not set the gripper Torque_Limit to %d: %s", v, err)
+
     def close(self) -> None:
         try:
             if getattr(self, "_direct_goal", False):
@@ -452,6 +488,10 @@ class SimArmClient(LeRobotArm):
         self._direct_goal = max_relative_target is None
         if self._direct_goal:
             self._set_motion_profile(speed=1000, acceleration=50)
+        self.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
+
+    def grip_report(self) -> str:
+        return self.world.grip_report()
 
 
 def make_arm_backend(cfg: dict, dry_run: bool = False) -> ArmClient:

@@ -27,6 +27,7 @@ from vla_pipeline.robot.arm_interface import (
     DIRECT_MODE_ACCEL_RAW,
     DIRECT_MODE_SPEED_RAW,
     GRIPPER_CLOSED_FLOOR,
+    GRIPPER_TORQUE_LIMIT,
     REST_POSE,
     DirectArm,
 )
@@ -69,3 +70,7 @@ class SimArmClient(DirectArm):
             self.set_motion_profile(
                 speed=DIRECT_MODE_SPEED_RAW, acceleration=DIRECT_MODE_ACCEL_RAW
             )
+        self.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
+
+    def grip_report(self) -> str:
+        return self.world.grip_report()
