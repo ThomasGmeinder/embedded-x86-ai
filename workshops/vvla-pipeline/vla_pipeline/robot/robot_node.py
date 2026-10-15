@@ -47,6 +47,7 @@ import time
 logger = logging.getLogger(__name__)
 
 from vla_pipeline.robot.arm_interface import (
+    GRASP_LIMITS,
     MOTOR_NAMES,
     REST_POSE,
     ArmClient,
@@ -73,7 +74,7 @@ except ImportError:  # pragma: no cover
 EFFORT_SAMPLE_EVERY_N_TICKS = 3
 
 # Transient bus errors ("There is no status packet!") are retried at the
-# transport layer (DirectArm._bus_retry in arm_interface). The control loop's
+# transport layer (LeRobotArm._bus_retry in common.motion). The control loop's
 # job is just to survive a transaction that fails anyway: a genuinely dead link
 # (power/wiring) fails every tick, so cap the log rate - warn on the first
 # failure, then once every Nth after that - instead of flooding the console.
@@ -144,7 +145,7 @@ class So101ServerNode(Node):
             self._arm = SimArmClient(cfg)
             self.get_logger().info("Bus: MuJoCo digital twin (robot.backend=sim)")
         else:
-            from vla_pipeline.robot.arm_interface import DirectArm, calibration_exists
+            from vla_pipeline.robot.arm_interface import LeRobotArm, calibration_exists
 
             # Calibration is interactive; the server usually runs backgrounded
             # (no TTY), so detect a missing file up front and fail with an
@@ -157,10 +158,15 @@ class So101ServerNode(Node):
                     "    python -m vla_pipeline.robot.arm_interface --calibrate\n"
                     "(run_pipeline.sh now does this automatically before launch)."
                 )
-            self._arm = DirectArm(
+            self._arm = LeRobotArm(
                 r["motor_port"], r["robot_id"], r.get("max_relative_target", 8.0)
             )
             self.get_logger().info(f"SO101Follower connected on {r['motor_port']}")
+        # The client already clamped this move. The bus backstop is the grasp
+        # envelope (wrist_flex to 90°). The desk cap (67.5°) is what the
+        # client applies to ordinary moves; applying it again here pulls a
+        # solved toothbrush grasp back up off the object.
+        self._arm._send_limits = GRASP_LIMITS
 
         self._target_lock = threading.Lock()
         self._target: dict[str, float] = dict(REST_POSE)
@@ -219,7 +225,7 @@ class So101ServerNode(Node):
         if not joints:
             return
         with self._target_lock:
-            self._target.update(clamp_joints(joints))
+            self._target.update(clamp_joints(joints, GRASP_LIMITS))
             self._last_cmd_time = time.time()
 
     def _on_torque_limit(self, msg: "Int32") -> None:
@@ -232,7 +238,7 @@ class So101ServerNode(Node):
 
         Both bus transactions - the command *write* and the state *read* - run
         inside one guard. Transient serial errors are retried in the transport
-        (DirectArm._bus_retry); if a transaction still fails here, the tick is
+        (LeRobotArm._bus_retry); if a transaction still fails here, the tick is
         logged and skipped rather than letting the exception escape, kill this
         daemon thread, and leave the arm uncommanded for the rest of the run.
 
@@ -351,7 +357,7 @@ class So101ServerNode(Node):
         except Exception as e:
             msg = str(e)
             if "Torque_Enable" in msg:
-                # Torque-off is disabled on disconnect (see DirectArm.__init__), so
+                # Torque-off is disabled on disconnect (see LeRobotArm.__init__), so
                 # this normally won't fire. If it does, a servo didn't ack a torque
                 # write during close - non-fatal here (the port is closing), but
                 # worth surfacing rather than crashing the shutdown.
@@ -434,8 +440,13 @@ class Ros2ArmClient(ArmClient):
         return bool(result and result.success)
 
     def send_joints(self, joints: dict[str, float]) -> None:
-        """Publish joints as a JointState command."""
-        joints = clamp_joints(joints)
+        """Publish joints as a JointState command.
+
+        ``go_to(limits=GRASP_LIMITS)`` has already set ``_send_limits``.
+        Clamping with the desk cap here drops a 90° wrist to 67.5° before
+        the server ever sees the grasp.
+        """
+        joints = clamp_joints(joints, self._send_limits)
         names = list(joints.keys())
         self._pub.publish(_joint_state(self._node, names, [joints[k] for k in names]))
 

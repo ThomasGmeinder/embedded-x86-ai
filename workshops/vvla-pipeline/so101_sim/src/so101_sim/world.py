@@ -40,17 +40,6 @@ from so101_sim.servo import CurrentModel, OverloadProtection, ServoBank
 
 logger = logging.getLogger(__name__)
 
-# Pipeline REST_POSE (vla_pipeline/robot/arm_interface.py); adapters pass
-# their own stack's rest pose.
-DEFAULT_REST_POSE = {
-    "shoulder_pan": 0.0,
-    "shoulder_lift": -96.5,
-    "elbow_flex": 95.9,
-    "wrist_flex": 57.9,
-    "wrist_roll": 86.8,
-    "gripper": 43.0,
-}
-
 # Grasp zone in the gripper body frame (see so101.xml): the fixed jaw's tip
 # pad (fixed_jaw_box5, x=-0.0108, half-thickness 1 mm) faces +x, and the
 # moving jaw's tip pads sweep onto it at z~-0.09 as the gripper closes.
@@ -114,7 +103,12 @@ class SimWorld:
         self.current = CurrentModel(self.cfg["current_model"])
         self.protection = OverloadProtection(len(MOTOR_NAMES))
 
-        self.rest_pose = dict(rest_pose or self.cfg.get("rest_pose") or DEFAULT_REST_POSE)
+        pose = rest_pose or self.cfg.get("rest_pose")
+        if not pose:
+            from vla_pipeline.robot.arm_interface import REST_POSE
+
+            pose = REST_POSE
+        self.rest_pose = dict(pose)
         self._free = {}  # body name -> (qposadr, dofadr)
         for j in range(m.njnt):
             if m.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE:

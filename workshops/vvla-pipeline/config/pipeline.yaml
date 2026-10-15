@@ -273,7 +273,7 @@ sim:
     elbow_flex:    {sign: 1, offset_deg: 0.0}
     wrist_flex:    {sign: 1, offset_deg: 0.0}
     wrist_roll:    {sign: 1, offset_deg: 0.0}
-  gripper_map: {closed_cal: 43.0, open_cal: 95.0, closed_rad: -0.15, open_rad: 1.6}
+  gripper_map: {open_cal: 95.0, closed_rad: -0.15, open_rad: 1.6}
   current_model: {idle_a: 0.006, moving_a: 0.15, rated_nm: 0.49, rated_a: 0.65, stall_a: 2.5, stall_torque_nm: 1.91, ma_per_unit: 6.5, noise_units: 3, lpf_hz: 20}  # 7.4 V STS3215
   cameras:
     arm:  {camera: wrist_cam, width: 640, height: 480, fps: 30}

@@ -14,6 +14,7 @@ carry a ``sim:`` block; anything omitted there falls back to :data:`DEFAULTS`.
 from __future__ import annotations
 
 import copy
+import sys
 from pathlib import Path
 
 MODELS_DIR = Path(__file__).resolve().parent / "models"
@@ -49,7 +50,7 @@ DEFAULTS: dict = {
         "wrist_roll": dict(_IDENTITY),
     },
     "gripper_map": {
-        "closed_cal": 43.0,  # calibrated jaw floor -> jaws touching
+        "closed_cal": None,  # filled from GRIPPER_CLOSED_FLOOR in load_sim_config
         "open_cal": 95.0,
         "closed_rad": -0.15,
         "open_rad": 1.6,
@@ -119,6 +120,13 @@ def load_sim_config(cfg: dict | None = None, **overrides) -> dict:
         }
     out = _merge(DEFAULTS, section)
     out = _merge(out, overrides)
+    root = Path(__file__).resolve().parents[3]
+    sol = str(root / "workshop" / "solution")
+    if sol not in sys.path:
+        sys.path.append(sol)
+    from common.motion import GRIPPER_CLOSED_FLOOR
+
+    out["gripper_map"]["closed_cal"] = GRIPPER_CLOSED_FLOOR
     return out
 
 

@@ -16,29 +16,23 @@ matter everywhere you wire things up:
   :data:`MOTOR_NAMES`. Partial dicts are allowed everywhere.
 - Every command must pass through :func:`clamp_joints` before it reaches a
   transport - this is the software safety backstop.
-- ``gripper`` runs on the rig's calibrated 43-95 open span (see
-  :data:`JOINT_LIMITS`); 43 is the jaws' physical closed point - commanding
-  below it jams them into the mechanical stop and stalls the servo - and
-  :data:`GRIPPER_CLOSED_FLOOR` pins that value.
+- ``gripper`` runs on the rig's calibrated jaw span (see :data:`JOINT_LIMITS`).
+  :data:`GRIPPER_CLOSED_FLOOR` is the jaws' physical closed point. Commanding
+  below it jams them into the mechanical stop and stalls the servo.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import sys
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
+
+from so101_sim import MOTOR_NAMES
 
 logger = logging.getLogger(__name__)
-
-MOTOR_NAMES = [
-    "shoulder_pan",
-    "shoulder_lift",
-    "elbow_flex",
-    "wrist_flex",
-    "wrist_roll",
-    "gripper",
-]
 
 GRIPPER_CLOSED_FLOOR = 38.0  # the jaws' physical closed point (calibration space)
 
@@ -48,7 +42,7 @@ GRIPPER_CLOSED_FLOOR = 38.0  # the jaws' physical closed point (calibration spac
 # connect and grips restore it before every open.
 GRIPPER_TORQUE_LIMIT = 500
 
-# Safe rest pose (degrees) - same values the real pipeline parks at.
+# Safe rest pose (degrees).
 REST_POSE = {
     "shoulder_pan": 0.0,
     "shoulder_lift": -96.5,
@@ -63,21 +57,18 @@ REST_POSE = {
 # short of the desks and monitors around the workshop rigs. Three bounds are
 # relaxed just enough (rest + 2 deg) to keep REST_POSE reachable
 # (shoulder_lift low, elbow_flex and wrist_roll high). The gripper span is
-# the rig's calibrated jaw range - 43 = physically closed, 95 = fully open -
-# not a scaled angle.
+# the rig's calibrated jaw range, not a scaled angle.
 JOINT_LIMITS = {
     "shoulder_pan": (-86.0, 86.0),
     "shoulder_lift": (-98.5, 82.5),
     "elbow_flex": (-75.0, 98.0),
     "wrist_flex": (-82.5, 67.5),
     "wrist_roll": (-75.0, 89.0),  # NOT range-swept by LeRobot - keep tight
-    "gripper": (38.0, 95.0),  # calibrated jaws: 43 closed, 95 open
+    "gripper": (GRIPPER_CLOSED_FLOOR, 95.0),
 }
 
-# The full pipeline's hard backstop (vla_pipeline/robot/arm_interface.py) -
-# the widest envelope the deployed system ever allows. Used only to cap the
-# live-mimic extension below; the workshop is standalone, so the values are
-# mirrored here rather than imported.
+# Wide envelope for IK grasps and live mimic. The desk cap above is too tight
+# for a standing approach. Gripper stays on the calibrated span via JOINT_LIMITS.
 _PIPELINE_BACKSTOP = {
     "shoulder_pan": (-115.0, 115.0),
     "shoulder_lift": (-120.0, 110.0),
@@ -196,7 +187,8 @@ class ArmClient(ABC):
 
     def go_to(
         self, target: dict, duration_s: float = 2.0, fps: float = 30.0, stop_check=None,
-        limits: dict | None = None,
+        limits: dict | None = None, max_step_deg: float = 0.0,
+        resend_s: float | None = 0.5,
     ) -> None:
         """Move to ``target`` (partial dicts allowed).
 
@@ -204,14 +196,17 @@ class ArmClient(ABC):
         polls it every tick, so long moves react immediately.
 
         Streaming transports get a host-interpolated trajectory over
-        ``duration_s``. Direct-goal transports (``_direct_goal``) delegate to
-        :meth:`move_to`: the goal is sent once and the servo interpolates in
-        firmware, so ``duration_s``/``fps`` no longer apply.
+        ``duration_s``. ``max_step_deg`` (0 = off) caps each tick so the
+        command never jumps farther than that from the measured position.
+        Direct-goal transports (``_direct_goal``) delegate to :meth:`move_to`:
+        the goal is sent once and the servo interpolates in firmware, so
+        ``duration_s``/``fps``/``max_step_deg`` no longer apply. ``resend_s``
+        of ``None`` sends that goal once and does not rewrite it.
         """
         if self._direct_goal:
             return self.move_to(
                 target, timeout_s=max(duration_s * 2.0, 2.0), stop_check=stop_check,
-                limits=limits,
+                limits=limits, resend_s=resend_s,
             )
         previous = self._send_limits
         self._send_limits = limits
@@ -225,7 +220,19 @@ class ArmClient(ABC):
                 if stop_check and stop_check():
                     return
                 a = i / steps
-                self.send_joints({k: start[k] + a * deltas[k] for k in target})
+                desired = {k: start[k] + a * deltas[k] for k in target}
+                if max_step_deg > 0:
+                    actual = self.get_joints()
+                    pose = {}
+                    for k, goal in desired.items():
+                        cur = actual.get(k, goal)
+                        delta = goal - cur
+                        if abs(delta) > max_step_deg:
+                            goal = cur + max_step_deg * (1.0 if delta > 0 else -1.0)
+                        pose[k] = goal
+                else:
+                    pose = desired
+                self.send_joints(pose)
                 time.sleep(interval)
         finally:
             self._send_limits = previous
@@ -241,6 +248,7 @@ class ArmClient(ABC):
         gripper_settle_s: float = 1.0,
         stop_check=None,
         limits: dict | None = None,
+        resend_s: float | None = 0.5,
     ) -> None:
         """Send an absolute goal ONCE and wait until the arm settles.
 
@@ -256,6 +264,7 @@ class ArmClient(ABC):
         try:
             target = clamp_joints(target, limits)
             self.send_joints(target)
+            last_send = time.time()
             wait = [k for k in target if k != "gripper"]
             if not wait:  # gripper-only move
                 time.sleep(gripper_settle_s)
@@ -287,17 +296,26 @@ class ArmClient(ABC):
                 elif time.time() - ref_time >= settle_dwell_s:
                     if started:  # moved, then stopped: settled
                         return
-                    self.send_joints(target)  # never moved: command may have
-                    ref_dist, ref_time = (
-                        dist,
-                        time.time(),
-                    )  # dropped - resend once per window
+                    # resend_s=None sends the goal once. Rewriting it restarts
+                    # the servo profile, so a stop-triggered park passes None.
+                    if resend_s is not None and time.time() - last_send >= resend_s:
+                        self.send_joints(target)
+                        last_send = time.time()
+                    ref_dist, ref_time = dist, time.time()
         finally:
             self._send_limits = previous
 
-    def go_to_rest(self, duration_s: float = 3.0, stop_check=None) -> None:
-        """Bring the whole arm to :data:`REST_POSE`."""
-        self.go_to(REST_POSE, duration_s=duration_s, stop_check=stop_check)
+    def go_to_rest(
+        self, duration_s: float = 3.0, stop_check=None, resend_s: float | None = 0.5,
+    ) -> None:
+        """Bring the whole arm to :data:`REST_POSE`.
+
+        ``resend_s=None`` is one write: a stop-triggered park must not restart
+        the servo profile by sending the same goal again.
+        """
+        self.go_to(
+            REST_POSE, duration_s=duration_s, stop_check=stop_check, resend_s=resend_s,
+        )
 
     def close(self) -> None:  # noqa: B027 - optional override
         pass
@@ -320,6 +338,18 @@ class DryRunArm(ArmClient):
 
     def get_joints(self) -> dict:
         return dict(self._joints)
+
+
+# Transient Feetech errors ("There is no status packet!") show up when several
+# joints accelerate at once. LeRobot's send_action/get_observation retry count
+# defaults to 0, so the transport retries the whole call.
+BUS_RETRIES = 3
+BUS_RETRY_DELAY_S = 0.004
+
+# Direct-goal mode (max_relative_target is null): one Goal_Position write, and
+# the servo profiles the move. Raw STS3215 units: speed 1000 is about 88 deg/s.
+DIRECT_MODE_SPEED_RAW = 1000
+DIRECT_MODE_ACCEL_RAW = 50
 
 
 class LeRobotArm(ArmClient):
@@ -345,21 +375,20 @@ class LeRobotArm(ArmClient):
         self._robot = SO101Follower(config)
         self._robot.connect()
         self._effort_register = False  # False = not probed yet
+        self._coordinated_joints: list[str] = []
         logger.info("SO101Follower connected on %s (id=%s)", port, robot_id)
 
-        # Direct-goal mode (config: max_relative_target: null - the pipeline's
-        # setting, and how gesture_mimic drives the arm): LeRobot's per-tick
-        # slew clamp is OFF, a command is ONE absolute Goal_Position write, and
-        # the servo's onboard controller produces the motion. Give the servos a
-        # sane speed/acceleration profile so that single write is smooth rather
-        # than a full-speed slam. Register names vary across Feetech firmware /
-        # LeRobot versions, so the writes are guarded best-effort.
+        # Direct-goal mode (config: max_relative_target: null): LeRobot's
+        # per-tick slew clamp is OFF, a command is ONE absolute Goal_Position
+        # write, and the servo's onboard controller produces the motion.
         self._direct_goal = max_relative_target is None
         if self._direct_goal:
-            self._set_motion_profile(speed=1000, acceleration=50)
+            self.set_motion_profile(
+                speed=DIRECT_MODE_SPEED_RAW, acceleration=DIRECT_MODE_ACCEL_RAW,
+            )
         self.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
 
-    def _set_motion_profile(self, speed=None, acceleration=None) -> None:
+    def set_motion_profile(self, speed=None, acceleration=None) -> None:
         """Best-effort servo speed/accel setup for direct-goal mode."""
         bus = getattr(self._robot, "bus", None)
         if bus is None:
@@ -390,12 +419,89 @@ class LeRobotArm(ArmClient):
                 ("Goal_Velocity", "Maximum_Speed_Limit", "Goal_Speed"), speed, "speed"
             )
 
+    def _set_motion_profile(self, speed=None, acceleration=None) -> None:
+        self.set_motion_profile(speed=speed, acceleration=acceleration)
+
+    def _bus_retry(self, op, what: str):
+        """Run a bus transaction, retrying briefly on a dropped status packet."""
+        last_err: Exception | None = None
+        for attempt in range(1, BUS_RETRIES + 1):
+            try:
+                return op()
+            except Exception as e:
+                last_err = e
+                if attempt < BUS_RETRIES:
+                    logger.debug(
+                        "%s failed (attempt %d/%d): %s - retrying",
+                        what, attempt, BUS_RETRIES, e,
+                    )
+                    time.sleep(BUS_RETRY_DELAY_S)
+        raise last_err  # type: ignore[misc]
+
+    def _sync_write_guarded(self, candidates: tuple, values: dict, what: str) -> bool:
+        """sync_write per-joint raw values, trying each register name."""
+        bus = getattr(self._robot, "bus", None)
+        if bus is None:
+            return False
+        payload = {m: max(int(v), 1) for m, v in values.items()}
+        for name in candidates:
+            for _attempt in range(BUS_RETRIES):
+                try:
+                    bus.sync_write(name, payload, normalize=False)
+                    return True
+                except Exception:
+                    time.sleep(BUS_RETRY_DELAY_S)
+        logger.warning("Could not set per-joint %s - coordination may be off.", what)
+        return False
+
+    def set_joint_speeds(self, speeds: dict | None = None) -> None:
+        """Per-joint onboard speed. ``None`` restores the direct-mode profile
+        on the joints ``set_coordinated_speeds`` last scaled."""
+        if speeds is None:
+            joints = self._coordinated_joints
+            if joints:
+                self._sync_write_guarded(
+                    ("Goal_Velocity", "Maximum_Speed_Limit", "Goal_Speed"),
+                    {m: DIRECT_MODE_SPEED_RAW for m in joints},
+                    "speed",
+                )
+                self._sync_write_guarded(
+                    ("Maximum_Acceleration", "Acceleration"),
+                    {m: DIRECT_MODE_ACCEL_RAW for m in joints},
+                    "acceleration",
+                )
+            self._coordinated_joints = []
+            return
+        self._sync_write_guarded(
+            ("Goal_Velocity", "Maximum_Speed_Limit", "Goal_Speed"), speeds, "speed",
+        )
+
+    def set_coordinated_speeds(self, travels: dict) -> None:
+        """Scale speed and acceleration by travel so the joints finish together."""
+        max_t = max(travels.values(), default=0.0)
+        if max_t <= 0:
+            return
+        speeds = {
+            m: max(int(DIRECT_MODE_SPEED_RAW * t / max_t), 50) for m, t in travels.items()
+        }
+        accels = {
+            m: max(int(DIRECT_MODE_ACCEL_RAW * t / max_t), 1) for m, t in travels.items()
+        }
+        self._sync_write_guarded(
+            ("Goal_Velocity", "Maximum_Speed_Limit", "Goal_Speed"), speeds, "speed",
+        )
+        self._sync_write_guarded(
+            ("Maximum_Acceleration", "Acceleration"), accels, "acceleration",
+        )
+        self._coordinated_joints = list(travels)
+
     def send_joints(self, joints: dict) -> None:
         joints = clamp_joints(joints, self._send_limits)
-        self._robot.send_action({f"{k}.pos": v for k, v in joints.items()})
+        action = {f"{k}.pos": v for k, v in joints.items()}
+        self._bus_retry(lambda: self._robot.send_action(action), "send_action")
 
     def get_joints(self) -> dict:
-        obs = self._robot.get_observation()
+        obs = self._bus_retry(self._robot.get_observation, "get_observation")
         return {m: float(obs[f"{m}.pos"]) for m in MOTOR_NAMES if f"{m}.pos" in obs}
 
     def get_gripper_load(self):
@@ -458,41 +564,17 @@ def sim_world(cfg: dict):
 
     sim = dict(cfg.get("sim") or {})
     gm = dict(sim.get("gripper_map") or {})
-    gm.setdefault("closed_cal", GRIPPER_CLOSED_FLOOR)
+    gm["closed_cal"] = GRIPPER_CLOSED_FLOOR
     sim["gripper_map"] = gm
     return shared_world({"sim": sim}, rest_pose=REST_POSE)
 
 
-class SimArmClient(LeRobotArm):
-    """:class:`LeRobotArm` driving the MuJoCo digital twin (``robot.backend: sim``).
-
-    Only the LeRobot ``SO101Follower`` is replaced (by ``so101_sim.SimFollower``):
-    the slew clamp, direct-goal profile writes and effort probe all run as on
-    the rig, and like the rig it counts as a live arm for mimic limits.
-    """
-
-    def __init__(self, cfg: dict, world=None):
-        from so101_sim import SimFollower
-
-        r = cfg.get("robot", {})
-        max_relative_target = r.get("max_relative_target", 8.0)
-        self.world = world or sim_world(cfg)
-        self._robot = SimFollower(
-            self.world,
-            max_relative_target=max_relative_target,
-            robot_id=r.get("robot_id", "sim"),
-        )
-        self._robot.config.disable_torque_on_disconnect = False
-        self._robot.connect()
-        self._effort_register = False
-        logger.info("SO101 digital twin connected (MuJoCo)")
-        self._direct_goal = max_relative_target is None
-        if self._direct_goal:
-            self._set_motion_profile(speed=1000, acceleration=50)
-        self.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
-
-    def grip_report(self) -> str:
-        return self.world.grip_report()
+def _ensure_pipeline_path() -> None:
+    """``vla_pipeline`` sits next to ``workshop/``. The notebook only puts
+    ``workshop/solution`` on ``sys.path``."""
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.append(root)
 
 
 def make_arm_backend(cfg: dict, dry_run: bool = False) -> ArmClient:
@@ -501,8 +583,21 @@ def make_arm_backend(cfg: dict, dry_run: bool = False) -> ArmClient:
     if dry_run or not r.get("enable_motors", True):
         return DryRunArm()
     if r.get("backend", "real") == "sim":
+        _ensure_pipeline_path()
+        from vla_pipeline.robot.sim_arm import SimArmClient
+
         return SimArmClient(cfg)
     return LeRobotArm(r["motor_port"], r["robot_id"], r.get("max_relative_target", 8.0))
+
+
+def __getattr__(name: str):
+    """``SimArmClient`` is defined once, in ``vla_pipeline.robot.sim_arm``."""
+    if name == "SimArmClient":
+        _ensure_pipeline_path()
+        from vla_pipeline.robot.sim_arm import SimArmClient
+
+        return SimArmClient
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ----------------------------------------------------------------------------

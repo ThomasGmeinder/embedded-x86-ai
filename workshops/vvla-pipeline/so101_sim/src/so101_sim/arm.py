@@ -17,10 +17,10 @@
 ``SimArm``       - a small convenience facade (calibrated dicts in/out) for
                    notebooks and the ROS node.
 
-Because the host stacks' own transports (``DirectArm`` in the pipeline,
-``LeRobotArm`` in the workshop) talk to a ``SO101Follower``, their sim
-adapters simply swap in :class:`SimFollower` - every retry, effort-register
-probe and motion-profile write they do on the rig runs unchanged here.
+Because the host stacks' transport (``LeRobotArm``) talks to a
+``SO101Follower``, the sim adapter swaps in :class:`SimFollower`. Every retry,
+effort-register probe and motion-profile write it does on the rig runs
+unchanged here.
 """
 
 from __future__ import annotations

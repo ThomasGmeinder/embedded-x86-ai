@@ -67,6 +67,7 @@ def test_torque_limit_is_live_and_max_torque_limit_waits_for_power_on(world):
 
 
 def _squeeze_ball(world, limit: int):
+    from common.motion import GRIPPER_CLOSED_FLOOR
     from so101_sim.arm import SimBus
 
     world.reset({**GRASP, "gripper": 85.0})
@@ -77,11 +78,13 @@ def _squeeze_ball(world, limit: int):
     bus = SimBus(world)
     bus.write("Overload_Torque", "gripper", 25)  # LeRobot's gripper configure
     bus.write("Torque_Limit", "gripper", limit)
-    bus.write("Goal_Position", "gripper", 43.0)
+    bus.write("Goal_Position", "gripper", GRIPPER_CLOSED_FLOOR)
     return bus
 
 
 def test_overload_drops_the_grip_after_protection_time_until_the_next_goal(world):
+    from common.motion import GRIPPER_CLOSED_FLOOR
+
     bus = _squeeze_ball(world, 500)
     full = float(world.force_full[GRIPPER, 1])
     world.advance(1.0)  # the jaws reach the ball
@@ -89,7 +92,7 @@ def test_overload_drops_the_grip_after_protection_time_until_the_next_goal(world
     assert bus.read("Present_Load", "gripper", normalize=False) >= 450, "the jaws are not loaded"
     for _ in range(10):  # the pipeline streams goals; that must not reset the timer
         world.advance(0.1)
-        bus.write("Goal_Position", "gripper", 43.0)
+        bus.write("Goal_Position", "gripper", GRIPPER_CLOSED_FLOOR)
     assert bus.read("Status", "gripper") == 0
     assert _gripper_cap(world) == pytest.approx(0.5 * full)
     world.advance(1.0)
@@ -97,7 +100,7 @@ def test_overload_drops_the_grip_after_protection_time_until_the_next_goal(world
     assert _gripper_cap(world) == pytest.approx(0.2 * full)
     world.advance(0.3)
     assert bus.read("Present_Load", "gripper", normalize=False) <= 205
-    bus.write("Goal_Position", "gripper", 43.0)
+    bus.write("Goal_Position", "gripper", GRIPPER_CLOSED_FLOOR)
     assert bus.read("Status", "gripper") == 0
     assert _gripper_cap(world) == pytest.approx(0.5 * full)
 

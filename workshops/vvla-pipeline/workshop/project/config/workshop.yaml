@@ -118,7 +118,7 @@ robot:
 sim:                                # MuJoCo digital twin (app.py --digital-twin, so101_sim.node)
   physics_hz: 500
   gl: auto                          # auto (EGL on the iGPU) | egl | osmesa
-  gripper_map: {closed_cal: 38.0, open_cal: 95.0, closed_rad: -0.15, open_rad: 1.6}
+  gripper_map: {open_cal: 95.0, closed_rad: -0.15, open_rad: 1.6}
   cameras:
     arm:  {camera: wrist_cam, width: 640, height: 480, fps: 30}
     operator: {camera: operator_cam, width: 640, height: 480, fps: 30}

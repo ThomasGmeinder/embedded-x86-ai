@@ -10,7 +10,7 @@
 Spoken commands go through the real ``Dispatcher`` (grace window, stop fast
 path, noise gate) and the real ``LlamaIntentParser`` HTTP client against the
 mock llama-server; behaviors run unchanged on ``SimArmClient`` (the
-``DirectArm`` transport over the twin). Assertions are on the simulated
+``LeRobotArm`` transport over the twin). Assertions are on the simulated
 physics: joint traces, gripper current, and whether objects are held.
 """
 
@@ -369,7 +369,9 @@ def _mimic_limits():
 @pytest.mark.slow
 def test_mimic_sweep_pinch_roll(pipeline_rig):
     rig = pipeline_rig
-    floor = float(rig.cfg["sim"]["gripper_map"]["closed_cal"])
+    from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR
+
+    floor = float(GRIPPER_CLOSED_FLOOR)
     rig.pose.keys = [
         (0.0, [Person(wrist=(0.5, 0.45))]),
         (2.0, [Person(wrist=(0.5, 0.45))]),

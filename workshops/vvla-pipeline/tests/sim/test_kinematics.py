@@ -161,12 +161,12 @@ def test_descent_waypoints_stay_on_the_vertical(kin):
 
 @pytest.mark.parametrize("yaw", [20.0, 60.0, 112.9, 160.0])
 def test_ik_closes_across_the_axis(kin, yaw):
-    from vla_pipeline.robot.arm_interface import JOINT_LIMITS
+    from common.motion import GRASP_LIMITS
 
     p = np.array([0.12, -0.24, 0.011])
     axis = np.array([math.cos(math.radians(yaw)), math.sin(math.radians(yaw)), 0.0])
-    pose, err, _ = kin.ik(p, 0.024, wrist_roll=0.0, limits=JOINT_LIMITS, object_axis=axis)
-    lo, hi = JOINT_LIMITS["wrist_roll"]
+    pose, err, _ = kin.ik(p, 0.024, wrist_roll=0.0, limits=GRASP_LIMITS, object_axis=axis)
+    lo, hi = GRASP_LIMITS["wrist_roll"]
     assert lo <= pose["wrist_roll"] <= hi, "no roll inside the arm's wrist range"
     assert err < 0.003
     assert abs(float(kin.world.jaw_axis(pose) @ axis)) < 0.02, "jaws don't close across the axis"
@@ -188,7 +188,8 @@ def test_analytic_grasp_jacobian_matches_forward_difference(kin):
 def _goal_list(kin, joints, box, size, shape):
     """Locate, solve, then the joint-space goals the behavior sends."""
     from so101_sim.kinematics import joint_line
-    from vla_pipeline.robot.arm_interface import JOINT_LIMITS
+
+    from common.motion import GRASP_LIMITS
 
     loc = kin.locate_on_table(box, joints, image_size=size, shape=shape)
     assert loc is not None, f"no fix for {shape} box {box}"
@@ -199,9 +200,9 @@ def _goal_list(kin, joints, box, size, shape):
     limits = None
     if shape == "bottle":
         obstacle = (*loc["xyz"][:2], 0.5 * loc["width"], -0.005 + loc["height"])
-        limits = JOINT_LIMITS
+        limits = GRASP_LIMITS
     elif shape == "flat":
-        limits = JOINT_LIMITS
+        limits = GRASP_LIMITS
     plan = kin.solve_grasp(
         p, above_m=0.06, width=loc["width"], table_z=-0.005, limits=limits, obstacle=obstacle,
     )
@@ -236,15 +237,15 @@ def test_grasp_path_is_deterministic(twins, pipeline_cfg, kin, obj, xy, shape):
 
 
 def test_oriented_sqp_is_deterministic_and_does_not_flip_roll_branch(kin):
-    from vla_pipeline.robot.arm_interface import JOINT_LIMITS
+    from common.motion import GRASP_LIMITS
 
     rng = np.random.default_rng(17)
     for _ in range(12):
         p = np.array([rng.uniform(0.16, 0.28), rng.uniform(-0.16, 0.14), 0.011])
         yaw = rng.uniform(0.0, math.pi)
         axis = np.array([math.cos(yaw), math.sin(yaw), 0.0])
-        a = kin.solve_grasp(p, width=0.024, wrist_roll=0.0, object_axis=axis, limits=JOINT_LIMITS)
-        b = kin.solve_grasp(p, width=0.024, wrist_roll=0.0, object_axis=axis, limits=JOINT_LIMITS)
+        a = kin.solve_grasp(p, width=0.024, wrist_roll=0.0, object_axis=axis, limits=GRASP_LIMITS)
+        b = kin.solve_grasp(p, width=0.024, wrist_roll=0.0, object_axis=axis, limits=GRASP_LIMITS)
         assert (a is None) == (b is None)
         if a is None:
             continue
