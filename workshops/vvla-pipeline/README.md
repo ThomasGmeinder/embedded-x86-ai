@@ -16,7 +16,7 @@ flowchart TB
         OPERATORCAM([Operator camera<br/>faces human]):::io
         ARMCAM([Arm camera<br/>end effector]):::io
 
-        VAD["VAD listener thread<br/>0.35 s end-of-speech<br/>(always hot)"]:::cpu
+        VAD["VAD listener thread<br/>1.2 s end-of-speech<br/>(always hot)"]:::cpu
         WHISPER["Whisper-base<br/>speech → text<br/>(CPU)"]:::cpu
         POSE["YOLOv26s-pose<br/>17 body keypoints"]:::npu
         DETECT["YOLOv26s-detect<br/>80-class objects"]:::npu
@@ -140,7 +140,7 @@ Llama is constrained by `config/intent.gbnf` so it can only ever emit `{"command
 
 | Component | Version |
 |---|---|
-| Hardware | AMD Ryzen AI MAX (Strix Halo), iGPU `gfx1100`, XDNA 2 NPU |
+| Hardware | AMD Ryzen AI MAX (Strix Halo), iGPU `gfx1151`, XDNA 2 NPU |
 | OS | Ubuntu 24.04 |
 | ROCm | 7.2.4 |
 | Ryzen AI SW | 1.7.1 (VitisAI ONNX Runtime EP) |
@@ -151,16 +151,19 @@ Llama is constrained by `config/intent.gbnf` so it can only ever emit `{"command
 
 ## Compute placement
 
-| Model | Sense | Device | Runtime |
-|---|---|---|---|
-| Whisper-base (`amd/whisper-base-onnx-npu`) | ears | **CPU** | ONNX Runtime |
-| Llama 3.2 3B Instruct (Q4_K_M) | brain | **iGPU** | `llama.cpp` `llama-server` (`-DGGML_HIP=ON`) |
-| YOLOv26s-pose | eyes (where) | **NPU** | ONNX Runtime, VitisAI EP |
-| YOLOv26s-detect | eyes (what) | **NPU** | ONNX Runtime, VitisAI EP |
-| MediaPipe Hands | fingers | **CPU** | MediaPipe Tasks |
-| Feedback gripper | touch | **bus** | Feetech current/load + camera verify |
+The pipeline is powered by AI models that use every subsystem of the APU:
 
-Every NPU session is built through one shared factory (`vla_pipeline/utils/npu_session.py`); each `device:` field is set per-model in `config/pipeline.yaml`, and a model set to `npu` falls back to CPU (with a warning) if the VitisAI runtime can't give it a context — so the pipeline never hard-crashes over NPU capacity and also runs (slowly) on a plain dev machine.
+| Task | Model or algorithm | What it does | Runs on | Runtime |
+|---|---|---|---|---|
+| Voice control | Whisper-base | speech → text | CPU | ONNX Runtime |
+| | Llama 3.2 3B Instruct (Q4_K_M) | text → command | iGPU | `llama.cpp` `llama-server` (HIP) |
+| Gestures | YOLOv26s-pose | finds your body and wrist | NPU | ONNX Runtime, VitisAI EP |
+| | MediaPipe Hands | detects the hand gesture (pinch, roll) | CPU | MediaPipe Tasks |
+| Object localization | YOLOv26s-detect | finds the named object in the arm camera | NPU | ONNX Runtime, VitisAI EP |
+| | Localization and inverse kinematics | places the object on the table and solves the grasp | CPU | NumPy, MuJoCo |
+| Digital twin | MuJoCo 3D simulation | simulates the arm and the table scene | CPU (rendering on the iGPU) | MuJoCo, EGL |
+
+Every NPU session is built through one shared factory (`vla_pipeline/utils/npu_session.py`), and each model's `device:` is set in `config/pipeline.yaml`.
 
 ### NPU load order (important)
 
@@ -168,7 +171,7 @@ YOLO-pose and YOLO-detect run on the NPU. Whisper stays on the CPU.
 
 Those two sessions share buffers within a process. The first one sizes them, and they last until the last one closes. Opening YOLO-pose while YOLO-detect is already open fails with `HW context creation unsuccessful / sub buffer size and offset`. `size_npu` opens YOLO-pose first and keeps that session for the life of the process, so the detector can load after it.
 
-A model set to `npu` still falls back to CPU, with a warning, if the VitisAI runtime can't give it a session; the startup logs say where each model landed.
+A model set to `npu` falls back to CPU, with a warning, if the VitisAI runtime can't give it a session, so the pipeline never crashes over NPU capacity and also runs (slowly) on a plain dev machine. The startup logs say where each model landed.
 
 ## ROS 2 nodes & topics
 
@@ -254,9 +257,14 @@ ros2 topic echo /so101/joint_state   # watch positions + gripper effort
 ## Repository layout
 
 ```
-strix-vla-pipeline/
+vvla-pipeline/
 ├── bootstrap.sh                  # one-shot setup into a uv venv at ./.venv
 ├── run_pipeline.sh               # entry point: starts camera + arm nodes, then the orchestrator
+├── activate_venv.sh              # source it: ROS 2 + .venv + the NPU runtime environment
+├── arm_calibrator/               # one-pose servo calibration (see its README)
+├── so101_sim/                    # MuJoCo digital twin: arm, cameras, table scene, ROS 2 node
+├── tests/sim/                    # automated tests on the twin (see below)
+├── workshop/                     # the hands-on workshop; common/ is the behavior code the pipeline runs too
 ├── config/
 │   ├── pipeline.yaml             # all tunables (cameras, vad, gesture_mimic, pick_place, grip, …)
 │   ├── intent.gbnf               # GBNF grammar: {"command","object"}
@@ -266,17 +274,21 @@ strix-vla-pipeline/
 │   └── strix_vla.launch.py       # cameras (operator+arm) + SO-101 server node
 ├── scripts/
 │   ├── calibrate_arm_camera.py   # arm camera intrinsics + mount on the gripper (pick_place IK)
-│   ├── compile_npu_models.py     # compile whisper/yolo ONNX for the NPU (SDK venv)
+│   ├── compile_npu_models.{py,sh} # compile the YOLO ONNX for the NPU (SDK venv)
 │   ├── export_whisper_onnx.py    # Whisper encoder/decoder ONNX export
 │   ├── export_yolo26s_pose.py    # body-keypoint ONNX export
 │   ├── export_yolo26s_detect.py  # 80-class detection ONNX export
 │   ├── ryzen_ai_env.sh           # LD_LIBRARY_PATH for the VitisAI EP runtime
+│   ├── verify_npu_stack.py       # check that the VitisAI EP loads
+│   ├── validate_setup.sh         # check scripts, SDK, caches and .venv
 │   └── install_kernel.sh         # register .venv Jupyter kernel + start llama-server
 └── vla_pipeline/
-    ├── main.py                   # orchestrator: registry dispatch, listener thread, stop fast path
+    ├── main.py                   # orchestrator: handler registry, listener thread
+    ├── dispatch.py               # transcript checks, stop fast path, behavior dispatch loop
+    ├── console.py                # twin console window (--digital-twin)
     ├── audio/
     │   ├── whisper_npu.py        # WhisperONNX + mic capture
-    │   └── vad_listener.py       # VAD utterance capture (0.35 s end-of-speech)
+    │   └── vad_listener.py       # VAD utterance capture (1.2 s end-of-speech)
     ├── llm/
     │   ├── intents.py            # Intent enum, ParsedCommand, CommandRegistry, system prompt
     │   └── llama_intent.py       # llama-server lifecycle + intent parsing (object slot)
@@ -287,20 +299,21 @@ strix-vla-pipeline/
     │   ├── yolo_detect_npu.py    # ObjectDetector + spoken-name synonyms
     │   └── mediapipe_hands.py    # HandTracker: normalized thumb–index pinch
     ├── robot/
-    │   ├── arm_interface.py      # ArmClient ABC + DirectArm/DryRunArm, get_gripper_load()
+    │   ├── arm_interface.py      # ArmClient, LeRobotArm, DryRunArm (from workshop/common/motion.py), calibration
+    │   ├── sim_arm.py            # SimArmClient: LeRobotArm on the digital twin
     │   ├── robot_node.py         # So101ServerNode (effort in JointState) + Ros2ArmClient
     │   └── test_ros2_arm_motion.py  # ROS 2 per-joint full-range motion test
     ├── behaviors/
     │   ├── gesture_mimic.py      # camera-frame mapping loop, grip-lock aware, --calibrate-depth/-grip
-    │   ├── pick_place.py         # voice-grounded pick (locate on the table + IK reach) → hold it out
-    │   ├── fetch_block.py        # taught-pose fetch; exports the handoff helpers
-    │   ├── grip.py               # feedback close (current/stall/grace) + camera verify; release opens the jaws in place
+    │   ├── pick_place.py         # calls run_pick_place in workshop/common/manipulation.py
+    │   ├── fetch_block.py        # calls run_fetch_block in workshop/common/manipulation.py
+    │   ├── grip.py               # calls run_grip / run_release in workshop/common/manipulation.py
     │   ├── dance.py              # keyframe moves, BPM pacing
     │   └── simple.py             # wave, home
     └── utils/
         ├── config.py             # YAML loader, path resolution
         ├── npu_session.py        # shared VitisAI/CPU ONNX session factory
-        ├── gesture_map.py        # direct camera-frame → joint mapping, One Euro smoothing
+        ├── gesture_map.py        # camera-frame → joint mapping (MimicMapper in workshop/common/motion.py)
         └── resource_monitor.py   # CPU/GPU/NPU power, VRAM, DRAM bandwidth
 ```
 
@@ -424,6 +437,7 @@ After the file exists, subsequent launches skip straight to startup.
 ./run_pipeline.sh                     # voice control, full hardware
 ./run_pipeline.sh --text-commands     # type commands instead of speaking
 ./run_pipeline.sh --dry-run           # no robot hardware (prints joint targets)
+./run_pipeline.sh --digital-twin      # no robot hardware: the MuJoCo twin, shown in the twin console window
 ./run_pipeline.sh --headless          # no OpenCV preview windows
 ```
 
@@ -436,25 +450,11 @@ source scripts/ryzen_ai_env.sh                    # orchestrator terminal: NPU r
 python -m vla_pipeline.main                       # orchestrator (own terminal)
 ```
 
-A resource-usage CSV (CPU %, RAPL package power, iGPU busy %/VRAM via `rocm-smi`, DRAM bandwidth via AMD perf events) is written to `logs/` on every run.
-
-### Which model runs where
-
-The pipeline is powered by AI models that use every subsystem of the APU:
-
-| Task | Model or algorithm | What it does | Runs on |
-|---|---|---|---|
-| Voice control | Whisper | speech → text | CPU |
-| | Llama 3.2 3B | text → command | iGPU |
-| Gestures | YOLOv26s-pose | finds your body and wrist | NPU |
-| | MediaPipe Hands | detects the hand gesture (pinch, roll) | CPU |
-| Object localization | YOLOv26s-detect | finds the named object in the arm camera | NPU |
-| | Localization and inverse kinematics | places the object on the table and solves the grasp | CPU |
-| Digital twin | MuJoCo 3D simulation | simulates the arm and the table scene | CPU (rendering on the iGPU) |
+A resource-usage CSV (CPU %, RAPL package power, iGPU busy %/VRAM via `rocm-smi`, DRAM bandwidth via AMD perf events) is written to `logs/` on every run. [Compute placement](#compute-placement) lists which model runs on which device.
 
 ## Gesture mimicry: direct camera-frame mapping
 
-Mimicry maps the camera image straight onto SO-101 joints (`vla_pipeline/utils/gesture_map.py`): the image is treated as a control surface, and four normalized axes in `[-1, 1]` drive per-joint offsets from a neutral "ready" pose, every command clamped to the joint limits (no analytic IK, no arm-geometry solve). All gains live under `behaviors.gesture_mimic` in `config/pipeline.yaml`.
+Mimicry maps the camera image straight onto SO-101 joints (`MimicMapper` in `workshop/common/motion.py`): the image is treated as a control surface, and four normalized axes in `[-1, 1]` drive per-joint offsets from a neutral "ready" pose, every command clamped to the joint limits (no analytic IK, no arm-geometry solve). All gains live under `behaviors.gesture_mimic` in `config/pipeline.yaml`.
 
 1. **Left/right (x)** from the YOLO-pose wrist keypoint's horizontal position → `shoulder_pan`.
 2. **Up/down (y)** from the wrist keypoint's vertical position → `elbow_flex` at full authority, `shoulder_lift` at its lower ~50%, and `wrist_flex` as a level-keeping fine-tune. The YOLO wrist is also the fallback controller: when MediaPipe loses the hand the arm keeps following it for x/y.
@@ -477,34 +477,34 @@ Hold your hand at a comfortable mid-distance, then paste the printed `hand_size_
 
 Kept: **YOLOv26s-pose on the NPU for the body + MediaPipe Hands on CPU for the pinch.** Rationale: the NPU session is already compiled/cached, runs at camera rate without touching CPU/iGPU budgets needed by Llama and MediaPipe, and COCO-17 keypoints are exactly what the mapper needs; MediaPipe Hands remains the best cheap pinch detector. The often-suggested alternative — MediaPipe Pose with world landmarks (metric 3-D, CPU) — would give Z without calibration, but costs CPU it would share with MediaPipe Hands, adds a second pose stack to fuse, and its world-landmark Z is noisy enough at 2-3 m that it needs the same One Euro treatment anyway. The mapper is backend-agnostic (consumes COCO-17 arrays), so swapping the estimator later is a one-file change.
 
-## Gripper: why the pen used to drop, and the fix
+## Gripper: closing on contact
 
-The old close loop exited when the *commanded* position reached 0°. A pen stalls the jaws at ~3-6°; with 1.5°/tick the command reaches 0° before `stall_ticks` consecutive stalled reads accumulate → "no object" → relax to 30° → pen drops. Now (`vla_pipeline/behaviors/grip.py`):
+`close_with_feedback` in `workshop/common/manipulation.py` closes the jaws step by step and stops at the first contact. Grip, fetch, and pick and place all use it.
 
-- a **grace window** (`grip.stall_grace_s`) keeps sampling measured-vs-commanded after full close — thin objects show as a persistent gap;
-- **effort/current feedback** when the bus supports it (runtime-probed `Present_Current`/`Present_Load`; threshold `grip.load_threshold`) stops the close at first sustained contact — gentler and faster; automatic fallback to position stall when unavailable (including over ROS 2, where effort rides in `JointState.effort`);
-- **arm-camera verification**: empty-jaws reference frame at present time, jaw-ROI difference after the grasp (`grip.jaw_roi`, `grip.jaw_diff_threshold`) — a false "contact" is reported as a failure instead of a phantom grip-lock.
+- **Contact** is sustained servo current above `grip.load_threshold` when the bus reports it (over ROS 2 it rides in `JointState.effort`), otherwise a position stall: the jaws stopped short of the command.
+- A **grace window** (`grip.stall_grace_s`) keeps sampling after the command reaches the closed floor, so a thin object such as a pen still counts as contact.
+- After contact the goal stays `hold_past_contact` past the jaw for `reseat_s` while both fingers seat, then the torque limit drops to `hold_torque_limit` for the carry.
+- `grip` also compares the arm camera's view of the jaws before and after (`grip.jaw_roi`, `grip.jaw_diff_threshold`), so a false contact is reported as a failure instead of a phantom grip-lock.
 
 ## Voice latency
 
-| Stage | Before | After |
-|---|---|---|
-| End-of-utterance detection | 1.2 s fixed silence | **0.7 s** VAD hangover (`audio.vad.hangover_s`) |
-| ASR (whisper-base, NPU, short command) | ~0.2-0.4 s | same (sessions stay warm) |
-| Intent (Llama, GBNF) | ~0.1 s + connect | ~0.1 s (keep-alive HTTP session) |
-| **End-of-speech → behavior** | **~1.5-1.7 s** | **~1.0-1.2 s** |
+| Stage | Time |
+|---|---|
+| End of utterance | 1.2 s of silence (`audio.vad.hangover_s`) |
+| Speech → text (Whisper-base on the CPU, short command) | a few hundred ms |
+| Intent (Llama, GBNF) | ~0.1 s (keep-alive HTTP session) |
 
-The hangover is the silence that ends an utterance. Below ~0.6 s a natural
-pause mid-sentence splits it: at 0.35 s, "pick up ... the cube" arrived as
+The hangover is the silence that ends an utterance. A shorter one splits a
+natural pause mid-sentence: at 0.35 s, "pick up ... the cube" arrived as
 "pink up" (parsed as dance) and "the cube".
 
 `webrtcvad` is used when installed (`audio.vad.backend: auto`); otherwise an adaptive-noise-floor energy VAD with a 0.3 s pre-roll so onsets aren't clipped. "Stop" additionally skips the LLM entirely. Measure it live: `python -m vla_pipeline.audio.vad_listener --mic`.
 
 ## Voice pick-and-place
 
-"Pick up the ball" → `{"command": "pick_place", "object": "ball"}` → `vla_pipeline/behaviors/pick_place.py`: the arm walks `scan_pans` and stops at the first settled frame with a usable box, kept with the joints that took it → YOLOv26s-detect on the arm camera grounds the name (synonym table: ball→sports ball, mug→cup, …) → that box is located once on the table → one grasp solve → a joint-space descent → the same feedback-based close as grip, a short settle, a holding check (one fresh frame and one more locate if the grasp slips) → lift the grasp above the other objects and hold the object out toward the operator. The jaws stay closed.
+"Pick up the ball" → `{"command": "pick_place", "object": "ball"}` → `run_pick_place` in `workshop/common/manipulation.py`: the arm walks `scan_pans` and stops at the first settled frame with a usable box, kept with the joints that took it → YOLOv26s-detect on the arm camera grounds the name (synonym table: ball→sports ball, mug→cup, …) → that box is located once on the table → one grasp solve → a joint-space descent → the same feedback-based close as grip, a short settle, a holding check (one fresh frame and one more locate if the grasp slips) → lift the grasp above the other objects and hold the object out toward the operator. The jaws stay closed.
 
-**Locate:** objects rest on the table, so one camera is enough. Forward kinematics of the SO-101 model (`so101_sim/kinematics.py`) at the current joint angles gives the wrist camera's pose; rays through the YOLO box meet the table plane, then a class-specific footprint is fitted: sphere for a sports ball, upright bottle, or flat footprint for a book/toothbrush. For the elongated toothbrush, YOLO supplies the crop but not an angle: PCA on the pixels inside that crop finds its long image axis and camera rays carry it onto the table. **IK reach:** one five-joint constrained SQP solve uses MuJoCo's analytic point and angular Jacobians to put the point between the open jaws on the object, keep the closing axis horizontal, and (for a toothbrush) make the jaws close across its long axis. Beside a ball or other lying object, the hand then moves sideways at grasp height until the fixed finger is `fixed_jaw_gap_m` (5 mm) away, so the moving jaw only pushes the object that far instead of across half the jaw opening. Joint limits and a per-step trust region are hard constraints; geometric SO-101 elbow solutions seed the optimizer, while MuJoCo FK remains the source of truth. The jaws then open above the object and descend in joint space. Each step stays within 5 mm of the planned vertical and above the table; when a joint line leaves that band, the same bound is met with Cartesian steps. Reach is ~14–30 cm from the base. A box cut by the image edge is skipped and the next stored frame is located. An object that cannot be solved is out of reach, and the arm says so. The taught `approach_pose` + `descend_lift` are used only with `reach: fixed` or when the arm camera is offline.
+**Locate:** objects rest on the table, so one camera is enough. Forward kinematics of the SO-101 model (`so101_sim/src/so101_sim/kinematics.py`) at the current joint angles gives the wrist camera's pose; rays through the YOLO box meet the table plane, then a class-specific footprint is fitted: sphere for a sports ball, upright bottle, or flat footprint for a book/toothbrush. For the elongated toothbrush, YOLO supplies the crop but not an angle: PCA on the pixels inside that crop finds its long image axis and camera rays carry it onto the table. **IK reach:** one five-joint constrained SQP solve uses MuJoCo's analytic point and angular Jacobians to put the point between the open jaws on the object, keep the closing axis horizontal, and (for a toothbrush) make the jaws close across its long axis. Beside a ball or other lying object, the hand then moves sideways at grasp height until the fixed finger is `fixed_jaw_gap_m` (5 mm) away, so the moving jaw only pushes the object that far instead of across half the jaw opening. Joint limits and a per-step trust region are hard constraints; geometric SO-101 elbow solutions seed the optimizer, while MuJoCo FK remains the source of truth. The jaws then open above the object and descend in joint space. Each step stays within 5 mm of the planned vertical and above the table; when a joint line leaves that band, the same bound is met with Cartesian steps. Reach is ~14–30 cm from the base. A box cut by the image edge is skipped and the next stored frame is located. An object that cannot be solved is out of reach, and the arm says so. The taught `approach_pose` + `descend_lift` are used only with `reach: fixed` or when the arm camera is offline.
 
 **Real arm calibration.** Until calibrated, the camera model is the twin's `wrist_cam` (intrinsics and pose on the gripper), which only matches a camera mounted exactly like the twin's — 1° of mount error moves the fix ~5 mm at 30 cm. With the pipeline stopped:
 
@@ -599,7 +599,7 @@ All tunables live in `config/pipeline.yaml`:
 
 ## Architecture notes
 
-- **Transport-agnostic behaviors.** Behaviors only ever talk to the `ArmClient` ABC and the `CameraClient` ABC. The same behavior code runs over ROS 2 topics (`Ros2ArmClient` → `So101ServerNode`, which exclusively owns the Feetech bus), direct serial (`DirectArm` → LeRobot `SO101Follower`), or `DryRunArm` for development; cameras likewise over ROS 2 topics or direct V4L2.
+- **Transport-agnostic behaviors.** Behaviors only ever talk to the `ArmClient` ABC and the `CameraClient` ABC. The same behavior code runs over ROS 2 topics (`Ros2ArmClient` → `So101ServerNode`, which exclusively owns the Feetech bus), direct serial (`LeRobotArm` → LeRobot `SO101Follower`), the digital twin (`SimArmClient`), or `DryRunArm` for development; cameras likewise over ROS 2 topics or direct V4L2.
 - **Grammar-constrained intent.** llama.cpp's GBNF support means the LLM physically cannot emit anything but one of the command JSONs (`gesture_mimic`, `fetch_block`, `pick_place`, `dance`, `grip`, `release`, `wave`, `home`, `stop`, `unknown`) with an `object` slot.
 - **Registry dispatch.** The orchestrator never hardcodes behaviors; handlers register on a `CommandRegistry`, so adding a command never touches `main.py`'s dispatch loop.
 - **Grip-lock.** `grip` records the contact position in shared state; `gesture_mimic` checks that state every tick and pins the gripper joint to the locked position while the rest of the arm mimics. `release` ("release", "open", "drop it") clears the lock and opens the jaws where they are.
