@@ -427,15 +427,30 @@ After the file exists, subsequent launches skip straight to startup.
 ./run_pipeline.sh --headless          # no OpenCV preview windows
 ```
 
-The script sources ROS 2 Jazzy + the venv, runs first-time calibration if needed (foreground), starts the SO-101 server node **and both camera nodes** in the background (when `robot.use_ros2: true` / `cameras.*.use_ros2: true`), runs the orchestrator, and tears everything down on Ctrl-C — the arm always parks at the rest pose. Equivalent ROS launch:
+The script sources ROS 2 Jazzy, the venv and the Ryzen AI NPU environment (`scripts/ryzen_ai_env.sh`), runs first-time calibration if needed (foreground), starts the SO-101 server node **and both camera nodes** in the background (when `robot.use_ros2: true` / `cameras.*.use_ros2: true`), runs the orchestrator, and tears everything down on Ctrl-C — the arm always parks at the rest pose. Equivalent ROS launch:
 
 ```bash
 ros2 launch launch/strix_vla.launch.py            # cameras + arm server
 ros2 launch launch/strix_vla.launch.py dry_run:=true
+source scripts/ryzen_ai_env.sh                    # orchestrator terminal: NPU runtime for YOLO
 python -m vla_pipeline.main                       # orchestrator (own terminal)
 ```
 
 A resource-usage CSV (CPU %, RAPL package power, iGPU busy %/VRAM via `rocm-smi`, DRAM bandwidth via AMD perf events) is written to `logs/` on every run.
+
+### Which model runs where
+
+The pipeline is powered by AI models that use every subsystem of the APU:
+
+| Task | Model or algorithm | What it does | Runs on |
+|---|---|---|---|
+| Voice control | Whisper | speech → text | CPU |
+| | Llama 3.2 3B | text → command | iGPU |
+| Gestures | YOLOv26s-pose | finds your body and wrist | NPU |
+| | MediaPipe Hands | detects the hand gesture (pinch, roll) | CPU |
+| Object localization | YOLOv26s-detect | finds the named object in the arm camera | NPU |
+| | Localization and inverse kinematics | places the object on the table and solves the grasp | CPU |
+| Digital twin | MuJoCo 3D simulation | simulates the arm and the table scene | CPU (rendering on the iGPU) |
 
 ## Gesture mimicry: direct camera-frame mapping
 
