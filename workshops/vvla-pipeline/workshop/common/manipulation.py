@@ -166,7 +166,8 @@ def ease_grip(arm, g: dict) -> None:
 
 
 def _reseat(arm, g: dict, stop_check=None) -> float:
-    """Keep the goal ``hold_past_contact`` below the jaw for ``reseat_s``.
+    """Keep the goal ``hold_past_contact`` below the jaw for ``reseat_s``,
+    then wait for the jaw to settle against the last goal (:func:`_settle_jaw`).
     Contact can register while one jaw still pushes the object; the trailing
     goal lets both fingers seat. Returns the last goal."""
     past = float(g.get("hold_past_contact", 6.0))
@@ -176,15 +177,43 @@ def _reseat(arm, g: dict, stop_check=None) -> float:
         hold = max(jaw - past, GRIPPER_CLOSED_FLOOR)
         arm.send_joints({"gripper": hold})
         if time.time() >= deadline or (stop_check and stop_check()):
-            return hold
+            break
         time.sleep(TICK_S)
+    _settle_jaw(arm, g, hold, stop_check)
+    return hold
+
+
+def _settle_jaw(arm, g: dict, hold: float, stop_check=None, timeout_s: float = 1.0) -> None:
+    """Wait until the jaw reaches ``hold`` or stops short of it.
+
+    The last trailing goal is set while an empty jaw may still be closing.
+    Read at that moment, the jaw sits ``hold_past_contact`` above its goal
+    exactly as if an object held it open, so :func:`holding` would see a
+    grip in empty jaws.
+    """
+    eps = float(g["stall_eps_deg"])
+    still_needed = int(g["stall_ticks"])
+    target = max(hold, GRIPPER_CLOSED_FLOOR)
+    deadline = time.time() + timeout_s
+    prev = float(arm.get_joints()["gripper"])
+    still = 0
+    while time.time() < deadline and not (stop_check and stop_check()):
+        time.sleep(TICK_S)
+        jaw = float(arm.get_joints()["gripper"])
+        if jaw - target <= eps:  # closed onto the goal: nothing between the jaws
+            return
+        still = still + 1 if abs(prev - jaw) < eps else 0
+        if still >= still_needed:  # stopped short of the goal: something is
+            return
+        prev = jaw
 
 
 def holding(arm, g: dict, hold: float) -> bool:
     """The jaws stopped more than ``stall_eps_deg`` short of the held goal.
-    The goal is past the object, so an empty jaw closes onto it within a
-    fraction of a second. Current is not used: at the hold limit it reads
-    below the close's contact level."""
+    The goal is past the object, so an empty jaw closes onto it. Only
+    meaningful once the jaw has settled against ``hold``:
+    :func:`close_with_feedback` returns after :func:`_settle_jaw`. Current
+    is not used: at the hold limit it reads below the close's contact level."""
     target = max(hold, GRIPPER_CLOSED_FLOOR)
     return float(arm.get_joints().get("gripper", target)) - target > float(g["stall_eps_deg"])
 
