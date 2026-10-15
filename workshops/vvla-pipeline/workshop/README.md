@@ -81,6 +81,9 @@ cd solution && python -m models.selftest && python -m ros.selftest \
   && python app.py --dry-run --synthetic --no-llm --headless --frames 60
 ```
 
+The digital twin notebook and the behaviors are covered by
+[automated tests on the twin](../README.md#automated-tests-on-the-digital-twin).
+
 AMD-specific lessons for the session:
 
 **Choose the device on purpose.** YOLO-pose and YOLO-detect already fill

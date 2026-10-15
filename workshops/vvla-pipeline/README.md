@@ -538,11 +538,11 @@ the scan says it cannot see a bottle and the grasp never starts.
 
 ## Testing each component independently
 
-Every component is a standalone module with its own `__main__` self-test.
+Most components are standalone modules with their own `__main__` self-test. Pick and place, fetch, grip and the camera-to-joint mapping run the workshop's code (`workshop/common/`) and are tested on the digital twin.
 
 | Component | Needs hardware? | Command |
 |---|---|---|
-| Camera→joint mapping (One Euro/depth) | no | `python -m vla_pipeline.utils.gesture_map --selftest` |
+| Camera→joint mapping (One Euro/depth) | no (twin) | `pytest tests/sim -m "sim and not hw" -k mimic` |
 | VAD listener | no | `python -m vla_pipeline.audio.vad_listener --selftest` |
 | Intent grammar + parser | no (needs llama-server build) | `python -m vla_pipeline.llm.llama_intent --selftest` |
 | Whisper STT | mic or wav | `python -m vla_pipeline.audio.whisper_npu --input mic --device npu` |
@@ -556,11 +556,11 @@ Every component is a standalone module with its own `__main__` self-test.
 | ROS 2 server node | ROS 2 (arm optional) | `python -m vla_pipeline.robot.robot_node --server --dry-run` |
 | ROS 2 client round-trip | ROS 2 | `python -m vla_pipeline.robot.robot_node --client-test` |
 | Gesture mimic | webcam | `python -m vla_pipeline.behaviors.gesture_mimic --dry-run` |
-| Pick and place | webcam | `python -m vla_pipeline.behaviors.pick_place --object ball --dry-run-arm` |
+| Pick and place | no (twin) | `pytest tests/sim -m "sim and not hw" -k pick` |
 | Arm camera localization | arm (`--sim` = twin) | `python scripts/calibrate_arm_camera.py check --sim --object sports_ball --pan -14 --at 0.28 0.06` |
-| Fetch block | no | `python -m vla_pipeline.behaviors.fetch_block --dry-run --no-camera` |
+| Fetch block | no (twin) | `pytest tests/sim -m "sim and not hw" -k fetch_block` |
 | Dance | no | `python -m vla_pipeline.behaviors.dance --dry-run` |
-| Grip (simulated object) | no | `python -m vla_pipeline.behaviors.grip --dry-run` (`--thin` = pen, `--load` = effort) |
+| Grip | no (twin) | `pytest tests/sim -m "sim and not hw" -k grip` |
 | Wave / home | no | `python -m vla_pipeline.behaviors.simple --behavior wave --dry-run` |
 
 A lightweight **always-on-top resource HUD** for live demos ships with the
@@ -568,6 +568,21 @@ workshop: `workshop/launch_monitor.sh` (or `from common.monitor import
 open_monitor` inside a notebook) floats **CPU %**, **GPU %**, and **NPU
 inferences/sec** (or Idle) over every window - the consolidated cousin of
 `utils/resource_monitor.py` above.
+
+## Automated tests on the digital twin
+
+`tests/sim` runs the pipeline and the workshop against the MuJoCo twin, with no arm, camera or microphone. The tests run headless and unattended, and the exit code is the result, so a CI runner with the prerequisites below can run them as they are. The tier 2 tests have time limits; in CI, pass `--timeout 600` to bound tier 1 too.
+
+| Tier | Command | Needs | Covers |
+|---|---|---|---|
+| 1 | `pytest tests/sim -m "sim and not hw"` | EGL (or OSMesa), the YOLO ONNX models | Both stacks in one process: pickups, grip and slip, fetch, mimic, reset, kinematics, the servo and current model, the twin's frame stamps and scene snapshots |
+| 2 | `source /opt/ros/jazzy/setup.bash && pytest tests/sim -m hw` | ROS 2 Jazzy, the `vvla-workshop` Jupyter kernel | The twin as a ROS 2 node (`so101_sim.node --notebook-twin`), the workshop behaviors over ROS, and `02_digital_twin.ipynb`'s console driven through its widgets |
+
+- Run tier 1 in a shell where ROS 2 is not sourced. ROS's `launch_testing` pytest plugin replaces Python's logger class, and tests that check the logs then see nothing.
+- Tier 2 runs on its own ROS domain (`TWIN_TEST_DOMAIN_ID`, default 93) with discovery kept to the machine, so it never reaches a real arm or another twin.
+- `pip install -e so101_sim[test]` installs pytest, pytest-timeout and nbclient.
+- `--sim-video failed` keeps recordings only for failed tests (by default every test is recorded to `_artifacts/sim_tests/`). `--sim-yolo-device npu` runs YOLO on the NPU (source `scripts/ryzen_ai_env.sh` first). `--sim-eyes seg` replaces YOLO with ground-truth boxes in tier 1.
+- On a Strix Halo, tier 1 takes about 8 minutes and tier 2 about 7.
 
 ## Configuration
 
