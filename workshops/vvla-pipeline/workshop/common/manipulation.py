@@ -37,6 +37,8 @@ import time
 import cv2
 import numpy as np
 
+from so101_sim.kinematics import OPEN_GRIPPER
+
 from common.imaging import KP
 from common.intents import Intent
 from common.motion import GRASP_LIMITS, GRIPPER_CLOSED_FLOOR, GRIPPER_TORQUE_LIMIT, JOINT_LIMITS, REST_POSE
@@ -423,8 +425,12 @@ def _log_grip(arm, label: str, hold: float, plan=None) -> None:
             kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
             want = {**here, **plan.grasp}
             got = {**here, "gripper": want["gripper"]}
-            off = kin.world.grasp_point(got, 0.04) - kin.world.grasp_point(want, 0.04)
-            parts.append(f"hand {1000 * float(np.linalg.norm(off)):.1f} mm from the planned grasp")
+            got_pt = kin.world.grasp_point(got, 0.04)
+            want_pt = kin.world.grasp_point(want, 0.04)
+            parts.append(
+                f"fingers {1000 * got_pt[2]:.0f} mm high, planned {1000 * want_pt[2]:.0f} mm, "
+                f"object centre {1000 * plan.xyz[2]:.0f} mm"
+            )
         except Exception as e:
             logger.debug("grasp offset unavailable: %s", e)
     report = arm.grip_report()
@@ -941,16 +947,18 @@ def run_pick_place(ctx, cmd) -> bool:
             _reach_fixed(ctx)
         if ctx.stop_check():
             return False
-        gripped, hold = close_with_feedback(ctx.arm, g, stop_check=ctx.stop_check, start_from=75.0, ease=False)
+        gripped, hold = close_with_feedback(
+            ctx.arm, g, stop_check=ctx.stop_check, start_from=OPEN_GRIPPER, ease=False,
+        )
         if ctx.stop_check():
             return False
-        if gripped:
-            _log_grip(ctx.arm, "grasp", hold, plan)
         if gripped and holding(ctx.arm, g, hold):
+            _log_grip(ctx.arm, "grasp", hold, plan)
             break
+        _log_grip(ctx.arm, "grasp missed", hold, plan)
         gripped = False
         ctx.arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
-        ctx.arm.go_to({"gripper": 75.0}, duration_s=0.6, stop_check=ctx.stop_check)
+        ctx.arm.go_to({"gripper": OPEN_GRIPPER}, duration_s=0.6, stop_check=ctx.stop_check)
         if attempt + 1 >= attempts or not use_ik:
             continue
         ctx.say("The grasp slipped - trying once more.")
@@ -997,7 +1005,7 @@ def _reach_fixed(ctx) -> None:
     """Jaws open over the object at the configured reach, then down onto it."""
     pp = ctx.cfg["pick_place"]
     above = {**pp["approach_pose"], "shoulder_pan": ctx.arm.get_joints()["shoulder_pan"]}
-    ctx.arm.go_to({**above, "gripper": 75.0}, duration_s=1.5, stop_check=ctx.stop_check)
+    ctx.arm.go_to({**above, "gripper": OPEN_GRIPPER}, duration_s=1.5, stop_check=ctx.stop_check)
     ctx.arm.go_to({"shoulder_lift": float(pp["descend_lift"])}, duration_s=1.5, stop_check=ctx.stop_check)
 
 
