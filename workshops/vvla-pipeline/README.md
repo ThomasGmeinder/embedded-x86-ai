@@ -151,7 +151,7 @@ Llama is constrained by `config/intent.gbnf` so it can only ever emit `{"command
 
 ## Compute placement
 
-The pipeline is powered by AI models that use every subsystem of the APU:
+The pipeline is powered by AI models that utilize every subsystem of the APU. Each workload runs on the subsystem whose strengths best match its requirements.
 
 | Task | Model or algorithm | What it does | Runs on | Runtime |
 |---|---|---|---|---|
