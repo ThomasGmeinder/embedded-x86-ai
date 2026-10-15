@@ -106,14 +106,27 @@ def _gaps(world, pose, body: str) -> tuple[float, float]:
     m = world.model
     d = world.fk(pose)
     gid = m.geom(f"{body}_collision").id
-    visual = collision = 1e9
+    visual = 1e9
+    for i in range(m.ngeom):
+        owner = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, m.geom_bodyid[i]) or ""
+        if not m.geom_contype[i] and owner == "gripper":
+            visual = min(visual, _surface_gap(m, d, i, gid))
+    return visual, _collision_gap(world, pose, body)
+
+
+def _collision_gap(world, pose, body: str) -> float:
+    """Minimum gap (m) from any colliding jaw geom to ``body``."""
+    import mujoco
+
+    m = world.model
+    d = world.fk(pose)
+    gid = m.geom(f"{body}_collision").id
+    gap = 1e9
     for i in range(m.ngeom):
         owner = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, m.geom_bodyid[i]) or ""
         if m.geom_contype[i] and owner in ("gripper", "moving_jaw_so101_v1"):
-            collision = min(collision, float(mujoco.mj_geomDistance(m, d, i, gid, 0.25, None)))
-        elif owner == "gripper":
-            visual = min(visual, _surface_gap(m, d, i, gid))
-    return visual, collision
+            gap = min(gap, float(mujoco.mj_geomDistance(m, d, i, gid, 0.25, None)))
+    return gap
 
 
 def _face_gaps(world, pose, centre, half: float) -> tuple[float, float]:
@@ -129,7 +142,7 @@ def _face_gaps(world, pose, centre, half: float) -> tuple[float, float]:
     return gap_fixed, gap_moving
 
 
-def _accepted(twin, cfg, stack: str, body: str, resolved: str):
+def _accepted(twin, cfg, stack: str, body: str, resolved: str, quat=(1.0, 0.0, 0.0, 0.0)):
     """The first scan pan whose box the pickup would grasp, and where the body really is."""
     from so101_sim.camera import SimCamera
     from so101_sim.detect import SegDetector
@@ -149,7 +162,7 @@ def _accepted(twin, cfg, stack: str, body: str, resolved: str):
             for other in world.objects:
                 if other != body:
                     world.hide(other)
-            world.place(body, truth)
+            world.place(body, truth, quat)
             time.sleep(0.2)
             ok, frame = cam.read(fresh=True)
             if not ok or frame is None:
@@ -238,6 +251,54 @@ def test_approach_clears_and_arrives_at_the_grasp(twins, pipeline_cfg, workshop_
             f"{stack} {body}: the fixed finger is {gap_fixed * 1000:.1f} mm from the object, "
             f"want {want * 1000:.1f} (moving {gap_moving * 1000:.1f} mm)"
         )
+
+
+@pytest.mark.parametrize("stack", ["pipeline", "workshop"])
+@pytest.mark.parametrize("lying", ["straight", "turned"])
+def test_toothbrush_descent_clears_it(twins, pipeline_cfg, workshop_cfg, stack, lying):
+    """The jaws turn across the toothbrush and come down centred over it, then
+    the hand moves sideways until the fixed finger is beside it.
+
+    ``straight`` is how the lesson lays the brush; ``turned`` is its pose in
+    the scene file, which reset restores.
+    """
+    from so101_sim.kinematics import joint_line
+    from so101_sim.world import _FIXED_FINGER
+
+    cfg = pipeline_cfg if stack == "pipeline" else workshop_cfg
+    twin = twins(stack, cfg)
+    m = twin.world.model
+    quat = (1.0, 0.0, 0.0, 0.0) if lying == "straight" else tuple(float(v) for v in m.body("toothbrush").quat)
+    plan, path, _joints, truth, pan, _kin = _accepted(twin, cfg, stack, "toothbrush", "toothbrush", quat)
+    assert plan is not None, f"{stack} found no graspable view of the {lying} toothbrush"
+    twin.world.place("toothbrush", truth, quat)
+    sideways = len(joint_line(plan.poses[-1], plan.beside)) if plan.beside is not None else 0
+    down = min(_collision_gap(twin.world, pose, "toothbrush") for pose in path[: len(path) - sideways])
+    assert down > 0.0, (
+        f"{stack} {lying} toothbrush at pan {pan:.0f}: a jaw lands on it "
+        f"({-down * 1000:.1f} mm into it) on the way down"
+    )
+    assert plan.beside is not None, f"{stack} {lying} toothbrush: no sideways move to the fixed finger"
+
+    import mujoco
+
+    d = twin.world.fk(plan.beside)
+    brush = m.geom("toothbrush_collision").id
+    fixed = min(
+        float(mujoco.mj_geomDistance(m, d, i, brush, 0.25, None))
+        for i in range(m.ngeom)
+        if (mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, i)
+            or mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_MESH, int(m.geom_dataid[i]))) in _FIXED_FINGER
+    )
+    moving = min(
+        float(mujoco.mj_geomDistance(m, d, i, brush, 0.25, None))
+        for i in range(m.ngeom)
+        if m.geom_contype[i] and m.geom_bodyid[i] == m.body("moving_jaw_so101_v1").id
+    )
+    assert fixed > -0.001 and moving > fixed, (
+        f"{stack} {lying} toothbrush: beside it the fixed finger is {fixed * 1000:+.1f} mm and the "
+        f"moving finger {moving * 1000:+.1f} mm from it"
+    )
 
 
 def _hold_fns(stack: str):
