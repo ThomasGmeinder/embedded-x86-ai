@@ -95,13 +95,15 @@ def _h_gesture_mimic(ctx: PipelineContext, cmd: ParsedCommand) -> None:
     if ctx.pose is None or ctx.operator_camera is None:
         ctx.say("Gesture mimic needs the operator camera and pose model.")
         return
+    if ctx.shared_state.pop("grip_lock", None):
+        ctx.shared_state.pop("grip_lock_pos", None)
+        ctx.say("Your pinch drives the gripper now. Open your fingers to let go.")
     run_gesture_mimic(
         ctx.cfg,
         ctx.arm,
         ctx.pose,
         ctx.hands,
         ctx.operator_camera,
-        shared_state=ctx.shared_state,
         stop_check=ctx.stop_check,
         show_preview=not ctx.headless,
     )

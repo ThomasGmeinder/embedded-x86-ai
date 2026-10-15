@@ -31,11 +31,10 @@ onto SO-101 joints - the same absolute-target, limit-clamped commands that
       first ``grip_close_frac`` of the calibrated min/max range, then opening
       linearly up to ~90%.
 
-Grip-lock: after the *grip* behavior captures an object it sets
-``shared_state['grip_lock']``; while locked, gesture-mimic forces the stored
-gripper position so the object stays held while the arm keeps mirroring. The
-gripper otherwise holds its last position whenever the hand is unseen and only
-moves when a new thumb↔index distance is measured.
+The pinch always drives the gripper: a grip locked by *grip* or *pick_place*
+is released when mimic starts (``vla_pipeline.main``), so a held object drops
+when the fingers open. The gripper holds its last position whenever the hand
+is unseen and only moves when a new thumb↔index distance is measured.
 
 Depth neutral (optional, one-time per camera position):
     python -m vla_pipeline.behaviors.gesture_mimic --calibrate-depth
@@ -104,12 +103,10 @@ def run_gesture_mimic(
     pose: PoseEstimator,
     hands: HandTracker,
     camera,  # CameraClient (operator role)
-    shared_state: dict | None = None,
     stop_check=None,
     show_preview: bool = True,
 ) -> None:
     """Run the mimic loop until 'q', Ctrl-C, or ``stop_check()`` is True."""
-    shared_state = shared_state if shared_state is not None else {}
     mapper = mapper_from_config(cfg)
     thr = pose.kpt_threshold
     missing = 0  # consecutive frames with no person (→ reset to avoid a jump)
@@ -151,12 +148,8 @@ def run_gesture_mimic(
             roll_ti_w = obs.roll_ti_weight if obs is not None else 0.0
             pinch = obs.pinch if obs is not None else None
 
-            gripper_override = None
-            if shared_state.get("grip_lock"):
-                gripper_override = float(shared_state.get("grip_lock_pos", 0.0))
-
             # --- Map → command (skip while we have neither a hand nor a wrist) ---
-            if wrist_xy is not None or obs is not None or gripper_override is not None:
+            if wrist_xy is not None or obs is not None:
                 joints = mapper.step(
                     wrist_xy,
                     w,
@@ -167,7 +160,6 @@ def run_gesture_mimic(
                     roll_ref_deg=roll_ref,
                     roll_ti_weight=roll_ti_w,
                     pinch=pinch,
-                    gripper_override=gripper_override,
                     elbow_xy=elbow_xy,
                 )
                 arm.send_joints(joints)
@@ -179,7 +171,7 @@ def run_gesture_mimic(
                 if kpts is not None:
                     vis = pose.draw(frame, boxes, scores, kpts_all)
                 vis = hands.draw(vis, obs, mp_results)
-                _hud(vis, joints, wrist_xy, obs, shared_state)
+                _hud(vis, joints, wrist_xy, obs)
                 cv2.imshow("gesture_mimic", vis)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
@@ -201,12 +193,11 @@ def run_gesture_mimic(
         arm.go_to_rest(resend_s=None)
 
 
-def _hud(vis, joints, wrist_xy, obs, shared_state) -> None:
+def _hud(vis, joints, wrist_xy, obs) -> None:
     """Draw a compact status line + the commanded joints for the operator."""
-    lock = " [GRIP LOCKED]" if shared_state.get("grip_lock") else ""
     cv2.putText(
         vis,
-        f"gesture mimic [direct]{lock} - 'q' to stop",
+        "gesture mimic [direct] - 'q' to stop",
         (12, 30),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.8,

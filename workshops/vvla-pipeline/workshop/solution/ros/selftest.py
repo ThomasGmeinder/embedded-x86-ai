@@ -39,7 +39,12 @@ ARTIFACTS = PROJECT_ROOT / "_artifacts"
 
 
 class _Runner:
-    """Spin a node on a background executor; stop cleanly."""
+    """Spin a node on a background executor; stop cleanly.
+
+    A thread left inside ``executor.spin()`` aborts the process at exit
+    ("terminate called without an active exception"), so the thread spins
+    ``spin_once`` in a loop that ``stop`` ends and joins.
+    """
 
     def __init__(self, node):
         from rclpy.executors import SingleThreadedExecutor
@@ -47,11 +52,18 @@ class _Runner:
         self.node = node
         self.executor = SingleThreadedExecutor()
         self.executor.add_node(node)
-        self._thread = threading.Thread(target=self.executor.spin, daemon=True)
+        self._running = True
+        self._thread = threading.Thread(target=self._spin, daemon=True)
         self._thread.start()
 
+    def _spin(self):
+        while self._running:
+            self.executor.spin_once(timeout_sec=0.05)
+
     def stop(self):
-        """Shut down the executor and destroy the node."""
+        """Stop the spin thread, shut down the executor and destroy the node."""
+        self._running = False
+        self._thread.join(timeout=2.0)
         self.executor.shutdown()
         try:
             self.node.destroy_node()

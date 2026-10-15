@@ -173,21 +173,28 @@ def test_twin_dance_finishes_parked(rig, probe):
 
 
 def test_twin_mimic_drives_the_arm_then_stop_holds(rig, probe):
-    """Mimic commands reach the twin, and "stop" from another thread halts them.
+    """Mimic commands reach the twin, the pinch drives the gripper even after a
+    grip was locked, and "stop" from another thread halts them.
 
     The scripted person moves the arm only a few degrees (in-process too), so
-    the check is that the commands arrive, not how far they reach.
+    the check is that the commands arrive, not how far they reach. The
+    scripted hand opens and closes its pinch every few seconds.
     """
+    rig.ctx.shared_state.update(grip_lock=True, grip_lock_pos=45.0)
     start = probe.joints()
     worker = rig.start("copy my movements")
     spans = {k: 0.0 for k in BODY_JOINTS}
+    jaw = []
     deadline = time.time() + 4.0
     while time.time() < deadline:
         j = probe.joints()
         for k in BODY_JOINTS:
             spans[k] = max(spans[k], abs(j[k] - start[k]))
+        jaw.append(j["gripper"])
         time.sleep(0.05)
     assert max(spans.values()) > 2.0, f"mimic did not move the arm: {spans}"
+    assert "grip_lock" not in rig.ctx.shared_state, "mimic left the grip locked"
+    assert max(jaw) - min(jaw) > 5.0, f"the pinch did not move the gripper: {min(jaw):.1f}..{max(jaw):.1f}"
     rig.stop()
     worker.join(10.0)
     assert not worker.is_alive(), "mimic kept running after stop"

@@ -21,7 +21,7 @@ import logging
 import pytest
 
 from rigs import HOLD_WATCH_S, assert_ordered_high_scan, carry_problem, hold_problem
-from scripted import Person
+from scripted import Hand, Person
 
 pytestmark = [pytest.mark.sim, pytest.mark.slow]
 
@@ -91,6 +91,33 @@ def test_workshop_release_opens_the_jaws(workshop_rig):
         if abs(cur[k] - REST_POSE[k]) > 4.0
     }
     assert not off, off
+
+
+def test_workshop_mimic_hands_a_held_grip_to_the_pinch(workshop_rig):
+    """A grip locked by a pickup does not survive "mirror my arm": the pinch
+    drives the gripper, so opening the fingers opens the jaws."""
+    from common.motion import GRIPPER_CLOSED_FLOOR
+
+    rig = workshop_rig
+    rig.ctx.shared_state["grip_lock"] = True
+    rig.ctx.shared_state["grip_lock_pos"] = 45.0
+    rig.pose.keys = [(0.0, [Person(wrist=(0.5, 0.45))]), (10.0, [Person(wrist=(0.5, 0.45))])]
+    rig.hands.keys = [
+        (0.0, Hand(pinch=1.3)), (3.0, Hand(pinch=1.3)),
+        (3.5, Hand(pinch=0.05)), (6.5, Hand(pinch=0.05)),
+        (7.0, Hand(pinch=1.3)), (10.0, Hand(pinch=1.3)),
+    ]
+    rig.run([(0.3, "mirror my arm"), (10.0, "stop")], timeout=30)
+    assert rig.said_any("Your pinch drives the gripper"), rig.said
+    assert not rig.ctx.shared_state.get("grip_lock"), "mimic left the grip locked"
+    _, opened = rig.trace.series("gripper", 2.0, 3.0)
+    _, pinched = rig.trace.series("gripper", 5.5, 6.5)
+    _, reopened = rig.trace.series("gripper", 9.0, 10.0)
+    floor = float(GRIPPER_CLOSED_FLOOR)
+    assert pinched.mean() < floor + 4.0, f"the pinch did not close the gripper ({pinched.mean():.1f})"
+    assert min(opened.mean(), reopened.mean()) > floor + 30.0, (
+        f"open fingers did not open the gripper ({opened.mean():.1f}, {reopened.mean():.1f})"
+    )
 
 
 @pytest.mark.parametrize("spot", [None, (0.22, -0.04)], ids=["default", "near"])

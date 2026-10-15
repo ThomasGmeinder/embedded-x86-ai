@@ -46,8 +46,8 @@ def run_wave(cfg: dict, arm: ArmClient, stop_check=None) -> None:
 
 
 def run_home(cfg: dict, arm: ArmClient, stop_check=None) -> None:
-    """Return to the rest pose (also clears nothing - grip-lock is respected
-    by gesture-mimic, not by going home; release with the grip command)."""
+    """Return to the rest pose. A locked grip stays locked: "release" opens
+    it, and gesture-mimic hands the gripper to the pinch."""
     logger.info("[home] returning to rest pose")
     arm.go_to_rest()
 

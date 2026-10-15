@@ -130,7 +130,7 @@ Llama is constrained by `config/intent.gbnf` so it can only ever emit `{"command
 | "pick up the ball", "grab the bottle and give it to me" | `pick_place` | YOLO-detect grounds the named object on the arm camera → stop at the first usable view → one table locate → one grasp solve → joint-space descent → feedback grasp → lift it above the other objects and hold it out. The jaws stay closed. |
 | "release", "open", "drop it" | `release` | Llama maps the phrase to `release`. The jaws open where they are and the arm stays put, so the object can be taken or dropped. |
 | "fetch the block", "bring me the cube" | `fetch_block` | Approach the block at its taught pose → grasp → lift → find you (YOLO-pose) → extend → release → home. |
-| "hold this", "take this pencil" | `grip` | Closes until contact (current/stall + grace window), confirms with the arm camera, then **locks the grip**. A following `gesture_mimic` keeps the lock — so the arm can mimic you *while holding a pen to write*. |
+| "hold this", "take this pencil" | `grip` | Closes until contact (current/stall + grace window), confirms with the arm camera, then **locks the grip** until "release". A following `gesture_mimic` hands the gripper to your pinch, so the object drops when you open your fingers. |
 | "dance", "show me some moves" | `dance` | BPM-paced keyframe choreography. |
 | "wave at me", "say hi" | `wave` | Raises the arm and waves `behaviors.wave.cycles` times. |
 | "go home", "reset position" | `home` | Returns to the rest pose. |
@@ -304,7 +304,7 @@ vvla-pipeline/
     │   ├── robot_node.py         # So101ServerNode (effort in JointState) + Ros2ArmClient
     │   └── test_ros2_arm_motion.py  # ROS 2 per-joint full-range motion test
     ├── behaviors/
-    │   ├── gesture_mimic.py      # camera-frame mapping loop, grip-lock aware, --calibrate-depth/-grip
+    │   ├── gesture_mimic.py      # camera-frame mapping loop (pinch -> gripper), --calibrate-depth/-grip
     │   ├── pick_place.py         # calls run_pick_place in workshop/common/manipulation.py
     │   ├── fetch_block.py        # calls run_fetch_block in workshop/common/manipulation.py
     │   ├── grip.py               # calls run_grip / run_release in workshop/common/manipulation.py
@@ -605,7 +605,7 @@ All tunables live in `config/pipeline.yaml`:
 - **Transport-agnostic behaviors.** Behaviors only ever talk to the `ArmClient` ABC and the `CameraClient` ABC. The same behavior code runs over ROS 2 topics (`Ros2ArmClient` → `So101ServerNode`, which exclusively owns the Feetech bus), direct serial (`LeRobotArm` → LeRobot `SO101Follower`), the digital twin (`SimArmClient`), or `DryRunArm` for development; cameras likewise over ROS 2 topics or direct V4L2.
 - **Grammar-constrained intent.** llama.cpp's GBNF support means the LLM physically cannot emit anything but one of the command JSONs (`gesture_mimic`, `fetch_block`, `pick_place`, `dance`, `grip`, `release`, `wave`, `home`, `stop`, `unknown`) with an `object` slot.
 - **Registry dispatch.** The orchestrator never hardcodes behaviors; handlers register on a `CommandRegistry`, so adding a command never touches `main.py`'s dispatch loop.
-- **Grip-lock.** `grip` records the contact position in shared state; `gesture_mimic` checks that state every tick and pins the gripper joint to the locked position while the rest of the arm mimics. `release` ("release", "open", "drop it") clears the lock and opens the jaws where they are.
+- **Grip-lock.** `grip` and `pick_place` record the held position in shared state, so a second "hold this" is refused while the arm holds something. `release` ("release", "open", "drop it") clears the lock and opens the jaws where they are. `gesture_mimic` clears it too and hands the gripper to your pinch.
 - **Safety.** All joint targets pass through `clamp_joints` against per-joint limits; `max_relative_target` bounds per-tick deltas at the LeRobot layer; "stop" is a keyword fast path that sets a shared stop event polled every control tick (including inside `go_to` interpolation); `q` in any preview window and Ctrl-C are equivalent; the server node parks the arm at `REST_POSE` on any shutdown path; crashed behaviors are caught by the orchestrator, which parks the arm.
 
 ## Troubleshooting

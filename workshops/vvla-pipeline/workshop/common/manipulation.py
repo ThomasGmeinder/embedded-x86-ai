@@ -11,8 +11,8 @@ The pipeline's remaining voice commands, in the workshop's handler shape
 ``(ctx, cmd)`` so the registry can dispatch them like dance or wave:
 
 - **grip** - present the open jaws, close until contact (gripper current, or
-  a position stall), confirm with the arm camera, lock the grip. A following
-  gesture_mimic keeps the lock. "release", "open", or "drop it" opens the jaws.
+  a position stall), confirm with the arm camera, lock the grip. "release",
+  "open", or "drop it" opens the jaws; gesture_mimic hands them to the pinch.
 - **pick_place** - ground the spoken object name to a COCO class, walk the
   scan until one settled frame holds a usable box, locate that frame once on
   the table and reach it with IK
