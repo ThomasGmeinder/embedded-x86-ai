@@ -117,8 +117,14 @@ class Whisper:
 
         w = cfg["whisper"]
         cpu = ["CPUExecutionProvider"]
-        self.encoder = ort.InferenceSession(str(resolve(w["encoder_onnx"])), providers=cpu)
-        self.decoder = ort.InferenceSession(str(resolve(w["decoder_onnx"])), providers=cpu)
+        # Spinning threads keep cores busy between ops without making a
+        # transcription faster.
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = int(w.get("cpu_threads", 4))
+        opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        opts.add_session_config_entry("session.inter_op.allow_spinning", "0")
+        self.encoder = ort.InferenceSession(str(resolve(w["encoder_onnx"])), opts, providers=cpu)
+        self.decoder = ort.InferenceSession(str(resolve(w["decoder_onnx"])), opts, providers=cpu)
         self.provider = "CPU"
 
         # The tokenizer must match the checkpoint: the base model is the

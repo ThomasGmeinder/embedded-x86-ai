@@ -49,6 +49,7 @@ whisper:                            # ears (speech → text) - CPU (common/speec
   decoder_onnx: ../../models/whisper-base/decoder_model.onnx
   tokenizer: openai/whisper-base.en # must match the checkpoint (English-only base)
   language: en
+  cpu_threads: 4                    # per session; ONNX Runtime's default takes every core and starves the twin
 
 audio:                              # microphone + voice-activity detection
   mic_device: null                  # null = default input (or an index from `python -m sounddevice`)
