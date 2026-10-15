@@ -345,7 +345,7 @@ source .venv/bin/activate
 source scripts/ryzen_ai_env.sh
 ```
 
-The first `bootstrap.sh` creates `.venv` and downloads the Whisper ONNX and the Llama GGUF. Whisper runs on the CPU from that ONNX. `--skip-compile` is only for that pass, because the YOLO ONNX files do not exist yet. The `pip install` and the two `scripts/export_yolo26s_*.py` commands export the YOLO ONNX files. The second `bootstrap.sh` compiles YOLO-pose and YOLO-detect into `cache/` for the NPU. Those `.rai` files stay on the machine. Do not clone this repository again inside the workshop, and do not unpack the SDK into the repository.
+The first `bootstrap.sh` creates `.venv` and downloads the Whisper ONNX, the Whisper tokenizer (`openai/whisper-base.en`), and the Llama GGUF. Whisper runs on the CPU from that ONNX. `--skip-compile` is only for that pass, because the YOLO ONNX files do not exist yet. The `pip install` and the two `scripts/export_yolo26s_*.py` commands export the YOLO ONNX files. The second `bootstrap.sh` compiles YOLO-pose and YOLO-detect into `cache/` for the NPU. Those `.rai` files stay on the machine. Do not clone this repository again inside the workshop, and do not unpack the SDK into the repository.
 
 The NPU compile takes about 20 minutes on a Ryzen AI APU with Ryzen AI SW 1.7.1. YOLOv26s-pose took about 16 minutes and YOLOv26s-detect about 3 minutes. Once `cache/` holds a model's `.rai`, later sessions load it in about a second.
 
@@ -365,7 +365,7 @@ export RYZEN_AI_WHEELS=~/ryzen_ai-1.7.1
 5. Ryzen AI onnxruntime (VitisAI EP) from `$RYZEN_AI_WHEELS`
 6. LeRobot 0.5.2 `[feetech]` from source → `third_party/lerobot`
 7. llama.cpp HIP build (`-DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1100`, `llama-server`) → `third_party/llama.cpp`
-8. Model downloads: Llama-3.2-3B-Instruct Q4_K_M GGUF and Whisper-base ONNX. Whisper runs on the CPU. YOLO ONNX is exported with `python scripts/export_yolo26s_pose.py` and `python scripts/export_yolo26s_detect.py` (see the install steps above).
+8. Model downloads: Llama-3.2-3B-Instruct Q4_K_M GGUF, Whisper-base ONNX, and the Whisper tokenizer (`openai/whisper-base.en`). Whisper runs on the CPU. YOLO ONNX is exported with `python scripts/export_yolo26s_pose.py` and `python scripts/export_yolo26s_detect.py` (see the install steps above).
 9. Installs ROS2 Jazzy if it doesn't exist
 
 Flags: `--skip-apt`, `--skip-llama`, `--skip-models`, `--skip-compile`,
