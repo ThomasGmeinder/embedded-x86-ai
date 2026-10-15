@@ -234,7 +234,6 @@ behaviors:
     wrist_align_pregrasp_above_m: 0.10  # pre-grasp height above a thin object
     wrist_align_grasp_width_m: 0.024     # toothbrush handle width across the jaws
     wrist_align_center_offset_m: 0.018   # shift from silhouette midpoint toward the narrow handle end
-    wrist_align_fixed_jaw_bias_m: 0.024  # moving finger presses the handle into the fixed finger
     wrist_axis_min_elongation: 1.6
     min_box_area_frac: 0.002  # detections smaller than this are noise
     ambiguous_ratio: 1.25     # top-2 score ratio below this = "which one?"

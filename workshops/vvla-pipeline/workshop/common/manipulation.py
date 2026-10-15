@@ -773,16 +773,6 @@ def _plan_from_view(ctx, view):
         p, above_m=above_m, width=grasp_width, table_z=table_z, wrist_roll=0.0,
         limits=limits, obstacle=obstacle, object_axis=object_axis,
     )
-    if solved is not None and oriented and abs(float(solved[1]["wrist_roll"])) >= 30.0:
-        jaw = kin.world.jaw_axis(solved[1])
-        p = p + jaw * float(pp.get("wrist_align_fixed_jaw_bias_m", 0.024))
-        logger.info("IK solve")
-        biased = kin.solve_grasp(
-            p, above_m=above_m, width=grasp_width, table_z=table_z,
-            wrist_roll=float(solved[1]["wrist_roll"]), limits=limits,
-        )
-        if biased is not None:
-            solved = biased
     logger.info(
         "IK reach: %s at (%.3f, %.3f, %.3f) m, %.0f mm wide -> %s",
         resolved, *p, 1000 * grasp_width, "solved" if solved else "out of reach",
@@ -794,7 +784,7 @@ def _plan_from_view(ctx, view):
     if descent is None:
         return None
     beside = None
-    if not (oriented or obstacle):
+    if not obstacle:
         beside = kin.grasp_beside(
             grasp, p, float(pp.get("fixed_jaw_gap_m", 0.005)), grasp_width, table_z=table_z, limits=limits,
         )
