@@ -403,6 +403,44 @@ class SimWorld:
             x, y = self.model.body_pos[self.model.body(stand).id][:2]
             self.data.mocap_pos[mid] = (x, y, TABLE_Z - 0.01 - _STAND_HALF_HEIGHT)
 
+    def _stand_mocap_ids(self) -> dict[str, int]:
+        out = {}
+        for stand in STANDS:
+            try:
+                out[stand] = int(self.model.body(stand).mocapid[0])
+            except KeyError:  # a scene without pedestals
+                continue
+        return out
+
+    def snapshot_scene(self) -> dict:
+        """Every prop's free-joint ``qpos`` and every pedestal's position, JSON-ready.
+
+        The arm is not part of the snapshot; :meth:`apply_scene` puts the props
+        and pedestals back without moving it.
+        """
+        with self.lock:
+            bodies = {
+                name: [float(v) for v in self.data.qpos[qadr : qadr + 7]]
+                for name, (qadr, _dadr) in self._free.items()
+            }
+            mocap = {
+                stand: [float(v) for v in self.data.mocap_pos[mid]]
+                for stand, mid in self._stand_mocap_ids().items()
+            }
+        return {"bodies": bodies, "mocap": mocap}
+
+    def apply_scene(self, scene: dict) -> None:
+        """Put props and pedestals where :meth:`snapshot_scene` recorded them, at rest."""
+        mocap_ids = self._stand_mocap_ids()
+        with self.lock:
+            for name, qpos in (scene.get("bodies") or {}).items():
+                qadr, dadr = self._free[name]
+                self.data.qpos[qadr : qadr + 7] = qpos
+                self.data.qvel[dadr : dadr + 6] = 0.0
+            for stand, pos in (scene.get("mocap") or {}).items():
+                self.data.mocap_pos[mocap_ids[stand]] = pos
+            self._mj.mj_forward(self.model, self.data)
+
     def fk(self, pose_cal: dict) -> "object":
         """Forward kinematics of ``pose_cal`` (rest-pose defaults) on scratch data."""
         mj = self._mj
