@@ -314,7 +314,7 @@ strix-vla-pipeline/
 ```
 
 ## Installation
-Install Ubuntu 24.04.4. Install Ryzen AI 1.7.1 once, outside this repository. Unpack the installer into `~/ryzen_ai-1.7.1` and create its virtual environment inside that directory:
+Download the RyzenAI for Linux package [`ryzen_ai-1.7.1.tgz`](https://account.amd.com/en/forms/downloads/xef.html?filename=ryzen_ai-1.7.1.tgz) from the Downloads section of the Ryzen AI Software Installer. Unpack the installer into `~/ryzen_ai-1.7.1` and create its virtual environment inside that directory:
 
 ```bash
 mkdir -p ~/ryzen_ai-1.7.1
