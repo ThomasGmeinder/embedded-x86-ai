@@ -57,7 +57,9 @@ class SimCamera:
             self._name, camera, self.width, self.height, self.fps, segmentation
         )
         self._last_seq = 0
-        self._recent: collections.OrderedDict[int, int] = collections.OrderedDict()
+        # id(frame) -> (render sequence, wall-clock scene capture time)
+        self._recent: collections.OrderedDict[int, tuple[int, float]] = collections.OrderedDict()
+        self.last_stamp: float | None = None  # capture time of the last frame read()
         self._open = True
 
     def read_after(self, settled_at: float):
@@ -78,25 +80,34 @@ class SimCamera:
             return False, None
         if fresh:
             start, _ = self.view.latest()
-            seq, frame = self.view.wait(start + 1, timeout=max(3.0 / self.fps, 0.5))
+            seq, frame, stamp = self.view.wait_stamped(start + 1, timeout=max(3.0 / self.fps, 0.5))
             if seq <= start + 1:  # timed out: the newest frame may predate this call
                 frame = None
         elif self.blocking:
-            seq, frame = self.view.wait(self._last_seq, timeout=max(3.0 / self.fps, 0.25))
+            seq, frame, stamp = self.view.wait_stamped(
+                self._last_seq, timeout=max(3.0 / self.fps, 0.25)
+            )
         else:
-            seq, frame = self.view.latest()
+            seq, frame, stamp = self.view.latest_stamped()
         if frame is None:
             return False, None
         self._last_seq = seq
         out = frame.copy()
-        self._recent[id(out)] = seq
+        self._recent[id(out)] = (seq, stamp)
         while len(self._recent) > 16:
             self._recent.popitem(last=False)
+        self.last_stamp = stamp
         return True, out
 
     def seq_of(self, frame) -> int | None:
         """Render sequence number of a frame this camera returned (if recent)."""
-        return self._recent.get(id(frame))
+        entry = self._recent.get(id(frame))
+        return None if entry is None else entry[0]
+
+    def stamp_of(self, frame) -> float | None:
+        """``time.time()`` when the scene in ``frame`` was captured (if recent)."""
+        entry = self._recent.get(id(frame))
+        return None if entry is None else entry[1]
 
     def segmentation(self, frame=None):
         """Body-id map matching ``frame`` (or the newest frame)."""

@@ -96,8 +96,12 @@ class FanoutCamera:
                 time.sleep(0.005)
                 continue
             last = frame
+            # A camera that knows when its frame's scene was captured
+            # (the twin's) says so in last_stamp; otherwise the arrival time.
+            captured = getattr(self.inner, "last_stamp", None)
             with self._cond:
-                self._frame, self._stamp, self._wall = frame, time.monotonic(), time.time()
+                self._frame, self._stamp = frame, time.monotonic()
+                self._wall = time.time() if captured is None else float(captured)
                 self._seq += 1
                 self._cond.notify_all()
 
@@ -112,7 +116,7 @@ class FanoutCamera:
             return True, self._frame
 
     def read_after(self, settled_at: float):
-        """Next pumped frame whose arrival is later than ``settled_at``."""
+        """Next pumped frame captured (or, without a capture stamp, arrived) after ``settled_at``."""
         deadline = time.monotonic() + max(self._timeout, 0.5)
         with self._cond:
             while self._frame is None or self._wall <= settled_at:

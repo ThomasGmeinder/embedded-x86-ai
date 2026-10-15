@@ -16,7 +16,10 @@ Rules that keep the iGPU cheap to share with llama-server:
 * all due views are drawn as tiles into one offscreen framebuffer and read
   back with a single ``mjr_readPixels`` - one GPU sync per pass;
 * consumers get the newest frame (``View.latest`` / ``View.wait``); nothing
-  queues, so a slow consumer never makes the renderer fall behind.
+  queues, so a slow consumer never makes the renderer fall behind;
+* each frame carries the wall-clock time its scene was captured
+  (``View.latest_stamped`` / ``View.wait_stamped``), so a consumer can tell
+  whether the pixels show the arm before or after a given moment.
 
 Segmentation tiles use ``mjRND_SEGMENT`` + ``mjRND_IDCOLOR`` and are decoded
 to per-pixel body ids - ground truth for the scripted detector in tests.
@@ -63,6 +66,7 @@ class View:
         self._set_camera(model, camera)
         self.seq = 0
         self._frame: np.ndarray | None = None
+        self._stamp = 0.0  # time.time() when the newest frame's scene was captured
         self._segs: collections.deque = collections.deque(maxlen=8)
         self._cond = threading.Condition()
         self.next_due = 0.0
@@ -95,6 +99,19 @@ class View:
             self._cond.wait_for(lambda: self.seq > after_seq, timeout=timeout)
             return self.seq, self._frame
 
+    def latest_stamped(self) -> tuple[int, np.ndarray | None, float]:
+        """``latest()`` plus the wall-clock time the frame's scene was captured."""
+        with self._cond:
+            return self.seq, self._frame, self._stamp
+
+    def wait_stamped(
+        self, after_seq: int, timeout: float
+    ) -> tuple[int, np.ndarray | None, float]:
+        """``wait()`` plus the wall-clock time the frame's scene was captured."""
+        with self._cond:
+            self._cond.wait_for(lambda: self.seq > after_seq, timeout=timeout)
+            return self.seq, self._frame, self._stamp
+
     def segmentation_for(self, seq: int | None = None) -> np.ndarray | None:
         """Body-id map (int32, -1 = background) for frame ``seq`` (newest if None)."""
         with self._cond:
@@ -108,10 +125,11 @@ class View:
             return self._segs[0][1]
 
     # -- producer side ------------------------------------------------------
-    def _publish(self, frame, seg) -> None:
+    def _publish(self, frame, seg, stamp: float = 0.0) -> None:
         with self._cond:
             self.seq += 1
             self._frame = frame
+            self._stamp = float(stamp)
             if seg is not None:
                 self._segs.append((self.seq, seg))
             self._cond.notify_all()
@@ -265,6 +283,7 @@ class RenderService:
                             mj.mjtCatBit.mjCAT_ALL, v.scene,
                         )
                     t_sim = float(self.world.data.time)
+                    t_wall = time.time()
                 seg_flag = mj.mjtRndFlag.mjRND_SEGMENT
                 id_flag = mj.mjtRndFlag.mjRND_IDCOLOR
                 for t in tiles:
@@ -292,7 +311,7 @@ class RenderService:
                 self.pass_ms = 1000.0 * (time.perf_counter() - t0)
                 self.passes += 1
                 for v in due:
-                    v._publish(frames[v.name], segs.get(v.name))
+                    v._publish(frames[v.name], segs.get(v.name), t_wall)
                 for fn in list(self._hooks):
                     try:
                         fn(self, due, t_sim)
