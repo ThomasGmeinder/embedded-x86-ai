@@ -21,24 +21,15 @@ from __future__ import annotations
 import argparse
 import logging
 
-from vla_pipeline.robot.arm_interface import ArmClient, DryRunArm, make_arm
+from vla_pipeline.robot.arm_interface import ArmClient, DryRunArm, ensure_common_path, make_arm
 from vla_pipeline.utils.config import load_config
 
-logger = logging.getLogger(__name__)
+ensure_common_path()
 
-# Arm raised forward and up, open jaws turned to face the person like a palm.
-# The hand sits in front of the pan axis, so the pan sweep moves it side to
-# side; the wrist joints can't (flex bends toward/away, roll only twists).
-_WAVE_UP = {
-    "shoulder_pan": 0.0,
-    "shoulder_lift": 0.0,
-    "elbow_flex": -45.0,
-    "wrist_flex": -30.0,
-    "wrist_roll": 85.0,
-    "gripper": 90.0,
-}
-_WAVE_LEFT = {"shoulder_pan": -25.0}
-_WAVE_RIGHT = {"shoulder_pan": 25.0}
+from common.motion import WAVE_LEFT as _WAVE_LEFT  # noqa: E402
+from common.motion import WAVE_RIGHT as _WAVE_RIGHT, WAVE_UP as _WAVE_UP
+
+logger = logging.getLogger(__name__)
 
 
 def run_wave(cfg: dict, arm: ArmClient, stop_check=None) -> None:

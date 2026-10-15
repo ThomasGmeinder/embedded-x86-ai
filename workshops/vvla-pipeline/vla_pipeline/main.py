@@ -41,7 +41,6 @@ import threading
 from dataclasses import dataclass, field
 
 from vla_pipeline.llm.intents import (
-    STOP_KEYWORDS,
     CommandRegistry,
     Intent,
     ParsedCommand,
@@ -201,12 +200,14 @@ def _h_home(ctx: PipelineContext, cmd: ParsedCommand) -> None:
 # Stop fast path
 # =============================================================================
 
-_STOP_RE = re.compile(r"\b(" + "|".join(STOP_KEYWORDS) + r")\b", re.IGNORECASE)
-
-
 def is_stop(transcript: str) -> bool:
     """Return True if transcript contains a stop keyword."""
-    return bool(_STOP_RE.search(transcript or ""))
+    from vla_pipeline.robot.arm_interface import ensure_common_path
+
+    ensure_common_path()
+    from common.intents import is_stop as workshop_is_stop
+
+    return workshop_is_stop(transcript)
 
 
 # =============================================================================

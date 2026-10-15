@@ -23,7 +23,7 @@ import pytest
 
 pytestmark = pytest.mark.sim
 
-MODULES = ["common.manipulation", "vla_pipeline.behaviors.pick_place"]
+MODULES = ["common.manipulation"]
 POSE = {
     "shoulder_pan": 0.0,
     "shoulder_lift": -30.0,

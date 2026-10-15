@@ -5,402 +5,56 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Grip behavior: take an object from the user, grasp it, and lock the grip.
-
-What changed (and why the pen used to slip)
--------------------------------------------
-The old close loop terminated as soon as the *commanded* position reached 0°.
-A pen stalls the jaws at only ~3-6°, and with ``close_step_deg: 1.5`` the
-command races past that to 0° in a couple of ticks - the loop could exit
-before ``stall_ticks`` consecutive stalled samples accumulated, log "no
-object detected", then relax the gripper to 30° and drop the pen. Fixes:
-
-1. **Grace window at full close** - after the command reaches 0° we keep
-   sampling the *measured* position for ``stall_grace_s``; a thin object
-   shows up as a persistent measured-vs-commanded gap and is now detected.
-2. **Effort/current feedback when available** - ``ArmClient.get_gripper_load()``
-   (runtime-detected on the Feetech bus) gives direct contact sensing:
-   sustained load above ``load_threshold`` stops the close immediately, which
-   is gentler and faster than position stall. Falls back automatically.
-3. **Arm-camera verification** - a reference frame of the empty jaws is taken
-   while presenting; after the grasp, a jaw-ROI difference confirms an object
-   is actually held. Result is reported via the feedback callback (spoken /
-   logged) and returned to the caller.
-
-While ``grip_lock`` is set, gesture-mimic holds that gripper position, so a
-gripped pencil stays gripped while the arm mirrors the human - e.g. to write.
-``release`` opens the jaws.
-
-Independent test
-----------------
-    python -m vla_pipeline.behaviors.grip --dry-run            # simulated object (stalls at 60)
-    python -m vla_pipeline.behaviors.grip --dry-run --thin     # simulated pen (stalls just above closed)
-    python -m vla_pipeline.behaviors.grip                      # real arm
-"""
+"""Grip and release. The bodies are :mod:`common.manipulation`."""
 
 from __future__ import annotations
 
-import argparse
-import logging
-import time
+from vla_pipeline.behaviors._from_workshop import Ctx
+from vla_pipeline.robot.arm_interface import ensure_common_path
 
-import numpy as np
+ensure_common_path()
 
-from vla_pipeline.robot.arm_interface import (
-    GRIPPER_CLOSED_FLOOR,
-    GRIPPER_TORQUE_LIMIT,
-    JOINT_LIMITS,
-    ArmClient,
-    DryRunArm,
-    make_arm,
+from common.manipulation import (  # noqa: E402
+    PRESENT_POSE,
+    close_with_feedback,
+    ease_grip,
+    holding,
+    run_grip as _run_grip,
+    run_release as _run_release,
 )
-from vla_pipeline.utils.config import load_config
 
-logger = logging.getLogger(__name__)
-
-# Pose presenting the gripper toward the user, jaws open.
-PRESENT_POSE = {
-    "shoulder_pan": 0.0,
-    "shoulder_lift": -35.0,
-    "elbow_flex": 30.0,
-    "wrist_flex": 10.0,
-    "wrist_roll": 0.0,
-    "gripper": 80.0,
-}
-
-
-# =============================================================================
-# Arm-camera jaw verification (model-free: reference-frame difference)
-# =============================================================================
-
-
-def jaw_roi_pixels(frame: np.ndarray, roi_frac) -> np.ndarray:
-    """Crop frame to the jaw ROI (fractional coordinates)."""
-    h, w = frame.shape[:2]
-    x1, y1, x2, y2 = roi_frac
-    return frame[int(y1 * h) : int(y2 * h), int(x1 * w) : int(x2 * w)]
-
-
-def object_in_jaws(
-    reference: np.ndarray, frame: np.ndarray, roi_frac, diff_threshold: float
-) -> bool:
-    """True if the jaw ROI differs significantly from the empty reference."""
-    import cv2
-
-    a = cv2.cvtColor(jaw_roi_pixels(reference, roi_frac), cv2.COLOR_BGR2GRAY)
-    b = cv2.cvtColor(jaw_roi_pixels(frame, roi_frac), cv2.COLOR_BGR2GRAY)
-    if a.shape != b.shape or a.size == 0:
-        return False
-    diff = (
-        float(
-            np.mean(
-                cv2.absdiff(
-                    cv2.GaussianBlur(a, (5, 5), 0), cv2.GaussianBlur(b, (5, 5), 0)
-                )
-            )
-        )
-        / 255.0
-    )
-    logger.debug("[grip] jaw ROI diff %.3f (threshold %.3f)", diff, diff_threshold)
-    return diff >= diff_threshold
-
-
-# =============================================================================
-# Feedback-based close (shared with pick_place)
-# =============================================================================
-
-
-def close_with_feedback(
-    arm: ArmClient, g: dict, stop_check=None, start_from: float | None = None, ease: bool = True
-) -> tuple[bool, float]:
-    """Close the gripper until contact. Returns ``(gripped, hold_position)``.
-
-    Contact = sustained effort above ``load_threshold`` (when the transport
-    provides effort feedback) OR a position stall (the jaws stopped short of
-    the command) - with a grace window after full close so thin objects are
-    still detected.
-
-    The close runs at :data:`GRIPPER_TORQUE_LIMIT`. After contact the goal
-    trails ``hold_past_contact`` below the jaw for ``reseat_s`` while both
-    fingers seat, then :func:`ease_grip` drops the limit for the hold. The
-    goal stays past the object, so the torque limit sets the grip force.
-
-    ``ease=False`` keeps the close limit for an object that still rests on
-    the table: there the hold force lets it settle against one jaw and the
-    table, and the lift leaves it behind. The caller eases once the first
-    lift step is done.
-    """
-    step = float(g["close_step_deg"])
-    eps = float(g["stall_eps_deg"])
-    need_ticks = int(g["stall_ticks"])
-    load_threshold = float(g.get("load_threshold", 120.0))
-    load_ticks_needed = int(g.get("load_ticks", 3))
-    grace_s = float(g.get("stall_grace_s", 0.6))
-    tick_s = 0.05
-
-    arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
-    use_load = arm.get_gripper_load() is not None
-    logger.info(
-        "[grip] closing with %s feedback...",
-        "effort/current" if use_load else "position-stall",
-    )
-
-    commanded = (
-        start_from
-        if start_from is not None
-        else float(arm.get_joints().get("gripper", PRESENT_POSE["gripper"]))
-    )
-    stall_count = load_count = 0
-    gripped = False
-    grace_deadline: float | None = None
-    floor = GRIPPER_CLOSED_FLOOR  # the arm clamps below this; a lower command would read as a stall
-    prev = float(arm.get_joints().get("gripper", commanded))
-
-    while True:
-        if stop_check and stop_check():
-            break
-        if commanded > floor:
-            commanded = max(commanded - step, floor)
-            arm.send_joints({"gripper": commanded})
-            if commanded == floor:
-                grace_deadline = time.time() + grace_s
-        elif grace_deadline is not None and time.time() >= grace_deadline:
-            break  # fully closed, grace expired → nothing between the jaws
-        time.sleep(tick_s)
-
-        if use_load:
-            load = arm.get_gripper_load()
-            if load is None:  # feedback died mid-grasp → fall back
-                use_load = False
-            elif load >= load_threshold:
-                load_count += 1
-                if load_count >= load_ticks_needed:
-                    gripped = True
-                    break
-            else:
-                load_count = 0
-
-        measured = float(arm.get_joints().get("gripper", commanded))
-        # A servo trails a moving goal, so lagging alone isn't contact: the jaws must also have stopped.
-        stopped_moving = prev - measured < eps
-        prev = measured
-        if measured - commanded > eps and stopped_moving:
-            stall_count += 1
-            if stall_count >= need_ticks:
-                gripped = True
-                break
-        else:
-            stall_count = 0
-
-    if not gripped:
-        return False, 0.0
-    hold = _reseat(arm, g, stop_check, tick_s)
-    if ease:
-        ease_grip(arm, g)
-    return True, hold
-
-
-def ease_grip(arm: ArmClient, g: dict) -> None:
-    """Drop to ``hold_torque_limit``: below the 25 % ``Overload_Torque``
-    LeRobot sets for the gripper, which would otherwise cut the grip to 20 %
-    about 2 s into a squeeze at the close limit."""
-    arm.set_gripper_torque_limit(int(g.get("hold_torque_limit", 240)))
-
-
-def _reseat(arm: ArmClient, g: dict, stop_check, tick_s: float) -> float:
-    """Keep the goal ``hold_past_contact`` below the jaw for ``reseat_s``.
-    Contact can register while one jaw still pushes the object; the trailing
-    goal lets both fingers seat. Returns the last goal."""
-    past = float(g.get("hold_past_contact", 6.0))
-    deadline = time.time() + float(g.get("reseat_s", 0.6))
-    while True:
-        jaw = float(arm.get_joints()["gripper"])
-        hold = max(jaw - past, GRIPPER_CLOSED_FLOOR)
-        arm.send_joints({"gripper": hold})
-        if time.time() >= deadline or (stop_check and stop_check()):
-            return hold
-        time.sleep(tick_s)
-
-
-def holding(arm: ArmClient, g: dict, hold: float) -> bool:
-    """The jaws stopped more than ``stall_eps_deg`` short of the held goal.
-    The goal is past the object, so an empty jaw closes onto it within a
-    fraction of a second. Current is not used: at the hold limit it reads
-    below the close's contact level."""
-    target = max(hold, GRIPPER_CLOSED_FLOOR)
-    return float(arm.get_joints().get("gripper", target)) - target > float(g["stall_eps_deg"])
-
-
-# =============================================================================
-# Behavior
-# =============================================================================
+__all__ = [
+    "PRESENT_POSE",
+    "close_with_feedback",
+    "ease_grip",
+    "holding",
+    "run_grip",
+    "run_release",
+]
 
 
 def run_grip(
     cfg: dict,
-    arm: ArmClient,
+    arm,
     shared_state: dict | None = None,
     stop_check=None,
     wait_s: float = 4.0,
     arm_camera=None,
     feedback=None,
 ) -> bool:
-    """Run the grip sequence. Returns True if an object was captured.
-
-    ``arm_camera``: optional :class:`~vla_pipeline.vision.camera.CameraClient`
-    for visual before/after verification. ``feedback``: optional ``str →``
-    callable for spoken/UI status (defaults to logging).
-    """
-    g = cfg["behaviors"]["grip"]
-    shared_state = shared_state if shared_state is not None else {}
-    say = feedback or (lambda m: logger.info("[grip] %s", m))
-    roi = g.get("jaw_roi", [0.30, 0.45, 0.70, 0.95])
-    diff_thr = float(g.get("jaw_diff_threshold", 0.06))
-
-    if shared_state.get("grip_lock"):
-        say("I'm already holding something. Say release to let go.")
-        return False
-
-    say("Place the object between the jaws.")
-    arm.go_to(PRESENT_POSE, duration_s=2.5, stop_check=stop_check)
-
-    # Empty-jaws reference for visual verification (before the user reaches in).
-    reference = None
-    if arm_camera is not None:
-        ok, ref = arm_camera.read()
-        reference = ref if ok else None
-
-    for remaining in range(int(wait_s), 0, -1):
-        if stop_check and stop_check():
-            arm.go_to_rest()
-            return False
-        logger.info("[grip] closing in %d...", remaining)
-        time.sleep(1.0)
-
-    # Optional pre-check: is anything visibly between the jaws yet?
-    if reference is not None:
-        ok, now = arm_camera.read()
-        if ok and not object_in_jaws(reference, now, roi, diff_thr):
-            say("I don't see anything between the jaws yet - closing carefully.")
-
-    gripped, hold = close_with_feedback(arm, g, stop_check=stop_check)
-
-    # Visual confirmation after the grasp.
-    if gripped and reference is not None:
-        ok, now = arm_camera.read()
-        if ok and not object_in_jaws(reference, now, roi, diff_thr):
-            logger.warning(
-                "[grip] contact detected but camera sees empty jaws - "
-                "reporting failure."
-            )
-            gripped = False
-
-    if gripped:
-        shared_state["grip_lock"] = True
-        shared_state["grip_lock_pos"] = hold
-        say(
-            f"Object gripped at {hold:.1f} degrees - grip locked. "
-            "Say 'gesture mimic' to use it; say 'release' to let go."
-        )
-    else:
-        say("No object detected.")
-        arm.go_to({"gripper": 30.0}, duration_s=0.8)
-    return gripped
-
-
-def run_release(arm: ArmClient, shared_state: dict | None = None, stop_check=None, feedback=None) -> bool:
-    """Open the jaws where they are. The arm stays put, so a held object can
-    be taken or dropped."""
-    say = feedback or (lambda m: logger.info("[release] %s", m))
-    shared_state = shared_state if shared_state is not None else {}
-    shared_state.pop("grip_lock", None)
-    shared_state.pop("grip_lock_pos", None)
-    say("Released.")
-    arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
-    arm.go_to(
-        {"gripper": JOINT_LIMITS["gripper"][1]}, duration_s=0.8, stop_check=stop_check,
+    """Take an object from the user. Delegates to :func:`common.manipulation.run_grip`."""
+    ctx = Ctx(
+        cfg,
+        arm,
+        say=feedback,
+        stop_check=stop_check,
+        shared_state=shared_state,
+        arm_camera=arm_camera,
     )
-    return not (stop_check and stop_check())
+    return _run_grip(ctx, None, wait_s=wait_s)
 
 
-# =============================================================================
-# Standalone component test
-# =============================================================================
-
-
-class _SimulatedObjectArm(DryRunArm):
-    """Dry-run arm whose gripper stalls at ``OBJECT_AT`` - emulates an object."""
-
-    OBJECT_AT = 60.0
-
-    def get_joints(self) -> dict[str, float]:
-        """Return simulated joints, with gripper floored at OBJECT_AT to emulate a stalled grasp."""
-        joints = super().get_joints()
-        joints["gripper"] = max(joints["gripper"], self.OBJECT_AT)
-        return joints
-
-
-class _SimulatedThinObjectArm(_SimulatedObjectArm):
-    """A pen: stalls just above the closed floor - the case the old loop-exit logic dropped."""
-
-    OBJECT_AT = GRIPPER_CLOSED_FLOOR + 3.0
-
-
-class _SimulatedLoadArm(_SimulatedObjectArm):
-    """Object at 55 that also reports rising servo current near contact."""
-
-    OBJECT_AT = 55.0
-
-    def get_gripper_load(self) -> float | None:
-        """Return a simulated effort reading that rises once the gripper stalls against the object."""
-        measured = self.get_joints()["gripper"]
-        target = self._joints["gripper"]
-        return 40.0 + 80.0 * max(measured - target, 0.0)  # grows once stalled
-
-
-def main() -> None:
-    """CLI entry point: run the grip behavior standalone, optionally against a simulated object."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
-    )
-    parser = argparse.ArgumentParser(description="Grip behavior - component test")
-    parser.add_argument("--config", default=None)
-    parser.add_argument(
-        "--dry-run", action="store_true", help="simulate an object stalling the gripper"
-    )
-    parser.add_argument(
-        "--thin", action="store_true", help="dry-run: simulate a pen (stalls just above closed)"
-    )
-    parser.add_argument(
-        "--load", action="store_true", help="dry-run: simulate effort feedback"
-    )
-    args = parser.parse_args()
-
-    cfg = load_config(args.config)
-    if args.dry_run:
-        arm: ArmClient = (
-            _SimulatedLoadArm()
-            if args.load
-            else _SimulatedThinObjectArm()
-            if args.thin
-            else _SimulatedObjectArm()
-        )
-    else:
-        arm = make_arm(cfg)
-    state: dict = {}
-    try:
-        gripped = run_grip(
-            cfg, arm, shared_state=state, wait_s=2.0 if args.dry_run else 4.0
-        )
-        print(
-            f"\ngrip {'PASSED (object locked)' if gripped else 'completed (no object)'}"
-        )
-        print(f"shared state: {state}")
-        if args.dry_run and not gripped:
-            raise SystemExit(1)
-    finally:
-        arm.close()
-
-
-if __name__ == "__main__":
-    main()
+def run_release(arm, shared_state: dict | None = None, stop_check=None, feedback=None) -> bool:
+    """Open the jaws where they are. Delegates to :func:`common.manipulation.run_release`."""
+    ctx = Ctx({}, arm, say=feedback, stop_check=stop_check, shared_state=shared_state)
+    return _run_release(ctx)
