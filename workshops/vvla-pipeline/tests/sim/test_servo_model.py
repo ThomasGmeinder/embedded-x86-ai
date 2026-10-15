@@ -105,6 +105,25 @@ def test_overload_drops_the_grip_after_protection_time_until_the_next_goal(world
     assert _gripper_cap(world) == pytest.approx(0.5 * full)
 
 
+def test_reset_reloads_the_gripper_torque_limit_and_clears_a_trip(world):
+    """A grasp's hold limit and a tripped servo do not survive a reset."""
+    from so101_sim.arm import SimBus
+
+    bus = SimBus(world)
+    bus.write("Max_Torque_Limit", "gripper", 500)
+    bus.write("Torque_Limit", "gripper", 240)
+    bus.write("Goal_Position", "gripper", 40.0)
+    world.protection.tripped[GRIPPER] = True
+    world.protection._over_s[GRIPPER] = 5.0
+    world._apply_torque_caps()
+    world.reset()
+    assert bus.read("Torque_Limit", "gripper", normalize=False) == 500
+    assert world.protection.limit[GRIPPER] == pytest.approx(0.5)
+    assert not world.protection.tripped[GRIPPER]
+    assert bus.read("Status", "gripper", normalize=False) == 0
+    assert _gripper_cap(world) == pytest.approx(0.5 * float(world.force_full[GRIPPER, 1]))
+
+
 def test_a_hold_under_the_overload_threshold_never_trips(world):
     bus = _squeeze_ball(world, 240)
     world.advance(5.0)

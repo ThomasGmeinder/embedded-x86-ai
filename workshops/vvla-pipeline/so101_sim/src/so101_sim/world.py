@@ -57,6 +57,18 @@ _FIXED_FINGER = frozenset({
 
 TABLE_Z = -0.005  # tabletop surface height in scene_vvla.xml
 
+
+def _yaw_deg(quat) -> float:
+    """Z rotation of a MuJoCo ``(w, x, y, z)`` quaternion, in degrees."""
+    w, x, y, z = (float(v) for v in quat)
+    return math.degrees(math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z)))
+
+
+def _pose_text(qpos7) -> str:
+    x, y, z = (float(v) for v in qpos7[:3])
+    return f"xyz ({x:.3f}, {y:.3f}, {z:.3f}) yaw {_yaw_deg(qpos7[3:7]):.1f} deg"
+
+
 STANDS = ("stand_a", "stand_b")
 _STAND_HALF_HEIGHT = 0.15
 
@@ -130,17 +142,32 @@ class SimWorld:
     # state reset
     # ------------------------------------------------------------------
     def reset(self, pose: dict | None = None) -> None:
-        """Objects back to their XML spots, stands parked, arm at ``pose`` (rest)."""
+        """``mj_resetData``, then hold the arm at ``pose`` (the rest pose).
+
+        ``mj_resetData`` is MuJoCo's reset: ``qpos`` returns to ``qpos0``,
+        mocap returns to the compiled body poses, and every other state and
+        control value is cleared. Derived fields are stale until ``mj_forward``.
+        The arm joints are then set to ``pose``, and ``ctrl`` is set to that
+        pose so the next step holds it instead of driving toward the zeros
+        ``mj_resetData`` left in ``ctrl``.
+        """
         mj = self._mj
         pose = {**self.rest_pose, **(pose or {})}
         with self.lock:
+            # Captured before mj_resetData so the log shows what the reset
+            # threw away: a grasp turns the toothbrush and lowers Torque_Limit.
+            left = {
+                name: self.data.qpos[qadr : qadr + 7].copy()
+                for name, (qadr, _dadr) in self._free.items()
+            }
+            bus = getattr(self, "bus", None)
+            limit_before = None if bus is None else bus._torque_limit.get("gripper")
+            tripped = bool(self.protection.tripped[MOTOR_NAMES.index("gripper")])
             mj.mj_resetData(self.model, self.data)
             for i, name in enumerate(MOTOR_NAMES):
                 q = self.jmap.to_rad(name, pose[name])
                 lo, hi = self._jrange[i]
                 self.data.qpos[self._qadr[i]] = min(max(q, lo), hi)
-            for s in STANDS:
-                self.park_stand(s)
             mj.mj_forward(self.model, self.data)
             q = self.data.qpos[self._qadr].copy()
             self.servo.reset(q)
@@ -148,7 +175,28 @@ class SimWorld:
             self.current.reset()
             self.protection.reset()
             self._apply_torque_caps()
+            # mj_resetData does not touch the servo registers. Torque_Limit is
+            # RAM; a grasp lowers the gripper's, and a power-on copies it back
+            # from Max_Torque_Limit.
+            if bus is not None:
+                bus.reload_torque_limits()
+            limit_after = None if bus is None else bus._torque_limit.get("gripper")
+            restored = {
+                name: self.model.qpos0[qadr : qadr + 7].copy()
+                for name, (qadr, _dadr) in self._free.items()
+            }
             self._sync_epoch()
+        for name in left:
+            logger.info(
+                "reset: %s left %s, restored %s",
+                name, _pose_text(left[name]), _pose_text(restored[name]),
+            )
+        logger.info(
+            "reset: gripper Torque_Limit %s (was %s); %s",
+            "n/a" if limit_after is None else limit_after,
+            "n/a" if limit_before is None else limit_before,
+            "trip cleared" if tripped else "no trip",
+        )
 
     # ------------------------------------------------------------------
     # physics thread

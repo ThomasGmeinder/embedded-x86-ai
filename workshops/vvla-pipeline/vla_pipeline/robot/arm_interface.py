@@ -58,6 +58,7 @@ from common.motion import (  # noqa: E402
     DryRunArm,
     LeRobotArm,
     clamp_joints,
+    restore_twin,
     sim_world,
 )
 from so101_sim import MOTOR_NAMES  # noqa: E402
@@ -76,6 +77,7 @@ __all__ = [
     "LeRobotArm",
     "clamp_joints",
     "ensure_common_path",
+    "restore_twin",
     "sim_world",
 ]
 

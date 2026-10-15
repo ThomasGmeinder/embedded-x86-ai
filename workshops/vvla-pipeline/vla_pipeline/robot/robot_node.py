@@ -205,14 +205,14 @@ class So101ServerNode(Node):
 
     def _on_reset_scene(self, _request, response):
         """Park the twin and put its props back on their starting spots."""
-        world = self._arm.world
-        parked = {**world.rest_pose, "gripper": 75.0}
+        from vla_pipeline.robot.arm_interface import restore_twin
+
         with self._target_lock:
+            parked = restore_twin(self._arm)
             self._target = dict(parked)
             self._last_cmd_time = time.time()
             self._last_sent_target = None
             self._target_gen += 1
-            world.reset(parked)
         response.success = True
         response.message = "arm parked, objects back on the table"
         return response

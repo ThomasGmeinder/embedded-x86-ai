@@ -569,6 +569,21 @@ def sim_world(cfg: dict):
     return shared_world({"sim": sim}, rest_pose=REST_POSE)
 
 
+def restore_twin(arm, world=None) -> dict:
+    """Park ``arm`` at its rest pose with the jaws open and restore the props.
+
+    Returns the parked joint dict. Callers that also track a command target
+    (the ROS control loop) copy that dict into the target under their lock.
+    """
+    from so101_sim.kinematics import OPEN_GRIPPER
+
+    world = arm.world if world is None else world
+    parked = {**world.rest_pose, "gripper": OPEN_GRIPPER}
+    world.reset(parked)
+    arm.send_joints(parked)
+    return parked
+
+
 def _ensure_pipeline_path() -> None:
     """``vla_pipeline`` sits next to ``workshop/``. The notebook only puts
     ``workshop/solution`` on ``sys.path``."""

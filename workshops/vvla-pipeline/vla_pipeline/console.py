@@ -276,9 +276,9 @@ class TwinConsole:
         arm = self.ctx.arm
         world = getattr(arm, "world", None)
         if world is not None:
-            parked = {**world.rest_pose, "gripper": 75.0}
-            world.reset(parked)
-            arm.send_joints(parked)
+            from vla_pipeline.robot.arm_interface import restore_twin
+
+            restore_twin(arm, world)
             return True
         restore = getattr(arm, "reset_sim", None)
         return bool(restore and restore())

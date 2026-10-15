@@ -76,10 +76,16 @@ class SimBus:
             for m in MOTOR_NAMES
         }
         self._torque_limit = {}
+        world.bus = self
         for m in MOTOR_NAMES:
             self.write("Torque_Limit", m, self._regs[m]["Max_Torque_Limit"])
             for reg in _PROTECTION_REGS:
                 self.write(reg, m, self._regs[m][reg])
+
+    def reload_torque_limits(self) -> None:
+        """Power-on load: ``Torque_Limit`` RAM copies ``Max_Torque_Limit``."""
+        for m in MOTOR_NAMES:
+            self.write("Torque_Limit", m, self._regs[m]["Max_Torque_Limit"])
 
     # -- helpers ------------------------------------------------------------
     def _motors(self, motors) -> list[str]:

@@ -16,6 +16,8 @@ ground-truth boxes from its segmentation).
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from rigs import HOLD_WATCH_S, assert_ordered_high_scan, carry_problem, hold_problem
@@ -160,3 +162,63 @@ def test_workshop_pick_ball_out_of_fixed_reach_says_so(workshop_rig):
     assert rig.said_any("couldn't get a grip on the sports ball"), rig.said
     assert not rig.said_any("Got the"), rig.said
     assert rig.trace.heights("sports_ball").max() - z0 < 0.03, "ball was lifted"
+
+
+_TRACE_PREFIXES = (
+    "reset:",
+    "scan sighting: toothbrush",
+    "IK reach: toothbrush",
+    "grasp:",
+    "grasp missed:",
+)
+
+
+def _postmortem(caplog, said) -> str:
+    """The stack lines that show what reset restored and how each grasp landed."""
+    lines = [
+        rec.getMessage() for rec in caplog.records if rec.getMessage().startswith(_TRACE_PREFIXES)
+    ]
+    speech = " | ".join(said) if said else "(nothing)"
+    body = "\n".join(lines) if lines else "(no stack trace)"
+    return f"robot said: {speech}\n{body}"
+
+
+def _said_since(rig, start: int, phrase: str) -> bool:
+    return any(phrase.lower() in message.lower() for message in rig.said[start:])
+
+
+def _press_reset(rig) -> None:
+    """The notebook reset button, once the behavior has already stopped."""
+    from common.motion import restore_twin
+
+    rig.ctx.shared_state.pop("grip_lock", None)
+    rig.ctx.shared_state.pop("grip_lock_pos", None)
+    restore_twin(rig.arm)
+
+
+def test_workshop_reset_then_pick_the_toothbrush(workshop_rig, caplog):
+    """The GUI sequence, three times: pick up the toothbrush, drop it, reset, pick it up.
+
+    The lesson lays the brush straight with ``place()``. Each reset restores
+    the compiled pose. The failure text is the stack trace of every attempt.
+    """
+    caplog.set_level(logging.INFO, logger="common.manipulation")
+    caplog.set_level(logging.INFO, logger="so101_sim")
+    rig = workshop_rig
+    rig.pose.keys = [(0.0, [PERSON_LEFT])]
+    rig.default_scene()
+
+    rig.run([(0.3, "pick up the toothbrush")], timeout=90, settle=HOLD_WATCH_S)
+    assert rig.said_any("Got the toothbrush"), _postmortem(caplog, rig.said)
+    assert rig.world.is_grasped("toothbrush"), _postmortem(caplog, rig.said)
+
+    for n in (1, 2, 3):
+        spoken = len(rig.said)
+        rig.run([(0.3, "drop it")], timeout=20)
+        assert _said_since(rig, spoken, "Released"), _postmortem(caplog, rig.said)
+        _press_reset(rig)
+        spoken = len(rig.said)
+        rig.run([(0.3, "pick up the toothbrush")], timeout=90, settle=HOLD_WATCH_S)
+        report = f"after reset {n}\n{_postmortem(caplog, rig.said)}"
+        assert _said_since(rig, spoken, "Got the toothbrush"), report
+        assert rig.world.is_grasped("toothbrush"), report
