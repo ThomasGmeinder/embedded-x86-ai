@@ -422,7 +422,10 @@ sudo chmod 666 /dev/ttyACM0       # or add a udev rule
 
 Then set `motor_port` and `robot_id` in `config/pipeline.yaml`.
 
-**Calibration is automatic on first run.** The SO-101 needs a one-time calibration stored at `~/.cache/huggingface/lerobot/calibration/robots/*/<robot_id>.json`. If it's missing, `run_pipeline.sh` detects that and runs calibration **interactively in the foreground** before starting anything in the background (calibration prompts you to move the arm and press ENTER, so it can't run in a backgrounded node). You can also run it on its own at any time:
+**Calibration.** The SO-101 needs a one-time calibration file at `~/.cache/huggingface/lerobot/calibration/robots/*/<robot_id>.json`. Two tools write it:
+
+- [`arm_calibrator/`](arm_calibrator/README.md) takes one pose: put the arm in its home pose and press Enter. It writes the homing offsets to the servos and installs the file for `robot_id: my_awesome_follower_arm`. The joint ranges come from a reference arm.
+- LeRobot's interactive calibration also has you sweep each joint to measure this arm's ranges. If the file is missing, `run_pipeline.sh` runs it **in the foreground** before starting anything in the background (it prompts you, so it can't run in a backgrounded node). You can also run it on its own at any time:
 
 ```bash
 python -m vla_pipeline.robot.arm_interface --calibrate           # once, if missing
