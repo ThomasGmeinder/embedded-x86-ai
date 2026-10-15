@@ -82,8 +82,9 @@ cd solution && python -m models.selftest && python -m ros.selftest \
   && python app.py --dry-run --synthetic --no-llm --headless --frames 60
 ```
 
-The digital twin notebook and the behaviors are covered by
-[automated tests on the twin](../README.md#automated-tests-on-the-digital-twin).
+`./run_notebooks.sh --test` runs every notebook and the commands above
+headless, after the same setup as the happy path. See
+[Automated tests](../README.md#automated-tests).
 
 AMD-specific lessons for the session:
 

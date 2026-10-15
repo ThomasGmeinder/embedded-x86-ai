@@ -20,86 +20,35 @@ kernel's iopub channel (matched by content, so it does not matter which
 cell the dispatch thread's output is attributed to), ROS readings of the
 twin taken by this process, and the kernel namespace once the session ends.
 
-Only the in-memory copy of the notebook gets a stub cell (no microphone, no
-Llama, no webcam). The file on disk is not changed.
+The in-memory copy of the notebook starts with ``RIG_STANDINS``
+(:mod:`notebook_harness`): a photo of people is the webcam and there is no
+microphone. Whisper, Llama on the iGPU and YOLO on the NPU are real. The
+file on disk is not changed.
 
-Tier 2 (ROS 2): ``source /opt/ros/jazzy/setup.bash && pytest tests/sim -m hw``.
-The notebook's YOLO runs on the NPU (the CPU without the VitisAI provider),
-so no other kernel may hold both NPU contexts while this runs.
+``source /opt/ros/jazzy/setup.bash && pytest tests/sim -m docs``. The
+notebook kernel holds both YOLO NPU contexts, so this runs apart from the
+tests whose YOLO runs in the pytest process.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import os
-import threading
 import time
 from pathlib import Path
 
 import pytest
 
+from notebook_harness import NOTEBOOKS, Console, Watcher, cell_index, cell_stdout, client_for, kernel_env, until, with_standins
 from twin_ros_rig import BODY_JOINTS, Probe, join_test_domain, quat_close, xml_poses
 
-pytestmark = [pytest.mark.sim, pytest.mark.hw, pytest.mark.slow, pytest.mark.timeout(900)]
+pytestmark = [pytest.mark.sim, pytest.mark.hw, pytest.mark.docs, pytest.mark.slow, pytest.mark.timeout(900)]
 pytest.importorskip("rclpy")
 nbformat = pytest.importorskip("nbformat")
 pytest.importorskip("nbclient")
 
-NOTEBOOK = (
-    Path(__file__).resolve().parents[2]
-    / "workshop" / "notebooks" / "03_integration" / "02_digital_twin.ipynb"
-)
-KERNEL = "vvla-workshop"
+NOTEBOOK = NOTEBOOKS / "03_integration" / "02_digital_twin.ipynb"
 RESET_LINE = "Reset. Arm parked, objects back on the table."
-
-STUBS = '''\
-# notebook test: no microphone, no Llama, no webcam (a scripted person stands in)
-import common.speech as _speech
-import models.llm as _llm
-import ros.camera_client as _camera_client
-
-
-class _NoMic:
-    error = "stubbed by the notebook test"
-    transcribing = False
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def start(self):
-        return self
-
-    def stop(self):
-        pass
-
-
-class _NoWhisper:
-    provider = "stub"
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def transcribe(self, *args, **kwargs):
-        return ""
-
-
-class _NoCamera:
-    def read(self):
-        return False, None
-
-    def close(self):
-        pass
-
-
-def _no_llama(*args, **kwargs):
-    raise RuntimeError("stubbed by the notebook test")
-
-
-_speech.MicListener, _speech.Whisper = _NoMic, _NoWhisper
-_llm.LlamaIntentParser = _no_llama
-_camera_client.make_camera = lambda *args, **kwargs: _NoCamera()
-'''
 
 NAMESPACE = '''\
 import json as _json
@@ -108,105 +57,9 @@ print("NS " + _json.dumps({
     "dispatcher_alive": dispatcher.is_alive(),
     "log": [line for line, _color in console._log],
     "pid": twin.pid,
+    "sessions": _SESSIONS,
 }))
 '''
-
-
-class Watcher:
-    """A second client on the kernel's iopub channel: stdout and JSON displays, any parent."""
-
-    def __init__(self, connection_info: dict):
-        from jupyter_client import BlockingKernelClient
-
-        self._kc = BlockingKernelClient()
-        self._kc.load_connection_info(connection_info)
-        self._kc.start_channels(shell=False, stdin=False, hb=False, control=False)
-        self._lock = threading.Lock()
-        self.stdout: list[str] = []
-        self.records: list[dict] = []
-        self._running = True
-        self._thread = threading.Thread(target=self._pump, daemon=True, name="iopub-watch")
-        self._thread.start()
-
-    def _pump(self) -> None:
-        while self._running:
-            try:
-                msg = self._kc.get_iopub_msg(timeout=0.2)
-            except Exception:
-                continue
-            kind, content = msg["msg_type"], msg["content"]
-            with self._lock:
-                if kind == "stream" and content.get("name") == "stdout":
-                    self.stdout.append(content["text"])
-                elif kind in ("display_data", "execute_result"):
-                    record = content.get("data", {}).get("application/json")
-                    if isinstance(record, dict) and "text" in record:
-                        self.records.append(record)
-
-    def said(self, phrase: str) -> bool:
-        with self._lock:
-            return phrase in "".join(self.stdout)
-
-    def record(self, text: str) -> dict | None:
-        with self._lock:
-            return next((r for r in self.records if r["text"] == text), None)
-
-    def close(self) -> None:
-        self._running = False
-        self._thread.join(timeout=2.0)
-        self._kc.stop_channels()
-
-
-async def until(predicate, timeout: float, what: str):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        value = predicate()
-        if value:
-            return value
-        await asyncio.sleep(0.1)
-    raise AssertionError(f"timed out after {timeout:.0f} s waiting for {what}")
-
-
-class Console:
-    """The running console cell: its widgets, found by label, and the messages a browser sends."""
-
-    def __init__(self, client, watcher: Watcher):
-        self._client = client
-        self.watcher = watcher
-        self.widgets: dict[str, str] = {}
-
-    def find_widgets(self) -> bool:
-        found = {}
-        for comm_id, state in self._client.widget_state.items():
-            model = state.get("_model_name")
-            if model == "TextModel" and state.get("placeholder", "").startswith("or type a command"):
-                found["typed"] = comm_id
-            elif model == "ButtonModel" and state.get("description") in ("stop", "reset", "end session"):
-                found[state["description"]] = comm_id
-        self.widgets = found
-        return {"typed", "stop", "reset", "end session"} <= found.keys()
-
-    def _send(self, comm_id: str, data: dict) -> None:
-        kc = self._client.kc
-        kc.shell_channel.send(kc.session.msg("comm_msg", {"comm_id": comm_id, "data": data}))
-
-    def type(self, text: str) -> None:
-        """Type ``text`` into the console's box and press Enter."""
-        self._send(self.widgets["typed"], {"method": "update", "state": {"value": text}, "buffer_paths": []})
-
-    def click(self, label: str) -> None:
-        self._send(self.widgets[label], {"method": "custom", "content": {"event": "click"}})
-
-    async def record(self, text: str, timeout: float = 240.0) -> dict:
-        return await until(lambda: self.watcher.record(text), timeout, f"the record of {text!r}")
-
-
-def _cell(nb, cell_id: str) -> int:
-    return next(i for i, c in enumerate(nb.cells) if c.get("id") == cell_id)
-
-
-def _stdout(cell) -> str:
-    return "".join(o.get("text", "") for o in cell.get("outputs", []) if o.get("output_type") == "stream")
 
 
 def run_console(script) -> tuple[dict, int]:
@@ -215,19 +68,14 @@ def run_console(script) -> tuple[dict, int]:
     Returns the kernel namespace read after "end session" and the twin node's pid.
     The cleanup cell ``c0000018`` runs last.
     """
-    from nbclient import NotebookClient
-
-    nb = nbformat.read(NOTEBOOK, as_version=4)
-    nb.cells.insert(_cell(nb, "28bc3f9c") + 1, nbformat.v4.new_code_cell(STUBS))
+    nb = with_standins(nbformat.read(NOTEBOOK, as_version=4))
     nb.cells.append(nbformat.v4.new_code_cell(NAMESPACE))
-    upto, console_cell, cleanup = _cell(nb, "c0000014"), _cell(nb, "c0000016"), _cell(nb, "c0000018")
+    upto, console_cell, cleanup = cell_index(nb, "c0000014"), cell_index(nb, "c0000016"), cell_index(nb, "c0000018")
     probe_cell = len(nb.cells) - 1
-    client = NotebookClient(
-        nb, kernel_name=KERNEL, timeout=900, resources={"metadata": {"path": str(NOTEBOOK.parent)}}
-    )
+    client = client_for(nb, NOTEBOOK, timeout=900)
 
     async def main():
-        async with client.async_setup_kernel(env=os.environ.copy()):
+        async with client.async_setup_kernel(env=kernel_env()):
             watcher = Watcher(client.km.get_connection_info())
             try:
                 for i in range(upto + 1):
@@ -242,7 +90,7 @@ def run_console(script) -> tuple[dict, int]:
                         console.click("end session")
                     await asyncio.wait_for(task, timeout=120.0)
                 await client.async_execute_cell(nb.cells[probe_cell], probe_cell)
-                line = next(t for t in _stdout(nb.cells[probe_cell]).splitlines() if t.startswith("NS "))
+                line = next(t for t in cell_stdout(nb.cells[probe_cell]).splitlines() if t.startswith("NS "))
                 namespace = json.loads(line[3:])
                 await client.async_execute_cell(nb.cells[cleanup], cleanup)
                 return namespace
@@ -283,6 +131,10 @@ def no_twin(observers, workshop_cfg):
 
 
 def _assert_closed(namespace: dict, pid: int) -> None:
+    yolo = [(model, provider) for model, provider in namespace["sessions"] if "yolo" in model.lower()]
+    assert yolo, "the notebook made no YOLO session"
+    off_npu = [(Path(model).name, provider) for model, provider in yolo if provider != "VitisAIExecutionProvider"]
+    assert not off_npu, f"YOLO ran off the NPU: {off_npu}"
     assert not namespace["dispatcher_alive"], "the console's dispatch thread outlived end session"
     deadline = time.time() + 15.0
     while not _gone(pid) and time.time() < deadline:

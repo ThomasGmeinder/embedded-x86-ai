@@ -7,11 +7,16 @@
 
 """Digital-twin scenario tests: fixtures, options, video bookkeeping.
 
-    pytest tests/sim -m "sim and not hw"         # tier 1: in-process, no ROS/NPU/LLM
-    pytest tests/sim -m hw                       # tier 2: full ROS graph, iGPU
+    cd workshop && ./run_notebooks.sh --test     # everything, in the workshop README's setup
+    pytest tests/sim -m "sim and not hw"         # tier 1: in-process, no ROS/LLM
+    pytest tests/sim -m "hw and not docs"        # tier 2: full ROS graph
+    pytest tests/sim -m docs                     # every notebook + the Instructor's corner
+    pytest tests/sim --sim-yolo-device cpu       # YOLO on the CPU (machines without an NPU)
     pytest tests/sim --sim-video failed          # keep only failing runs' videos
     pytest tests/sim --sim-eyes seg              # ground-truth boxes instead of YOLO
     PROJECT=project pytest tests/sim -k workshop # students' workshop code
+
+YOLO runs on the NPU, so source ``scripts/ryzen_ai_env.sh`` first.
 
 Videos + timelines land in ``_artifacts/sim_tests/<tier>/`` with an
 ``index.html`` that plays them all.
@@ -48,8 +53,8 @@ def pytest_addoption(parser):
     g.addoption("--sim-eyes", choices=("yolo", "seg"), default="yolo",
                 help="arm-camera detector: the stack's YOLOv26s on the rendered frames, as in the "
                      "notebook (default), or ground-truth boxes from the twin's segmentation")
-    g.addoption("--sim-yolo-device", choices=("cpu", "npu"), default="cpu",
-                help="where the YOLO eyes run (the notebook uses npu; source "
+    g.addoption("--sim-yolo-device", choices=("cpu", "npu"), default="npu",
+                help="where the YOLO eyes run (default npu, as in the notebooks; source "
                      "scripts/ryzen_ai_env.sh first, else the eyes fail instead of running on the CPU)")
 
 
@@ -57,6 +62,7 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "sim: digital-twin scenario (tier 1 unless also hw)")
     config.addinivalue_line("markers", "hw: tier 2 - full ROS 2 graph on the iGPU")
     config.addinivalue_line("markers", "slow: long-running scenario")
+    config.addinivalue_line("markers", "docs: runs what workshop/README.md documents (notebooks, commands)")
     config._sim_results = {}
 
 

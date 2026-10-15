@@ -11,12 +11,15 @@
 
 The NPU buffers a process's models share live as long as it keeps an NPU
 session open, so each case runs in a fresh process. Needs the Ryzen AI runtime and
-the compiled models in ``cache/``; skipped without them.
+the compiled YOLO models in ``cache/``; skipped without them, and failed without
+them when ``VVLA_TEST_STRICT=1`` (``run_notebooks.sh --test``). The Whisper case
+also needs Whisper's NPU cache, which the README's install does not build.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -25,20 +28,28 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKSHOP = ROOT / "workshop" / "solution"
+STRICT = os.environ.get("VVLA_TEST_STRICT") == "1"
+YOLO_CACHES = ("yolo26s_pose_fp32", "yolo26s_detect_fp32")
+WHISPER_CACHES = ("whisper_base_encoder", "whisper_base_decoder")
 
 
-def _npu_ready() -> bool:
+def _need(caches, strict: bool = STRICT) -> None:
+    """Skip (or, when ``strict``, fail) unless the VitisAI EP and ``caches`` are here."""
     try:
         import onnxruntime as ort
+
+        providers = ort.get_available_providers()
     except ImportError:
-        return False
-    return "VitisAIExecutionProvider" in ort.get_available_providers() and all(
-        (ROOT / "cache" / key).is_dir()
-        for key in ("yolo26s_pose_fp32", "yolo26s_detect_fp32", "whisper_base_encoder", "whisper_base_decoder")
-    )
-
-
-pytestmark = pytest.mark.skipif(not _npu_ready(), reason="no Ryzen AI runtime or compiled NPU models")
+        providers = []
+    # The provider is listed even without the runtime; without the firmware
+    # path ryzen_ai_env.sh exports, its sessions run on the CPU.
+    if "VitisAIExecutionProvider" not in providers or not os.environ.get("XLNX_VART_FIRMWARE"):
+        reason = "no NPU runtime: source scripts/ryzen_ai_env.sh"
+    else:
+        absent = [key for key in caches if not (ROOT / "cache" / key).is_dir()]
+        reason = f"no compiled NPU model in cache/ for {', '.join(absent)}" if absent else None
+    if reason:
+        (pytest.fail if strict else pytest.skip)(reason)
 
 
 def _providers(code: str, cwd: Path, path: Path) -> dict:
@@ -52,6 +63,7 @@ def _providers(code: str, cwd: Path, path: Path) -> dict:
 
 
 def test_pipeline_detector_before_pose():
+    _need(YOLO_CACHES)
     got = _providers(
         "import json\n"
         "from vla_pipeline.utils.config import load_config\n"
@@ -67,6 +79,8 @@ def test_pipeline_detector_before_pose():
 
 
 def test_pipeline_whisper_after_both_yolos():
+    _need(YOLO_CACHES)
+    _need(WHISPER_CACHES, strict=False)
     got = _providers(
         "import json\n"
         "from vla_pipeline.utils.config import load_config\n"
@@ -85,6 +99,7 @@ def test_pipeline_whisper_after_both_yolos():
 
 
 def test_workshop_detector_before_pose():
+    _need(YOLO_CACHES)
     got = _providers(
         "import json\n"
         "from common.config import load_config\n"

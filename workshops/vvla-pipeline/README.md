@@ -263,7 +263,7 @@ vvla-pipeline/
 ├── activate_venv.sh              # source it: ROS 2 + .venv + the NPU runtime environment
 ├── arm_calibrator/               # one-pose servo calibration (see its README)
 ├── so101_sim/                    # MuJoCo digital twin: arm, cameras, table scene, ROS 2 node
-├── tests/sim/                    # automated tests on the twin (see below)
+├── tests/                        # automated tests: the stacks on the twin, the notebooks (see below)
 ├── workshop/                     # the hands-on workshop; common/ is the behavior code the pipeline runs too
 ├── config/
 │   ├── pipeline.yaml             # all tunables (cameras, vad, gesture_mimic, pick_place, grip, …)
@@ -572,20 +572,35 @@ open_monitor` inside a notebook) floats **CPU %**, **GPU %**, and **NPU
 inferences/sec** (or Idle) over every window - the consolidated cousin of
 `utils/resource_monitor.py` above.
 
-## Automated tests on the digital twin
+## Automated tests
 
-`tests/sim` runs the pipeline and the workshop against the MuJoCo twin, with no arm, camera or microphone. The tests run headless and unattended, and the exit code is the result, so a CI runner with the prerequisites below can run them as they are. The tier 2 tests have time limits; in CI, pass `--timeout 600` to bound tier 1 too.
+Run every automated test, for the pipeline and workshop stacks and for the workshop notebooks, with one command:
 
-| Tier | Command | Needs | Covers |
-|---|---|---|---|
-| 1 | `pytest tests/sim -m "sim and not hw"` | EGL (or OSMesa), the YOLO ONNX models | Both stacks in one process: pickups, grip and slip, fetch, mimic, reset, kinematics, the servo and current model, the twin's frame stamps and scene snapshots |
-| 2 | `source /opt/ros/jazzy/setup.bash && pytest tests/sim -m hw` | ROS 2 Jazzy, the `vvla-workshop` Jupyter kernel | The twin as a ROS 2 node (`so101_sim.node --notebook-twin`), the workshop behaviors over ROS, and `02_digital_twin.ipynb`'s console driven through its widgets |
+```bash
+cd workshop
+./run_notebooks.sh --test
+```
 
-- Run tier 1 in a shell where ROS 2 is not sourced. ROS's `launch_testing` pytest plugin replaces Python's logger class, and tests that check the logs then see nothing.
-- Tier 2 runs on its own ROS domain (`TWIN_TEST_DOMAIN_ID`, default 93) with discovery kept to the machine, so it never reaches a real arm or another twin.
-- `pip install -e so101_sim[test]` installs pytest, pytest-timeout and nbclient.
-- `--sim-video failed` keeps recordings only for failed tests (by default every test is recorded to `_artifacts/sim_tests/`). `--sim-yolo-device npu` runs YOLO on the NPU (source `scripts/ryzen_ai_env.sh` first). `--sim-eyes seg` replaces YOLO with ground-truth boxes in tier 1.
-- On a Strix Halo, tier 1 takes about 8 minutes and tier 2 about 7.
+It does the setup [workshop/README.md](workshop/README.md) describes: the `.venv`, the Ryzen AI runtime, ROS 2, the `vvla-workshop` kernel and llama-server on the iGPU. Then it runs these, in that environment:
+
+| Tests | What they check |
+|---|---|
+| `tests/npu` | YOLO-pose and YOLO-detect get NPU sessions |
+| The stacks: `tests/sim -m "sim and not docs"` | The pipeline and the workshop on the MuJoCo twin, in one process and over ROS 2: pickups, grip, fetch, mimic, reset, kinematics, the servo model |
+| The notebooks: `tests/sim -m docs` | Every notebook in `workshop/notebooks/`, in the README's order, and the README's Instructor's corner commands |
+
+YOLO runs on the NPU, and Llama and the twin's rendering run on the iGPU. The twin stands in for the arm and its camera, and Ultralytics' `zidane.jpg` photo of people stands in for the webcam. The microphone is not used. No arm, camera or microphone has to be attached. The tests run headless on a private ROS domain, and the exit code is the result, so a CI runner on a Ryzen AI machine can run the command as it is. On a Strix Halo the whole run takes about 20 minutes.
+
+Arguments after `--test` go to pytest, for example `./run_notebooks.sh --test -k toothbrush`. To run one part by hand:
+
+```bash
+source scripts/ryzen_ai_env.sh && source /opt/ros/jazzy/setup.bash
+pytest tests/sim -m "sim and not hw"    # the stacks in one process
+pytest tests/sim -m "hw and not docs"   # the stacks over ROS 2
+pytest tests/sim -m docs                # the notebooks and the Instructor's corner
+```
+
+The notebooks need llama-server running, which `--test` starts. `--sim-yolo-device cpu` runs YOLO on the CPU on a machine without an NPU. `--sim-video failed` keeps the recordings of failed tests only (by default every test is recorded to `_artifacts/sim_tests/`).
 
 ## Configuration
 
