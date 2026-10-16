@@ -66,15 +66,20 @@ class SyntheticCamera:
 
     role = "synthetic"
 
-    def __init__(self, width: int = 640, height: int = 480):
+    def __init__(self, width: int = 640, height: int = 480, fps: float = 30.0):
         import cv2
 
         self._cv2 = cv2
-        self.width, self.height = width, height
+        self.width, self.height, self.fps = width, height, fps
         self.frames = 0
+        self._next = 0.0
 
     def read(self):
         cv2 = self._cv2
+        now = time.monotonic()
+        if now < self._next:
+            time.sleep(self._next - now)
+        self._next = max(self._next + 1.0 / self.fps, time.monotonic())
         w, h = self.width, self.height
         t = self.frames
         self.frames += 1
@@ -119,12 +124,11 @@ class ScriptedPose:
 
     def __init__(self, width: int = 640, height: int = 480):
         self.width, self.height = width, height
-        self._t = 0
+        self._t0 = time.monotonic()
 
     def infer(self, frame_bgr):
         h, w = frame_bgr.shape[:2]
-        self._t += 1
-        t = self._t / 25.0
+        t = time.monotonic() - self._t0
         cx, cy = w * 0.5, h * 0.45
 
         # start fully invisible; only joints we place become visible
@@ -176,13 +180,12 @@ class ScriptedHands:
     """Drop-in for ``models.hands.HandTracker`` with a scripted pinch/roll."""
 
     def __init__(self):
-        self._t = 0
+        self._t0 = time.monotonic()
 
     def process(self, frame_bgr):
         from models.hands import HandObservation
 
-        self._t += 1
-        t = self._t / 30.0
+        t = time.monotonic() - self._t0  # seconds; one pinch cycle is 2π
         pinch = 0.75 + 0.65 * math.sin(t)  # oscillates open/closed
         obs = HandObservation(
             pinch=max(pinch, 0.0),
