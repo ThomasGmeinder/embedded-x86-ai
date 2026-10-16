@@ -203,7 +203,7 @@ class ObjectDetector:
     def __init__(self, cfg: dict, device: str | None = None):
         y = cfg["yolo_detect"]
         self.imgsz: int = int(y["imgsz"])
-        size_npu(cfg, device)
+        size_npu(cfg)
         self.session = build_session(
             y["onnx"],
             device or y["device"],

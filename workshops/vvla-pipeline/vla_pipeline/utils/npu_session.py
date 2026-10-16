@@ -58,38 +58,53 @@ def active_provider(session: ort.InferenceSession) -> str:
     return providers[0] if providers else "none"
 
 
-def size_npu(cfg: dict, device: str | None = None) -> None:
-    """Open the first model whose device is ``npu`` and keep that session, once per process.
+def sizer_onnx(cfg: dict) -> Path | None:
+    """ONNX file of the first model whose own YAML ``device`` is ``npu``.
 
-    With the shipped config that model is YOLO-pose. Call it before building
-    any other NPU session. ``device`` overrides every model's configured
-    device, as ``--device`` does.
+    Whisper is first in the list and the shipped config leaves it on the CPU,
+    so this is the YOLO-pose file.
     """
-    global _npu_sized, _sizer
-    if _npu_sized or not npu_available():
-        return
+    found = _sizer_choice(cfg)
+    return None if found is None else found[0]
+
+
+def _sizer_choice(cfg: dict):
+    """``(onnx, config file, cache dir, cache key, target)`` for :func:`sizer_onnx`, or None."""
     for section, onnx_key, config_key, cache_key, target in _BY_SIZE:
         s = cfg.get(section) or {}
-        if (device or s.get("device")) != "npu" or not s.get(onnx_key) or not s.get(cache_key):
+        if s.get("device") != "npu" or not s.get(onnx_key) or not s.get(cache_key):
             continue
         onnx_path = resolve(s[onnx_key])
         if not onnx_path.exists():
             continue
-        _npu_sized = True
-        options = {
-            "config_file": str(resolve(s.get(config_key, "config/vaiep_config.json"))),
-            "cache_dir": str(resolve(s.get("cache_dir") or cfg.get("system", {}).get("cache_dir", "cache"))),
-            "cache_key": s[cache_key],
-        }
-        if target:
-            options["target"] = target
-        try:
-            _sizer = ort.InferenceSession(str(onnx_path), providers=["VitisAIExecutionProvider"],
-                                          provider_options=[options])
-            logger.info("NPU buffers sized by %s", onnx_path.name)
-        except Exception as e:
-            logger.warning("Could not size the NPU buffers with %s (%s)", onnx_path.name, e)
+        cache_dir = str(resolve(s.get("cache_dir") or cfg.get("system", {}).get("cache_dir", "cache")))
+        return onnx_path, str(resolve(s.get(config_key, "config/vaiep_config.json"))), cache_dir, s[cache_key], target
+    return None
+
+
+def size_npu(cfg: dict) -> None:
+    """Open :func:`sizer_onnx` and keep that session, once per process.
+
+    Call it before any other NPU session. The buffers a process's models share
+    live as long as this session does.
+    """
+    global _npu_sized, _sizer
+    if _npu_sized or not npu_available():
         return
+    choice = _sizer_choice(cfg)
+    if choice is None:
+        return
+    onnx_path, config_file, cache_dir, cache_key, target = choice
+    _npu_sized = True
+    options = {"config_file": config_file, "cache_dir": cache_dir, "cache_key": cache_key}
+    if target:
+        options["target"] = target
+    try:
+        _sizer = ort.InferenceSession(str(onnx_path), providers=["VitisAIExecutionProvider"],
+                                      provider_options=[options])
+        logger.info("NPU buffers sized by %s", onnx_path.name)
+    except Exception as e:
+        logger.warning("Could not size the NPU buffers with %s (%s)", onnx_path.name, e)
 
 
 def build_session(

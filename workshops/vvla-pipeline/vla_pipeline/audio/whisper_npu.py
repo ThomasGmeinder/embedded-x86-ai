@@ -38,7 +38,6 @@ import onnxruntime as ort
 from transformers import WhisperFeatureExtractor, WhisperTokenizer
 
 from vla_pipeline.utils.config import load_config, resolve
-from vla_pipeline.utils.npu_session import size_npu
 
 logger = logging.getLogger(__name__)
 
@@ -425,7 +424,6 @@ class WhisperNPU:
             )
 
         if self.device == "npu":
-            size_npu(cfg, device)
             cache_dir = str(resolve(w.get("cache_dir", "cache")))
             enc_opts = {
                 "config_file": str(

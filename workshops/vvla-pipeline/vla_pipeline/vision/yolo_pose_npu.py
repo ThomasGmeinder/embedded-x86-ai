@@ -138,7 +138,7 @@ class PoseEstimator:
         self.imgsz: int = int(y["imgsz"])
         self.conf_threshold: float = float(y["conf_threshold"])
         self.kpt_threshold: float = float(y["kpt_threshold"])
-        size_npu(cfg, device)
+        size_npu(cfg)
         self.session = build_session(
             y["onnx"],
             device or y["device"],
