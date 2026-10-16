@@ -63,12 +63,19 @@ print("NS " + _json.dumps({
 '''
 
 
-def run_console(script) -> tuple[dict, int]:
+def run_console(script, end_with: str = "end session", after=None) -> tuple[dict, int]:
     """Run the notebook through ``c0000014``, then ``script(console)`` against the live console cell.
 
-    Returns the kernel namespace read after "end session" and the twin node's pid.
-    The cleanup cell ``c0000018`` runs last.
+    ``end_with`` ends the session: the "end session" button, "interrupt"
+    (the kernel's stop button), or "rerun" (JupyterLab's run and advance on
+    the running console cell, then on the cleanup cell). ``after()`` (a
+    coroutine) runs once the console cell has ended. Returns the kernel
+    namespace read then, plus how the ending went (``ended_s``, ``parked``,
+    ``twin_alive``), and the twin node's pid. The cleanup cell ``c0000018``
+    runs last (after "rerun", it already ran).
     """
+    from nbclient.exceptions import CellExecutionError
+
     nb = with_standins(nbformat.read(NOTEBOOK, as_version=4))
     nb.cells.append(nbformat.v4.new_code_cell(NAMESPACE))
     upto, console_cell, cleanup = cell_index(nb, "c0000014"), cell_index(nb, "c0000016"), cell_index(nb, "c0000018")
@@ -87,13 +94,32 @@ def run_console(script) -> tuple[dict, int]:
                     await until(console.find_widgets, 60.0, "the console widgets")
                     await script(console)
                 finally:
-                    if console.widgets.get("end session"):
+                    ending = time.monotonic()
+                    if end_with == "interrupt":
+                        await client.km.interrupt_kernel()
+                    elif end_with == "rerun":
+                        for i in (console_cell, cleanup):
+                            client.kc.execute(nb.cells[i].source)
+                    elif console.widgets.get("end session"):
                         console.click("end session")
-                    await asyncio.wait_for(task, timeout=120.0)
+                    try:
+                        await asyncio.wait_for(task, timeout=120.0)
+                    except CellExecutionError as e:
+                        if end_with != "interrupt" or "KeyboardInterrupt" not in str(e):
+                            raise
+                ended_s = time.monotonic() - ending
+                if after is not None:
+                    await after()
                 await client.async_execute_cell(nb.cells[probe_cell], probe_cell)
                 line = next(t for t in cell_stdout(nb.cells[probe_cell]).splitlines() if t.startswith("NS "))
                 namespace = json.loads(line[3:])
-                await client.async_execute_cell(nb.cells[cleanup], cleanup)
+                namespace.update(
+                    ended_s=ended_s,
+                    parked=watcher.said("session ended, arm parked"),
+                    twin_alive=not _gone(namespace["pid"]),
+                )
+                if end_with != "rerun":
+                    await client.async_execute_cell(nb.cells[cleanup], cleanup)
                 return namespace
             finally:
                 watcher.close()
@@ -210,7 +236,85 @@ def test_console_reset(observers, no_twin, workshop_cfg):
     _assert_closed(namespace, pid)
 
 
+def _arm_moved(probe, start) -> bool:
+    j = probe.joints()
+    return bool(j) and max(abs(j[k] - start[k]) for k in BODY_JOINTS) > 3.0
+
+
+def test_console_end_session_during_mimic(observers, no_twin):
+    """"end session" while the arm mirrors the webcam: the console cell ends
+    within 20 s and parks the arm, and the cleanup cell closes the twin."""
+    probe, _scene = observers
+
+    async def script(console):
+        start = probe.joints(timeout=10.0)
+        console.type("copy my movements")
+        await until(lambda: _arm_moved(probe, start), 30.0, "the arm to follow the webcam")
+
+    namespace, pid = run_console(script)
+    assert namespace["ended_s"] < 20.0, f"the console cell took {namespace['ended_s']:.0f} s to end"
+    assert namespace["parked"], "the console cell did not park the arm"
+    _assert_closed(namespace, pid)
+
+
+def test_console_interrupted(observers, no_twin):
+    """The kernel's stop button ends the console like "end session": the arm
+    parks at rest, and the twin keeps running until the cleanup cell closes it."""
+    from common.motion import REST_POSE
+
+    probe, _scene = observers
+    seen = {}
+
+    async def script(console):
+        start = probe.joints(timeout=10.0)
+        console.type("copy my movements")
+        await until(lambda: _arm_moved(probe, start), 30.0, "the arm to follow the webcam")
+
+    async def after():
+        seen["joints"] = probe.joints(after=time.time(), timeout=5.0)
+
+    namespace, pid = run_console(script, end_with="interrupt", after=after)
+    assert namespace["ended_s"] < 20.0, f"the console cell took {namespace['ended_s']:.0f} s to end"
+    assert namespace["parked"], "the interrupted console cell did not park the arm"
+    assert namespace["twin_alive"], "the kernel's stop button also stopped the twin program"
+    joints = seen["joints"]
+    assert joints, "no joint state from the twin after the interrupt"
+    off = {k: round(joints[k] - REST_POSE[k], 1) for k in BODY_JOINTS if abs(joints[k] - REST_POSE[k]) > 4.0}
+    assert not off, f"the arm did not reach rest after the interrupt: {off}"
+    _assert_closed(namespace, pid)
+
+
+def test_console_run_and_advance(observers, no_twin):
+    """Run and advance on the running console cell, then on the cleanup cell:
+    the session ends and parks the arm, the console cell does not start a
+    second session, and the cleanup cell closes the twin."""
+    probe, _scene = observers
+    seen = {}
+
+    async def script(console):
+        seen["console"] = console
+        start = probe.joints(timeout=10.0)
+        console.type("copy my movements")
+        await until(lambda: _arm_moved(probe, start), 30.0, "the arm to follow the webcam")
+
+    async def after():
+        console = seen["console"]
+        await until(lambda: console.watcher.said("twin closed"), 60.0, "the cleanup cell's 'twin closed'")
+        console._client.kc.execute('print("kernel free")')
+        await until(lambda: console.watcher.said("kernel free"), 30.0, "a cell run after the cleanup")
+        seen["parked"] = console.watcher.text().count("session ended, arm parked")
+
+    namespace, pid = run_console(script, end_with="rerun", after=after)
+    assert namespace["ended_s"] < 20.0, f"the console cell took {namespace['ended_s']:.0f} s to end"
+    assert seen["parked"] == 1, "the console cell ran a second session"
+    _assert_closed(namespace, pid)
+
+
 def test_console_stop(observers, no_twin):
+    """The red stop button ends the console cell: the in-flight pickup is not a grasp,
+    the arm parks, and the cleanup cell closes the twin. Saying "stop" only halts the behavior."""
+    from common.motion import REST_POSE
+
     probe, _scene = observers
     seen = {}
 
@@ -224,16 +328,17 @@ def test_console_stop(observers, no_twin):
 
         await until(moving, 30.0, "the arm to start moving")
         console.click("stop")
-        await asyncio.sleep(1.0)
-        first = probe.joints(after=time.time())
-        await asyncio.sleep(1.0)
-        second = probe.joints(after=time.time())
-        seen["drift"] = {k: round(second[k] - first[k], 2) for k in BODY_JOINTS}
+        await until(lambda: console.watcher.said("session ended, arm parked"), 20.0, "the console cell to end")
         seen["record"] = await console.record("pick up the bottle", timeout=30.0)
+        seen["joints"] = probe.joints(after=time.time(), timeout=5.0)
 
     namespace, pid = run_console(script)
-    moved = {k: d for k, d in seen["drift"].items() if abs(d) > 1.0}
-    assert not moved, f"the arm kept moving after stop: {moved}"
+    assert namespace["ended_s"] < 20.0, f"the console cell took {namespace['ended_s']:.0f} s to end"
+    assert namespace["parked"], "the stop button did not end the console cell"
     assert seen["record"]["grasped"] is False, seen["record"]
     assert [r["text"] for r in namespace["trace"]] == ["pick up the bottle"]
+    joints = seen["joints"]
+    assert joints, "no joint state from the twin after stop"
+    off = {k: round(joints[k] - REST_POSE[k], 1) for k in BODY_JOINTS if abs(joints[k] - REST_POSE[k]) > 4.0}
+    assert not off, f"the arm did not reach rest after stop: {off}"
     _assert_closed(namespace, pid)

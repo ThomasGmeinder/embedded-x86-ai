@@ -266,7 +266,7 @@ class TwinConsole:
         view=None,
         load_threshold: float = 120.0,
         voice: str = "mic",
-        hint: str = "say 'stop' or press the stop button",
+        hint: str = "say 'stop' to halt the arm",
     ):
         self.arm = arm
         self.voice = voice  # "mic" | "typed"

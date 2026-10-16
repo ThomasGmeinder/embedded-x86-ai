@@ -12,7 +12,8 @@ The real pipeline's speech front end, self-contained for the workshop:
 - :class:`Segmenter` cuts a 30 ms block stream into utterances. A pre-roll
   ring keeps the first syllable that arrives while the detector is still
   deciding; ``hangover_s`` of detector-silence ends an utterance. Anything
-  shorter than ``min_speech_s`` (a click, a cough) is dropped. ``webrtcvad``
+  shorter than ``min_speech_s`` (a click, a cough) is dropped, and
+  :class:`MicListener` reports it through ``on_drop``. ``webrtcvad``
   decides speech when installed, else an energy detector riding 3x above the
   adaptive noise floor.
 - :class:`Whisper` is the ONNX encoder/decoder pair (``whisper:`` in the
@@ -64,8 +65,10 @@ class Segmenter:
         self._vad = _webrtc_vad(a.get("vad_aggressiveness", 2))
         self._noise = self.floor
         self._speech: list = []
+        self._lead = 0  # pre-roll blocks the current utterance started with
         self._silent = 0
         self.in_speech = False
+        self.dropped_s = 0.0  # speech in a segment the last push() dropped as too short, else 0
 
     def _is_speech(self, block: np.ndarray, rms: float) -> bool:
         if self._vad is not None:
@@ -77,6 +80,7 @@ class Segmenter:
         return False
 
     def push(self, block: np.ndarray, rms: float | None = None) -> np.ndarray | None:
+        self.dropped_s = 0.0
         if rms is None:
             rms = float(np.sqrt(np.mean(np.square(block))))
         speechy = self._is_speech(block, rms)
@@ -84,16 +88,22 @@ class Segmenter:
             self._pre.append(block.copy())
             if speechy:
                 self.in_speech, self._speech, self._silent = True, list(self._pre), 0
+                # The ring restarts empty after each utterance, so speech soon
+                # after one starts with less pre-roll than its maximum.
+                self._lead = len(self._pre)
             return None
         self._speech.append(block.copy())
         self._silent = 0 if speechy else self._silent + 1
         if self._silent < self.hangover and len(self._speech) < self.max_blocks:
             return None
         audio = np.concatenate(self._speech)
-        voiced = len(self._speech) - self.hangover - self._pre.maxlen
+        voiced = len(self._speech) - self._silent - self._lead
         self._speech, self._silent, self.in_speech = [], 0, False
         self._pre.clear()
-        return audio if voiced >= self.min_speech else None
+        if voiced >= self.min_speech:
+            return audio
+        self.dropped_s = max(voiced, 0) * BLOCK / SAMPLE_RATE
+        return None
 
 
 def _pretrained(cls, model_id: str):
@@ -164,11 +174,16 @@ class MicListener:
     """Microphone thread: each utterance → ``on_text(text)``.
 
     ``on_level(rms, speaking)`` gets every block (for a level meter) and
-    ``transcribing`` is True while Whisper runs. ``error`` holds the reason if
-    the microphone could not be opened.
+    ``transcribing`` is True while Whisper runs. ``on_drop(reason)`` hears
+    about every utterance that never becomes text: speech too short to count,
+    a transcript with no words, and microphone audio lost because the CPU was
+    too busy to read it. ``error`` holds the reason if the microphone could
+    not be opened.
     """
 
-    def __init__(self, cfg: dict, transcribe, on_text, on_level=None):
+    OVERFLOW_REPORT_S = 2.0  # at most one "audio lost" report per this many seconds
+
+    def __init__(self, cfg: dict, transcribe, on_text, on_level=None, on_drop=None):
         a = cfg.get("audio") or {}
         self.cfg = cfg
         self.device = a.get("mic_device")
@@ -176,10 +191,26 @@ class MicListener:
         self.transcribe = transcribe
         self.on_text = on_text
         self.on_level = on_level
+        self.on_drop = on_drop
         self.transcribing = False
         self.error: str | None = None
+        self.overflows = 0  # microphone blocks lost since start
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="mic")
+
+    def _dropped(self, reason: str) -> None:
+        logger.info("utterance dropped: %s", reason)
+        if self.on_drop is not None:
+            try:
+                self.on_drop(reason)
+            except Exception:
+                logger.exception("on_drop failed")
+
+    def _audio_in(self, blocks: queue.Queue, indata, frames, time_info, status) -> None:
+        """sounddevice callback: queue the block; count blocks the device had to throw away."""
+        if status.input_overflow:
+            self.overflows += 1
+        blocks.put(indata[:, 0].copy())
 
     def start(self) -> "MicListener":
         self._thread.start()
@@ -201,7 +232,7 @@ class MicListener:
                 dtype="float32",
                 blocksize=BLOCK,
                 device=self.device,
-                callback=lambda indata, *_: blocks.put(indata[:, 0].copy()),
+                callback=lambda *args: self._audio_in(blocks, *args),
             )
         except Exception as e:
             self.error = str(e)
@@ -226,15 +257,19 @@ class MicListener:
                         (time.perf_counter() - t) * 1e3,
                         text,
                     )
-                except Exception:
+                except Exception as e:
                     logger.exception("transcription failed")
-                    text = ""
+                    self._dropped(f"transcription failed ({e})")
+                    continue
                 finally:
                     self.transcribing = False
                 if text:
                     self.on_text(text)
+                else:
+                    self._dropped("Whisper heard no words")
 
         threading.Thread(target=_decode, daemon=True, name="asr").start()
+        reported, reported_at = 0, 0.0
         with stream:
             while not self._stop.is_set():
                 try:
@@ -245,6 +280,13 @@ class MicListener:
                 audio = seg.push(block, rms)
                 if self.on_level is not None:
                     self.on_level(rms, seg.in_speech)
-                if audio is None or time.monotonic() - t0 < self.grace_s:
+                now = time.monotonic()
+                if self.overflows > reported and now - reported_at >= self.OVERFLOW_REPORT_S:
+                    self._dropped(f"microphone audio lost {self.overflows - reported} times (CPU busy)")
+                    reported, reported_at = self.overflows, now
+                if now - t0 < self.grace_s:
                     continue
-                jobs.put(audio)
+                if seg.dropped_s:
+                    self._dropped(f"too short to hear ({seg.dropped_s:.2f} s of speech)")
+                if audio is not None:
+                    jobs.put(audio)

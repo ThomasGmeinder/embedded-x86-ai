@@ -78,7 +78,7 @@ class VoiceCommands:
         # looked up on the module so a test can swap the microphone out
         whisper = speech.Whisper(cfg)
         self.mic = speech.MicListener(
-            cfg, whisper.transcribe, self._utterance, on_level=console.on_level
+            cfg, whisper.transcribe, self._utterance, on_level=console.on_level, on_drop=self._dropped
         ).start()
         console.transcribing = lambda: self.mic.transcribing
         time.sleep(0.5)  # MicListener reports a missing microphone once it tried to open it
@@ -112,6 +112,13 @@ class VoiceCommands:
             listening.put(text)
         elif self._live.is_set():
             self.on_transcript(text)
+
+    def _dropped(self, reason: str) -> None:
+        """Speech that never became a transcript: shown where a transcript would have gone."""
+        if self._listening is not None:
+            print(f"(not heard: {reason})")
+        elif self._live.is_set():
+            self.console.ignored(reason)
 
     def _explain(self, text: str) -> None:
         """Print the command the parser picks for ``text``, and how long it took."""

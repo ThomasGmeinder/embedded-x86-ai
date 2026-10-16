@@ -311,8 +311,10 @@ class TwinSession:
         fd, log_name = tempfile.mkstemp(prefix="twin_node_", suffix=".log")
         self.log_path = Path(log_name)
         with os.fdopen(fd, "w") as log:
+            # Its own session: Jupyter's stop button sends SIGINT to the kernel's
+            # whole process group. The node still exits with this process.
             self._proc = subprocess.Popen(
-                cmd, stdout=log, stderr=subprocess.STDOUT, env=os.environ.copy()
+                cmd, stdout=log, stderr=subprocess.STDOUT, env=os.environ.copy(), start_new_session=True,
             )
         atexit.register(self.close)
         try:

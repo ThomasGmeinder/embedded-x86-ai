@@ -142,7 +142,7 @@ CORE=(
   "onnx:onnx>=1.16,<1.18"
   "matplotlib:matplotlib>=3.7"
   "ipywidgets:ipywidgets>=8.1"
-  "jupyter_ui_poll:jupyter-ui-poll>=0.2"
+  "jupyter_ui_poll:jupyter-ui-poll>=1.1,<2"  # common/ui_poll.py builds on its 1.x internals
   "mujoco:mujoco>=3.1.3"
   "OpenGL:PyOpenGL>=3.1"
 )
