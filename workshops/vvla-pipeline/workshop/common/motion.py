@@ -947,7 +947,9 @@ DANCE_MOVES = {
         },
     ],
     "pump": [
-        {"shoulder_lift": -90.0, "elbow_flex": 95.0, "wrist_flex": 60.0},
+        # Folded any tighter (elbow 95, wrist 60) the wrist camera mount hits
+        # the shoulder and the jaws the table, and the servos trip on overload.
+        {"shoulder_lift": -90.0, "elbow_flex": 80.0, "wrist_flex": 50.0},
         {"shoulder_lift": -20.0, "elbow_flex": 20.0, "wrist_flex": -20.0},
     ],
     "disco_point": [

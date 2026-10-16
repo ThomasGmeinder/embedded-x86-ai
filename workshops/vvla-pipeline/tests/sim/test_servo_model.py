@@ -124,6 +124,29 @@ def test_reset_reloads_the_gripper_torque_limit_and_clears_a_trip(world):
     assert _gripper_cap(world) == pytest.approx(0.5 * float(world.force_full[GRIPPER, 1]))
 
 
+def test_every_dance_keyframe_holds_without_an_overload_trip(world):
+    """No dance keyframe drives the arm into itself or the table. A keyframe
+    that does stalls its servos until the overload protection cuts their
+    torque, and the arm then crawls to its rest pose after the dance."""
+    from common.motion import DANCE_MOVES, REST_POSE, clamp_joints
+    from so101_sim import MOTOR_NAMES
+    from so101_sim.arm import SimBus
+
+    for move, keyframes in DANCE_MOVES.items():
+        world.reset(REST_POSE)
+        bus = SimBus(world)
+        bus.sync_write("Goal_Velocity", 1000, normalize=False)  # the arm's direct-goal profile
+        bus.sync_write("Acceleration", 50, normalize=False)
+        pose = dict(REST_POSE)
+        for keyframe in keyframes:
+            pose = clamp_joints({**pose, **keyframe})
+            for motor in keyframe:
+                bus.write("Goal_Position", motor, pose[motor])
+            world.advance(2.5)  # longer than Protection_Time
+            tripped = [m for m, t in zip(MOTOR_NAMES, world.protection.tripped) if t]
+            assert not tripped, f"{move} {keyframe}: overload trip on {tripped}"
+
+
 def test_a_hold_under_the_overload_threshold_never_trips(world):
     bus = _squeeze_ball(world, 240)
     world.advance(5.0)
