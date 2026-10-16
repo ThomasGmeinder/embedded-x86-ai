@@ -120,6 +120,28 @@ def test_workshop_mimic_hands_a_held_grip_to_the_pinch(workshop_rig):
     )
 
 
+def test_workshop_mimic_keeps_a_held_ball_until_the_pinch_is_seen(workshop_rig):
+    """Mimic does not command the gripper before MediaPipe reports a pinch: the
+    pose model sees the wrist first, the pinched hand a second later, and the
+    ball the pickup holds stays held."""
+    rig = workshop_rig
+    _pick_ball(rig)
+    assert rig.world.is_grasped("sports_ball"), f"the pickup failed: {rig.said}"
+
+    pinched = Hand(pinch=0.05)
+    rig.pose.keys = [(0.0, [Person(wrist=(0.5, 0.45))]), (10.0, [Person(wrist=(0.5, 0.45))])]
+    rig.hands.keys = [(0.0, None), (1.0, None), (1.01, pinched), (10.0, pinched)]
+    first = len(rig.trace.samples)  # the trace runs on across runs; the clock restarts
+    rig.run([(0.3, "mirror my arm"), (6.0, "stop")], timeout=60)
+
+    assert rig.said_any("Your pinch drives the gripper"), rig.said
+    goals = [s.goal["gripper"] for s in rig.trace.samples[first:]]
+    assert max(goals) <= goals[0] + 0.5, (
+        f"mimic opened the gripper to {max(goals):.1f} (held at {goals[0]:.1f})"
+    )
+    assert rig.world.is_grasped("sports_ball"), "mimic dropped the held ball"
+
+
 @pytest.mark.parametrize("spot", [None, (0.22, -0.04)], ids=["default", "near"])
 def test_workshop_pick_up_the_ball(workshop_rig, caplog, spot):
     rig = workshop_rig

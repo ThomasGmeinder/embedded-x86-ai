@@ -435,6 +435,30 @@ def test_mimic_hands_a_held_grip_to_the_pinch(pipeline_rig):
     )
 
 
+def test_mimic_keeps_a_held_ball_until_the_pinch_is_seen(pipeline_rig):
+    """Mimic does not command the gripper before MediaPipe reports a pinch: the
+    pose model sees the wrist first, the pinched hand a second later, and the
+    ball the pickup holds stays held."""
+    rig = pipeline_rig
+    rig.pose.keys = [(0.0, [PERSON_LEFT])]
+    rig.default_scene()
+    rig.run([(0.3, "pick up the ball")], timeout=60, settle=HOLD_WATCH_S)
+    assert rig.world.is_grasped("sports_ball"), f"the pickup failed: {rig.said}"
+
+    pinched = Hand(pinch=0.05)
+    rig.pose.keys = [(0.0, [Person(wrist=(0.5, 0.45))]), (10.0, [Person(wrist=(0.5, 0.45))])]
+    rig.hands.keys = [(0.0, None), (1.0, None), (1.01, pinched), (10.0, pinched)]
+    first = len(rig.trace.samples)  # the trace runs on across runs; the clock restarts
+    rig.run([(0.3, "copy my movements"), (6.0, "stop")], timeout=60)
+
+    assert rig.said_any("Your pinch drives the gripper"), rig.said
+    goals = [s.goal["gripper"] for s in rig.trace.samples[first:]]
+    assert max(goals) <= goals[0] + 0.5, (
+        f"mimic opened the gripper to {max(goals):.1f} (held at {goals[0]:.1f})"
+    )
+    assert rig.world.is_grasped("sports_ball"), "mimic dropped the held ball"
+
+
 @pytest.mark.slow
 def test_mimic_hand_lost_then_person_lost(pipeline_rig):
     rig = pipeline_rig

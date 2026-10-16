@@ -207,12 +207,12 @@ def _hud(vis, joints, wrist_xy, obs) -> None:
     if wrist_xy is not None:
         cv2.circle(vis, (int(wrist_xy[0]), int(wrist_xy[1])), 8, (0, 255, 0), 2)
     if joints:
-        grip_deg = joints.get("gripper", 0)
-        grip_name = _grip_label(grip_deg)
+        grip_deg = joints.get("gripper")  # absent until MediaPipe reports a pinch
+        grip = "hold" if grip_deg is None else f"{grip_deg:3.0f} ({_grip_label(grip_deg)})"
         line = (
             f"pan {joints['shoulder_pan']:+5.0f}  lift {joints['shoulder_lift']:+5.0f}  "
             f"elb {joints['elbow_flex']:+5.0f}  wflex {joints['wrist_flex']:+5.0f}  "
-            f"roll {joints['wrist_roll']:+5.0f}  grip {grip_deg:3.0f} ({grip_name})"
+            f"roll {joints['wrist_roll']:+5.0f}  grip {grip}"
         )
         cv2.putText(
             vis,

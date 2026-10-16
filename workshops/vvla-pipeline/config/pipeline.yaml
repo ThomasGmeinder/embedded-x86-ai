@@ -200,7 +200,8 @@ behaviors:
     grip_max: 1.40             # calibrated: spread wide apart -> normalized 1
     grip_close_frac: 0.10      # within the closest 10% of the range -> fully closed
     grip_open_pos: 90.0        # gripper opening (0-100) at full spread (norm 1.0)
-    #grip_start_pos: 90.0      # opening before the first distance is seen (default: open)
+    # Until the first thumb↔index distance is measured the gripper is not
+    # commanded, so a held object stays held.
     # --- One Euro smoothing on the five control axes.
     smoothing:
       min_cutoff: 1.5          # Hz, lower = smoother at rest

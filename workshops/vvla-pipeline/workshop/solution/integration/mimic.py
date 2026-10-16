@@ -222,7 +222,7 @@ def run_mimic(ctx, cmd=None) -> None:
                     scale=0.5,
                 )
                 panel = draw_arm_panel(
-                    signals.joints or ctx.arm.get_joints(),
+                    {**ctx.arm.get_joints(), **(signals.joints or {})},
                     width=300,
                     height=vis.shape[0],
                 )

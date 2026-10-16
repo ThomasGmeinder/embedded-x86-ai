@@ -708,7 +708,6 @@ class MimicMapper:
         self._roll_prev = None
         self._roll_ref_offset = None
         self._roll_center = None
-        self._last_gripper = float(p.get("grip_open_pos", 90.0))
 
     # -- axis extraction ---------------------------------------------------
 
@@ -795,10 +794,11 @@ class MimicMapper:
         return max(-1.0, min(1.0, delta / float(self.p.get("roll_half_deg", 75.0))))
 
     def _gripper(self, pinch, override):
+        """Gripper goal from the thumb↔index distance; ``None`` without a reading."""
         if override is not None:
             return float(override)
         if pinch is None:
-            return self._last_gripper  # hold when the hand is unseen
+            return None
         p = self.p
         lo, hi = float(p.get("grip_min", 0.10)), float(p.get("grip_max", 1.40))
         norm = max(0.0, min(1.0, (pinch - lo) / max(hi - lo, 1e-6)))
@@ -810,7 +810,6 @@ class MimicMapper:
             g = GRIPPER_CLOSED_FLOOR + (norm - close_frac) / span * (
                 float(p.get("grip_open_pos", 90.0)) - GRIPPER_CLOSED_FLOOR
             )
-        self._last_gripper = g
         return g
 
     # -- the mapping ---------------------------------------------------------
@@ -831,10 +830,14 @@ class MimicMapper:
         gripper_override=None,
         t=None,
     ) -> dict:
-        """One control tick: raw signals in, a full clamped joint dict out.
+        """One control tick: raw signals in, a clamped joint dict out.
 
         Any signal may be ``None`` (not detected this frame) - its axis HOLDS
-        its previous value rather than snapping back to neutral. wrist_flex
+        its previous value rather than snapping back to neutral. The gripper
+        is in the dict only when this frame has a ``pinch`` reading (or a
+        ``gripper_override``): without one it is not commanded, so the jaws
+        keep their current goal and a held object stays held until MediaPipe
+        reports the pinch. wrist_flex
         follows YOUR wrist bend: the hand's pointing direction
         (``roll_fallback`` = MediaPipe wrist→knuckle angle) measured against
         the forearm (``elbow_xy``, from YOLO-pose via ``imaging.pick_arm``);
@@ -901,15 +904,17 @@ class MimicMapper:
             + float(p.get("wf_up_gain", -135.0)) * wf,
             "wrist_roll": float(p.get("wrist_roll0", 0.0))
             + float(p.get("roll_gain", 128.0)) * roll,
-            "gripper": self._gripper(pinch, gripper_override),
         }
+        gripper = self._gripper(pinch, gripper_override)
+        if gripper is not None:  # no pinch reading: the jaws keep their current goal
+            joints["gripper"] = gripper
         return clamp_joints(joints)
 
     def reset(self) -> None:
         """Forget smoothing/baseline state (call when the person leaves view).
 
-        The gripper opening is deliberately KEPT so a held object isn't
-        dropped on a dropout - it only moves on a new thumb↔index reading.
+        The mapper keeps no gripper state; the gripper is commanded only on a
+        pinch reading.
         """
         for f in self._f.values():
             f.reset()
