@@ -7,7 +7,7 @@
 
 """The notebook twin's plumbing: ``so101_sim.node --notebook-twin`` and ``common.twin_ros``.
 
-Tier 2 (ROS 2): ``source scripts/ryzen_ai_env.sh && source /opt/ros/jazzy/setup.bash && pytest tests/sim -m hw``.
+Tier 2 (ROS 2): ``./run_sim_tests.sh``.
 """
 
 from __future__ import annotations

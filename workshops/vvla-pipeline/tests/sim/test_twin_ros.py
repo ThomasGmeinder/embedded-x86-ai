@@ -13,7 +13,7 @@ parser through ``handle_transcript``. The checks mirror the in-process
 ``test_workshop_scenarios.py``. Every reading of the twin comes from
 ``/sim/scene`` and ``/so101/joint_state``.
 
-Tier 2 (ROS 2): ``source scripts/ryzen_ai_env.sh && source /opt/ros/jazzy/setup.bash && pytest tests/sim -m hw``.
+Tier 2 (ROS 2): ``./run_sim_tests.sh``.
 """
 
 from __future__ import annotations

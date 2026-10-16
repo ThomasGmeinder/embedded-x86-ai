@@ -38,15 +38,21 @@
 #   ./run_notebooks.sh --classic       # use `jupyter notebook` instead of lab
 #   ./run_notebooks.sh --no-llm        # don't start the llama server
 #   ./run_notebooks.sh --no-monitor    # don't open the resource HUD
-#   ./run_notebooks.sh --test [args]   # steps 1-5, then the automated tests in this
-#                                      # environment instead of Jupyter (args go to
-#                                      # the tests/sim runs, e.g. -k toothbrush)
+#   ./run_notebooks.sh --test [args]   # steps 1-5, then the notebooks instead of Jupyter
+#                                      # (args go to those tests). The twin and the NPU
+#                                      # tests are ../run_sim_tests.sh
 #
 # Env overrides:
 #   KERNEL_NAME=vvla-workshop     kernelspec name to register/select
 #   JUPYTER_PORT=8888             port to serve on
 # =============================================================================
 set -euo pipefail
+
+say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m warn:\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+say "run_notebooks.sh${*:+ $*}"
 
 WORKSHOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${WORKSHOP_DIR}/.." && pwd)"
@@ -73,10 +79,6 @@ if [[ "$TEST_MODE" -eq 1 && "$WITH_LLM" -eq 0 ]]; then
   echo "--test needs the llama server: the Llama notebooks run against it (drop --no-llm)" >&2
   exit 2
 fi
-
-say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m warn:\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # --- 1. Use the repo venv created by bootstrap.sh ----------------------------
 RYZEN_ENV_SCRIPT="${REPO_ROOT}/scripts/ryzen_ai_env.sh"
@@ -155,13 +157,12 @@ for entry in "${CORE[@]}"; do
   fi
 done
 
-# The SO-101 digital twin (03_integration/02_digital_twin.ipynb). --no-deps:
-# its deps are installed above, and pip must not touch the pinned numpy.
-if "$PY" -c 'import so101_sim' 2>/dev/null; then
-  printf '    have %-13s\n' "so101_sim"
-else
-  pip_install --no-deps -e "${REPO_ROOT}/so101_sim"
-fi
+# The SO-101 digital twin (03_integration/02_digital_twin.ipynb). Always this
+# clone: the venv has --system-site-packages, and so101-sim stays at 0.1.0, so
+# an import check or a plain `pip install -e` leaves an older tree in place
+# (no so101_sim.record). --no-deps keeps pip off the pinned numpy.
+say "Installing so101_sim from this clone"
+"$PY" -m pip install --quiet --no-deps --upgrade --force-reinstall -e "${REPO_ROOT}/so101_sim"
 "$PY" -m so101_sim.assets || warn "could not fetch the SO-101 meshes - the digital twin will not load"
 
 # ipykernel is handled separately (NOT in the presence-only loop above): it must
@@ -293,7 +294,7 @@ if [[ "$WITH_LLM" -eq 1 ]]; then
   fi
 fi
 
-# --test: the notebooks and the tests run in exactly this environment.
+# --test: the notebooks, in this environment. Twin and NPU tests are ../run_sim_tests.sh.
 if [[ "$TEST_MODE" -eq 1 ]]; then
   say "Waiting for llama-server at http://${LLAMA_HOST}:${LLAMA_PORT}"
   for _ in $(seq 1 90); do
@@ -308,21 +309,9 @@ if [[ "$TEST_MODE" -eq 1 ]]; then
     "$PY" -c "import ${entry%%:*}" 2>/dev/null || pip_install "${entry#*:}"
   done
   cd "$REPO_ROOT"
-  export VVLA_TEST_STRICT=1
-  RC=0
-  run_pytest() {
-    local rc=0
-    "$PY" -m pytest "$@" || rc=$?
-    # 5: the -k/-m given to --test left nothing to run in this part
-    if [[ $rc -ne 0 && $rc -ne 5 ]]; then RC=1; fi
-  }
-  say "pytest tests/npu (YOLO load order on the NPU)"
-  run_pytest tests/npu
-  say "pytest tests/sim -m 'sim and not docs' (the stacks on the twin, YOLO on the NPU)"
-  run_pytest tests/sim -m "sim and not docs" "${PYTEST_ARGS[@]}"
-  say "pytest tests/sim -m docs (every notebook in README order, the Instructor's corner)"
-  run_pytest tests/sim -m docs "${PYTEST_ARGS[@]}"
-  exit "$RC"
+  say "Notebooks"
+  "$PY" -m pytest tests/sim -m docs "${PYTEST_ARGS[@]}" || exit $?
+  exit 0
 fi
 
 # --- 6. Pop the always-on-top resource HUD (CPU/GPU/NPU), torn down on exit --

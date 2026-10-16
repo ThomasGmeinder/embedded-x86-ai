@@ -7,16 +7,12 @@
 
 """Digital-twin scenario tests: fixtures, options, video bookkeeping.
 
-    cd workshop && ./run_notebooks.sh --test     # everything, in the workshop README's setup
-    pytest tests/sim -m "sim and not hw"         # tier 1: in-process, no ROS/LLM
-    pytest tests/sim -m "hw and not docs"        # tier 2: full ROS graph
-    pytest tests/sim -m docs                     # every notebook + the Instructor's corner
-    pytest tests/sim --sim-yolo-device cpu       # YOLO on the CPU (machines without an NPU)
-    pytest tests/sim --sim-video failed          # keep only failing runs' videos
-    pytest tests/sim --sim-eyes seg              # ground-truth boxes instead of YOLO
-    PROJECT=project pytest tests/sim -k workshop # students' workshop code
-
-YOLO runs on the NPU, so source ``scripts/ryzen_ai_env.sh`` first.
+    cd workshop && ./run_notebooks.sh --test          # notebooks and the Instructor's corner
+    ./run_sim_tests.sh                                # NPU load order and the twin stacks
+    ./run_sim_tests.sh --sim-yolo-device cpu          # YOLO on the CPU
+    ./run_sim_tests.sh --sim-video failed             # keep only failing runs' videos
+    ./run_sim_tests.sh --sim-eyes seg                 # ground-truth boxes instead of YOLO
+    PROJECT=project ./run_sim_tests.sh -k workshop    # students' workshop code
 
 Videos + timelines land in ``_artifacts/sim_tests/<tier>/`` with an
 ``index.html`` that plays them all.
@@ -54,11 +50,34 @@ def pytest_addoption(parser):
                 help="arm-camera detector: the stack's YOLOv26s on the rendered frames, as in the "
                      "notebook (default), or ground-truth boxes from the twin's segmentation")
     g.addoption("--sim-yolo-device", choices=("cpu", "npu"), default="npu",
-                help="where the YOLO eyes run (default npu, as in the notebooks; source "
-                     "scripts/ryzen_ai_env.sh first, else the eyes fail instead of running on the CPU)")
+                help="where the YOLO eyes run (default npu, as in the notebooks; "
+                     "./run_sim_tests.sh sources scripts/ryzen_ai_env.sh)")
+
+
+def _require_this_clone() -> None:
+    """Exit unless this is the clone's venv and this clone's so101_sim.
+
+    .venv/bin/python is a symlink to the system interpreter, so resolving
+    sys.executable makes /usr/bin/pytest look like the venv. sys.prefix is
+    the venv root only when the venv interpreter was used.
+    """
+    venv = (PIPE_ROOT / ".venv").resolve()
+    prefix = Path(sys.prefix).resolve()
+    commands = "cd workshop && ./run_notebooks.sh --test\n./run_sim_tests.sh"
+    if prefix != venv:
+        pytest.exit(f"{sys.executable} is not {venv / 'bin' / 'python'}\n{commands}", returncode=3)
+    try:
+        import so101_sim
+    except ImportError as exc:
+        pytest.exit(f"so101_sim is not installed in {venv} ({exc})\n{commands}", returncode=3)
+    src = Path(so101_sim.__file__).resolve()
+    root = (PIPE_ROOT / "so101_sim").resolve()
+    if root not in src.parents:
+        pytest.exit(f"so101_sim is {src}, not this clone's {root}\n{commands}", returncode=3)
 
 
 def pytest_configure(config):
+    _require_this_clone()
     config.addinivalue_line("markers", "sim: digital-twin scenario (tier 1 unless also hw)")
     config.addinivalue_line("markers", "hw: tier 2 - full ROS 2 graph on the iGPU")
     config.addinivalue_line("markers", "slow: long-running scenario")

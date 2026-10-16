@@ -326,14 +326,50 @@ vvla-pipeline/
 ```
 
 ## Installation
-Download the RyzenAI for Linux package [`ryzen_ai-1.7.1.tgz`](https://account.amd.com/en/forms/downloads/xef.html?filename=ryzen_ai-1.7.1.tgz) from the Downloads section of the Ryzen AI Software Installer. Unpack the installer into `~/ryzen_ai-1.7.1` and create its virtual environment inside that directory:
+
+Install the NPU driver, confirm the driver sees the NPU, then install Ryzen AI Software 1.7.1, then this repository. The driver steps match [Linux Installation Instructions](https://ryzenai.docs.amd.com/en/1.7.1/linux.html) and [workshops/ryzen-ai-always-on/README.md](../ryzen-ai-always-on/README.md).
+
+Ubuntu 24.04 LTS, kernel 6.10 or newer, Python 3.12, 64 GB of RAM recommended. The NPU PCI id is `1022:17f0`. If that search prints nothing, stop.
+
+```bash
+sudo apt update
+sudo apt install -y python3.12 python3.12-venv libboost-filesystem1.74.0 dkms
+lspci -nn | grep 1022:17f0
+```
+
+Download both packages from the Ryzen AI Software downloads page:
+
+- [NPU drivers, `RAI_1.7.1_Linux_NPU_XRT.zip`](https://account.amd.com/en/forms/downloads/xef.html?filename=RAI_1.7.1_Linux_NPU_XRT.zip)
+- [Ryzen AI Software, `ryzen_ai-1.7.1.tgz`](https://account.amd.com/en/forms/downloads/xef.html?filename=ryzen_ai-1.7.1.tgz)
+
+Install the four driver packages. The zip may unpack into a subdirectory, so the `find` lands in the directory that holds the `.deb` files. `xrt-smi examine` must list a device under `Device(s) Present`. The name depends on the machine (`RyzenAI-npu5`, `NPU Strix`, `NPU Strix Halo`). If the table is empty, stop. Do not compile a model yet.
+
+```bash
+cd ~/Downloads
+unzip -o RAI_1.7.1_Linux_NPU_XRT.zip -d RAI_1.7.1_Linux_NPU_XRT
+cd "$(dirname "$(find RAI_1.7.1_Linux_NPU_XRT -name 'xrt_202610.2.21.75_24.04-amd64-base.deb' -print -quit)")"
+sudo apt install --fix-broken -y ./xrt_202610.2.21.75_24.04-amd64-base.deb
+sudo apt install --fix-broken -y ./xrt_202610.2.21.75_24.04-amd64-base-dev.deb
+sudo apt install --fix-broken -y ./xrt_202610.2.21.75_24.04-amd64-npu.deb
+sudo apt install --fix-broken -y ./xrt_plugin.2.21.260102.53.release_24.04-amd64-amdxdna.deb
+export LD_LIBRARY_PATH="/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+source /opt/xilinx/xrt/setup.sh
+xrt-smi examine
+```
+
+Unpack the software installer into `~/ryzen_ai-1.7.1` and create its virtual environment there. `quicktest.py` compiles a small CNN and runs it on the NPU. It prints `Test Finished`. The provider list must include `VitisAIExecutionProvider`.
 
 ```bash
 mkdir -p ~/ryzen_ai-1.7.1
+cp ~/Downloads/ryzen_ai-1.7.1.tgz ~/ryzen_ai-1.7.1/
 cd ~/ryzen_ai-1.7.1
-tar -xvzf ~/Downloads/ryzen_ai-1.7.1.tgz
+tar -xvzf ryzen_ai-1.7.1.tgz
 ./install_ryzen_ai.sh -a yes -p $PWD/venv
 source /opt/xilinx/xrt/setup.sh
+source $PWD/venv/bin/activate
+python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+cd venv/quicktest && python quicktest.py
+deactivate
 ```
 
 `$PWD/venv` is `~/ryzen_ai-1.7.1/venv`. Then clone this repository once. The NPU compile cache is not in git. Ultralytics is AGPL-3.0, so `./bootstrap.sh` does not install it or export the YOLO ONNX files. Export them with `scripts/export_yolo26s_pose.py` and `scripts/export_yolo26s_detect.py`, then compile:
@@ -357,7 +393,9 @@ The first `bootstrap.sh` creates `.venv` and downloads the Whisper ONNX, the Whi
 
 The NPU compile takes about 20 minutes on a Ryzen AI APU with Ryzen AI SW 1.7.1. YOLOv26s-pose took about 16 minutes and YOLOv26s-detect about 3 minutes. Once `cache/` holds a model's `.rai`, later sessions load it in about a second.
 
-When `cache/` already contains the `.rai` files, skip the export and the compile:
+A cache built on another machine, or with an older compiler than this driver, loads and then mis-detects. The runtime says `recompile model with latest VAIML version`. Delete `cache/yolo26s_pose_fp32` and `cache/yolo26s_detect_fp32` and compile again on this machine. Do not copy `cache/` between machines.
+
+When `cache/` already contains `.rai` files compiled on this machine with this driver, skip the export and the compile:
 
 ```bash
 export RYZEN_AI_WHEELS=~/ryzen_ai-1.7.1
@@ -558,7 +596,7 @@ Most components are standalone modules with their own `__main__` self-test. Pick
 
 | Component | Needs hardware? | Command |
 |---|---|---|
-| Camera→joint mapping (One Euro/depth) | no (twin) | `pytest tests/sim -m "sim and not hw" -k mimic` |
+| Camera→joint mapping (One Euro/depth) | no (twin) | `./run_sim_tests.sh -k mimic` |
 | VAD listener | no | `python -m vla_pipeline.audio.vad_listener --selftest` |
 | Intent grammar + parser | no (needs llama-server build) | `python -m vla_pipeline.llm.llama_intent --selftest` |
 | Whisper STT | mic or wav | `python -m vla_pipeline.audio.whisper_npu --input mic --device npu` |
@@ -572,11 +610,11 @@ Most components are standalone modules with their own `__main__` self-test. Pick
 | ROS 2 server node | ROS 2 (arm optional) | `python -m vla_pipeline.robot.robot_node --server --dry-run` |
 | ROS 2 client round-trip | ROS 2 | `python -m vla_pipeline.robot.robot_node --client-test` |
 | Gesture mimic | webcam | `python -m vla_pipeline.behaviors.gesture_mimic --dry-run` |
-| Pick and place | no (twin) | `pytest tests/sim -m "sim and not hw" -k pick` |
+| Pick and place | no (twin) | `./run_sim_tests.sh -k pick` |
 | Arm camera localization | arm (`--sim` = twin) | `python scripts/calibrate_arm_camera.py check --sim --object sports_ball --pan -14 --at 0.28 0.06` |
-| Fetch block | no (twin) | `pytest tests/sim -m "sim and not hw" -k fetch_block` |
+| Fetch block | no (twin) | `./run_sim_tests.sh -k fetch_block` |
 | Dance | no | `python -m vla_pipeline.behaviors.dance --dry-run` |
-| Grip | no (twin) | `pytest tests/sim -m "sim and not hw" -k grip` |
+| Grip | no (twin) | `./run_sim_tests.sh -k grip` |
 | Wave / home | no | `python -m vla_pipeline.behaviors.simple --behavior wave --dry-run` |
 
 A lightweight **always-on-top resource HUD** for live demos ships with the
@@ -587,33 +625,20 @@ inferences/sec** (or Idle) over every window - the consolidated cousin of
 
 ## Automated tests
 
-Run every automated test, for the pipeline and workshop stacks and for the workshop notebooks, with one command:
+Two commands. A CI runner on a Ryzen AI machine runs both. On a Strix Halo the pair takes about 20 minutes.
 
 ```bash
-cd workshop
-./run_notebooks.sh --test
+cd workshop && ./run_notebooks.sh --test    # notebooks and the Instructor's corner
+./run_sim_tests.sh                          # NPU load order and the twin stacks
 ```
 
-It does the setup [workshop/README.md](workshop/README.md) describes: the `.venv`, the Ryzen AI runtime, ROS 2, the `vvla-workshop` kernel and llama-server on the iGPU. Then it runs these, in that environment:
+`./run_notebooks.sh --test` does the setup [workshop/README.md](workshop/README.md) describes: the `.venv`, the Ryzen AI runtime, ROS 2, the `vvla-workshop` kernel and llama-server on the iGPU. Then it runs the notebooks in `workshop/notebooks/`, in the README's order, and the README's Instructor's corner commands. The notebooks need llama-server, which that command starts.
 
-| Tests | What they check |
-|---|---|
-| `tests/npu` | YOLO-pose and YOLO-detect get NPU sessions |
-| The stacks: `tests/sim -m "sim and not docs"` | The pipeline and the workshop on the MuJoCo twin, in one process and over ROS 2: pickups, grip, fetch, mimic, reset, kinematics, the servo model |
-| The notebooks: `tests/sim -m docs` | Every notebook in `workshop/notebooks/`, in the README's order, and the README's Instructor's corner commands |
+`./run_sim_tests.sh` uses the same `.venv`, Ryzen AI runtime, and ROS 2. It checks that YOLO-pose and YOLO-detect get NPU sessions, then runs the pipeline and the workshop on the MuJoCo twin, in one process and over ROS 2: pickups, grip, fetch, mimic, reset, kinematics, the servo model. It does not start llama-server or Jupyter.
 
-YOLO runs on the NPU, and Llama and the twin's rendering run on the iGPU. The twin stands in for the arm and its camera, and Ultralytics' `zidane.jpg` photo of people stands in for the webcam. The microphone is not used. No arm, camera or microphone has to be attached. The tests run headless on a private ROS domain, and the exit code is the result, so a CI runner on a Ryzen AI machine can run the command as it is. On a Strix Halo the whole run takes about 20 minutes.
+YOLO runs on the NPU, and Llama and the twin's rendering run on the iGPU. The twin stands in for the arm and its camera, and Ultralytics' `zidane.jpg` photo of people stands in for the webcam. The microphone is not used. No arm, camera or microphone has to be attached. The tests run headless on a private ROS domain, and the exit code is the result.
 
-Arguments after `--test` go to pytest, for example `./run_notebooks.sh --test -k toothbrush`. To run one part by hand:
-
-```bash
-source scripts/ryzen_ai_env.sh && source /opt/ros/jazzy/setup.bash
-pytest tests/sim -m "sim and not hw"    # the stacks in one process
-pytest tests/sim -m "hw and not docs"   # the stacks over ROS 2
-pytest tests/sim -m docs                # the notebooks and the Instructor's corner
-```
-
-The notebooks need llama-server running, which `--test` starts. `--sim-yolo-device cpu` runs YOLO on the CPU on a machine without an NPU. `--sim-video failed` keeps the recordings of failed tests only (by default every test is recorded to `_artifacts/sim_tests/`).
+Arguments after `./run_sim_tests.sh` select twin tests, for example `./run_sim_tests.sh -k toothbrush`. `--sim-yolo-device cpu` runs YOLO on the CPU on a machine without an NPU. `--sim-video failed` keeps the recordings of failed tests only (by default every test is recorded to `_artifacts/sim_tests/`).
 
 ## Configuration
 
@@ -638,7 +663,8 @@ All tunables live in `config/pipeline.yaml`:
 
 ## Troubleshooting
 
-- **"VitisAI EP not available — falling back to CPU"** — set `RYZEN_AI_WHEELS` and rerun `./bootstrap.sh`, and confirm the XDNA driver is loaded (`ls /dev/accel/`).
+- **"VitisAI EP not available — falling back to CPU"** — the NPU driver is missing or `xrt-smi examine` does not list an NPU. Install the four driver packages in [Installation](#installation), then set `RYZEN_AI_WHEELS` and rerun `./bootstrap.sh`. `ls /dev/accel/` must show the XDNA device.
+- **`recompile model with latest VAIML version`** — `cache/` was built with a different compiler than this driver. Delete `cache/yolo26s_pose_fp32` and `cache/yolo26s_detect_fp32` and compile again on this machine. Do not copy `cache/` from another computer.
 - **torch sees no GPU** — add yourself to `render`/`video` groups (`sudo usermod -a -G render,video $USER`) and reboot.
 - **`HW context creation unsuccessful` / `sub buffer size and offset` when loading a model on the NPU** — YOLO-pose was opened while YOLO-detect was already open in the same process. Open YOLO-pose first and keep that session (`size_npu`). See **Compute placement → NPU load order**.
 - **NPU model falls back to CPU unexpectedly** — check the startup logs; a model set to `npu` that can't get a session logs a warning and runs on CPU rather than crashing.

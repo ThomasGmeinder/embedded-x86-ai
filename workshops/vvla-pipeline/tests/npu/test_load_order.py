@@ -7,12 +7,12 @@
 
 """YOLO-pose and YOLO-detect land on the NPU when the detector is built first.
 
-    source scripts/ryzen_ai_env.sh && pytest tests/npu
+    ./run_sim_tests.sh
 
 The NPU buffers a process's models share live as long as it keeps an NPU
 session open, so each case runs in a fresh process. Needs the Ryzen AI runtime and
 the compiled YOLO models in ``cache/``; skipped without them, and failed without
-them when ``VVLA_TEST_STRICT=1`` (``run_notebooks.sh --test``). The Whisper case
+them when ``VVLA_TEST_STRICT=1`` (``./run_sim_tests.sh``). The Whisper case
 also needs Whisper's NPU cache, which the README's install does not build.
 """
 
