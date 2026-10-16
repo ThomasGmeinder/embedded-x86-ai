@@ -58,7 +58,11 @@ from vla_pipeline.utils.config import load_config
 
 try:  # ROS 2 is optional at import time so non-ROS machines can run dry tests
     import rclpy
-    from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor
+    from rclpy.executors import (
+        ExternalShutdownException,
+        MultiThreadedExecutor,
+        SingleThreadedExecutor,
+    )
     from rclpy.node import Node
     from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
     from sensor_msgs.msg import JointState
@@ -397,7 +401,8 @@ class Ros2ArmClient(ArmClient):
         # with a single thread" warning seen in the logs.
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
-        self._spin_thread = threading.Thread(target=self._executor.spin, daemon=True)
+        self._spin_stop = threading.Event()
+        self._spin_thread = threading.Thread(target=self._spin, daemon=True, name="so101_arm_client")
         self._spin_thread.start()
 
         deadline = time.time() + state_timeout_s
@@ -407,10 +412,21 @@ class Ros2ArmClient(ArmClient):
                     logger.info("Ros2ArmClient: state stream live.")
                     return
             time.sleep(0.05)
+        self.close()
         raise TimeoutError(
             f"No JointState on {r['state_topic']} within {state_timeout_s}s - "
             "is the server node running? (python -m vla_pipeline.robot.robot_node --server)"
         )
+
+    def _spin(self) -> None:
+        """Spin in short slices until :meth:`close`. A thread still inside
+        ``executor.spin()`` when Python exits aborts the process ("terminate
+        called without an active exception"), so ``close()`` must join it."""
+        while not self._spin_stop.is_set():
+            try:
+                self._executor.spin_once(timeout_sec=0.1)
+            except ExternalShutdownException:
+                return
 
     def _on_state(self, msg: "JointState") -> None:
         """Update the cached joint state and gripper effort from an incoming JointState."""
@@ -470,7 +486,9 @@ class Ros2ArmClient(ArmClient):
         self.gripper_torque_limit = msg.data
 
     def close(self) -> None:
-        """Shut down the executor and destroy the client node."""
+        """Stop and join the spin thread, then shut down the executor and destroy the node."""
+        self._spin_stop.set()
+        self._spin_thread.join(timeout=2.0)
         self._executor.shutdown()
         self._node.destroy_node()
 
