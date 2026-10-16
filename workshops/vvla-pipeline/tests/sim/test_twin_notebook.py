@@ -7,13 +7,14 @@
 
 """``02_digital_twin.ipynb`` section 5, driven the way JupyterLab drives it.
 
-The notebook runs top to bottom in the ``vvla-workshop`` kernel. Then the
-console cell (``c0000016``) runs for real: its ``ui_events`` loop and its
-dispatch thread. The test types into the console's text box and clicks its
-buttons with the same widget messages a browser sends. So a typed command
-takes the console's own path: ``submit`` -> ``voice.on_transcript`` -> the
-``voice.commands`` queue -> ``voice.dispatch_loop`` -> ``voice.run`` ->
-``handle_transcript`` (``voice`` is the notebook's ``common.twin_voice.VoiceCommands``).
+The module starts one ``vvla-workshop`` kernel and runs the notebook through
+``c0000014`` once. Each test runs only the console cell (``c0000016``): its
+``ui_events`` loop and its dispatch thread. The test types into the console's
+text box and clicks its buttons with the same widget messages a browser sends.
+So a typed command takes the console's own path: ``submit`` ->
+``voice.on_transcript`` -> the ``voice.commands`` queue -> ``voice.dispatch_loop``
+-> ``voice.run`` -> ``handle_transcript`` (``voice`` is the notebook's
+``common.twin_voice.VoiceCommands``).
 
 What the kernel does is checked three ways: a second client on the
 kernel's iopub channel (matched by content, so it does not matter which
@@ -25,8 +26,8 @@ The in-memory copy of the notebook starts with ``RIG_STANDINS``
 microphone. Whisper, Llama on the iGPU and YOLO on the NPU are real. The
 file on disk is not changed.
 
-``source scripts/ryzen_ai_env.sh && source /opt/ros/jazzy/setup.bash && pytest tests/sim -m docs``
-(without ``ryzen_ai_env.sh`` YOLO cannot load the NPU and the test fails). The
+``cd workshop && ./run_notebooks.sh --test``
+(without that setup YOLO cannot load the NPU and the test fails). The
 notebook kernel holds both YOLO NPU contexts, so this runs apart from the
 tests whose YOLO runs in the pytest process.
 """
@@ -35,12 +36,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
-from notebook_harness import NOTEBOOKS, Console, Watcher, cell_index, cell_stdout, client_for, kernel_env, until, with_standins
+from notebook_harness import (
+    NOTEBOOKS,
+    Console,
+    Watcher,
+    cell_index,
+    cell_stdout,
+    client_for,
+    kernel_env,
+    until,
+    with_standins,
+)
 from twin_ros_rig import BODY_JOINTS, Probe, join_test_domain, quat_close, xml_poses
 
 pytestmark = [pytest.mark.sim, pytest.mark.hw, pytest.mark.docs, pytest.mark.slow, pytest.mark.timeout(900)]
@@ -62,71 +75,21 @@ print("NS " + _json.dumps({
 }))
 '''
 
+# voice.reset_scene() returns None. It clears ctx.stop_event, which the console cell's finally leaves set.
+SETTLE = '''\
+voice.reset_scene()
+voice.trace.clear()
+console._log.clear()
+print("SETTLED")
+'''
 
-def run_console(script, end_with: str = "end session", after=None) -> tuple[dict, int]:
-    """Run the notebook through ``c0000014``, then ``script(console)`` against the live console cell.
+SESSIONS = '''\
+import json as _json
+print("SESSIONS " + _json.dumps(_SESSIONS))
+'''
 
-    ``end_with`` ends the session: the "end session" button, "interrupt"
-    (the kernel's stop button), or "rerun" (JupyterLab's run and advance on
-    the running console cell, then on the cleanup cell). ``after()`` (a
-    coroutine) runs once the console cell has ended. Returns the kernel
-    namespace read then, plus how the ending went (``ended_s``, ``parked``,
-    ``twin_alive``), and the twin node's pid. The cleanup cell ``c0000018``
-    runs last (after "rerun", it already ran).
-    """
-    from nbclient.exceptions import CellExecutionError
-
-    nb = with_standins(nbformat.read(NOTEBOOK, as_version=4))
-    nb.cells.append(nbformat.v4.new_code_cell(NAMESPACE))
-    upto, console_cell, cleanup = cell_index(nb, "c0000014"), cell_index(nb, "c0000016"), cell_index(nb, "c0000018")
-    probe_cell = len(nb.cells) - 1
-    client = client_for(nb, NOTEBOOK, timeout=900)
-
-    async def main():
-        async with client.async_setup_kernel(env=kernel_env()):
-            watcher = Watcher(client.km.get_connection_info())
-            try:
-                for i in range(upto + 1):
-                    await client.async_execute_cell(nb.cells[i], i)
-                task = asyncio.create_task(client.async_execute_cell(nb.cells[console_cell], console_cell))
-                console = Console(client, watcher)
-                try:
-                    await until(console.find_widgets, 60.0, "the console widgets")
-                    await script(console)
-                finally:
-                    ending = time.monotonic()
-                    if end_with == "interrupt":
-                        await client.km.interrupt_kernel()
-                    elif end_with == "rerun":
-                        for i in (console_cell, cleanup):
-                            client.kc.execute(nb.cells[i].source)
-                    elif console.widgets.get("end session"):
-                        console.click("end session")
-                    try:
-                        await asyncio.wait_for(task, timeout=120.0)
-                    except CellExecutionError as e:
-                        if end_with != "interrupt" or "KeyboardInterrupt" not in str(e):
-                            raise
-                ended_s = time.monotonic() - ending
-                if after is not None:
-                    await after()
-                await client.async_execute_cell(nb.cells[probe_cell], probe_cell)
-                line = next(t for t in cell_stdout(nb.cells[probe_cell]).splitlines() if t.startswith("NS "))
-                namespace = json.loads(line[3:])
-                namespace.update(
-                    ended_s=ended_s,
-                    parked=watcher.said("session ended, arm parked"),
-                    twin_alive=not _gone(namespace["pid"]),
-                )
-                if end_with != "rerun":
-                    await client.async_execute_cell(nb.cells[cleanup], cleanup)
-                return namespace
-            finally:
-                watcher.close()
-
-    namespace = asyncio.run(main())
-    return namespace, namespace["pid"]
-
+# Same line the notebook-run test rejects. Checked once on this kernel's whole transcript.
+_FALLBACK = re.compile(r"fall(s|ing)? back to (the )?cpu", re.I)
 
 def _gone(pid: int) -> bool:
     try:
@@ -134,6 +97,227 @@ def _gone(pid: int) -> bool:
     except FileNotFoundError:
         return True
     return state == "Z"
+
+
+def _assert_dispatcher_dead(namespace: dict) -> None:
+    assert not namespace["dispatcher_alive"], "the console's dispatch thread outlived end session"
+
+
+def _assert_yolo_on_npu(sessions) -> None:
+    yolo = [(model, provider) for model, provider in sessions if "yolo" in model.lower()]
+    assert yolo, "the notebook made no YOLO session"
+    off_npu = [(Path(model).name, provider) for model, provider in yolo if provider != "VitisAIExecutionProvider"]
+    assert not off_npu, f"YOLO ran off the NPU: {off_npu}"
+
+
+def _assert_twin_gone(pid: int) -> None:
+    deadline = time.time() + 15.0
+    while not _gone(pid) and time.time() < deadline:
+        time.sleep(0.1)
+    assert _gone(pid), "the cleanup cell left the twin node running"
+
+
+class NotebookKernel:
+    """One kernel for the module. Scenarios share it; the console cell is the part that re-runs.
+
+    ``nbclient`` binds the client to the loop that started the kernel, so that loop
+    lives on one thread and every scenario is submitted onto it.
+    """
+
+    def __init__(self):
+        self.watcher: Watcher | None = None
+        self.needs_new_kernel = False
+        self.last_pid: int | None = None
+        self.sessions = None
+        self._loop = asyncio.new_event_loop()
+        self._open = threading.Event()
+        self._closing = threading.Event()
+        self._down = threading.Event()
+        self._thread = threading.Thread(target=self._thread_main, name="twin-notebook", daemon=False)
+        self._serve_fut = None
+        self._load_notebook()
+
+    def _load_notebook(self) -> None:
+        self.nb = with_standins(nbformat.read(NOTEBOOK, as_version=4))
+        self.client = client_for(self.nb, NOTEBOOK, timeout=900)
+        self.console_cell = cell_index(self.nb, "c0000016")
+        self.cleanup = cell_index(self.nb, "c0000018")
+
+    def _thread_main(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def _call(self, coro):
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
+
+    def start(self) -> None:
+        self._thread.start()
+        self._serve_fut = asyncio.run_coroutine_threadsafe(self._serve(), self._loop)
+        try:
+            while not self._open.wait(0.2):
+                if self._serve_fut.done():
+                    self._serve_fut.result()
+        except Exception:
+            self.finish()
+            raise
+
+    def finish(self) -> None:
+        try:
+            # _down is set once the kernel process has exited. Coverage needs a live kernel.
+            if self._open.is_set() and not self._closing.is_set() and not self._down.is_set():
+                self._call(self._coverage_and_cleanup())
+        finally:
+            self._closing.set()
+            self._down.wait(timeout=180)
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._thread.join(timeout=30)
+
+    def run(self, script, end_with: str = "end session", after=None) -> dict:
+        """Run ``script`` against a fresh console cell. ``end_with`` is "end session", "interrupt", or "rerun"."""
+        return self._call(self._scenario(script, end_with, after))
+
+    async def _serve(self) -> None:
+        self._down.clear()
+        try:
+            async with self.client.async_setup_kernel(env=kernel_env()):
+                self.watcher = Watcher(self.client.km.get_connection_info())
+                try:
+                    await self._through("c0000014")
+                    self._open.set()
+                    while not self._closing.is_set():
+                        await asyncio.sleep(0.1)
+                finally:
+                    if self.watcher is not None:
+                        self.watcher.close()
+                        self.watcher = None
+        finally:
+            self._down.set()
+
+    async def _restart(self) -> None:
+        """SIGINT during mimic wedges the NPU session, and the rerun test closes the stack.
+
+        A new kernel process is the recovery. Re-running those cells in the same process
+        starts a second twin or dies with the wedged device.
+        """
+        self._closing.set()
+        while not self._down.is_set():
+            await asyncio.sleep(0.05)
+        self._closing.clear()
+        self._open.clear()
+        self._load_notebook()
+        asyncio.create_task(self._serve())
+        await asyncio.sleep(0)
+        deadline = time.monotonic() + 900
+        while not self._open.is_set():
+            if self._down.is_set():
+                raise RuntimeError("the notebook kernel did not come back")
+            if time.monotonic() > deadline:
+                raise TimeoutError("the notebook kernel did not come back")
+            await asyncio.sleep(0.1)
+
+    async def _through(self, cell_id: str) -> None:
+        for i in range(cell_index(self.nb, cell_id) + 1):
+            await self.client.async_execute_cell(self.nb.cells[i], i)
+
+    async def _execute_new(self, source: str) -> str:
+        cell = nbformat.v4.new_code_cell(source)
+        self.nb.cells.append(cell)
+        await self.client.async_execute_cell(cell, len(self.nb.cells) - 1)
+        return cell_stdout(cell)
+
+    async def _probe(self) -> dict:
+        text = await self._execute_new(NAMESPACE)
+        line = next(t for t in reversed(text.splitlines()) if t.startswith("NS "))
+        return json.loads(line[3:])
+
+    async def _settle(self) -> None:
+        text = await self._execute_new(SETTLE)
+        if "reset failed" in text or "SETTLED" not in text:
+            raise RuntimeError(f"voice.reset_scene() did not park the arm:\n{text}")
+
+    async def _end_cell(self, task, console: Console, end_with: str) -> float:
+        from nbclient.exceptions import CellExecutionError
+
+        ending = time.monotonic()
+        if end_with == "interrupt":
+            await self.client.km.interrupt_kernel()
+        elif end_with == "rerun":
+            for i in (self.console_cell, self.cleanup):
+                self.client.kc.execute(self.nb.cells[i].source)
+        elif not task.done() and console.widgets.get("end session"):
+            console.click("end session")
+        try:
+            await asyncio.wait_for(task, timeout=120.0)
+        except asyncio.TimeoutError:
+            await self.client.km.interrupt_kernel()
+            raise
+        except CellExecutionError as e:
+            if end_with != "interrupt" or "KeyboardInterrupt" not in str(e):
+                raise
+        return time.monotonic() - ending
+
+    async def _scenario(self, script, end_with: str, after) -> dict:
+        if self.needs_new_kernel:
+            await self._restart()
+            self.needs_new_kernel = False
+        assert self.watcher is not None
+        mark = self.watcher.mark()
+        task = asyncio.create_task(
+            self.client.async_execute_cell(self.nb.cells[self.console_cell], self.console_cell)
+        )
+        console = Console(self.client, self.watcher, before=set(self.client.widget_state), since=mark)
+        error = None
+        try:
+            await until(console.find_widgets, 60.0, "the console widgets")
+            await script(console)
+        except Exception as e:
+            error = e
+        ended_s = await self._end_cell(task, console, end_with)
+        if error is None and after is not None:
+            try:
+                await after()
+            except Exception as e:
+                error = e
+        try:
+            namespace = await self._probe()
+        except Exception as e:
+            self.needs_new_kernel = True
+            raise error or e
+        namespace.update(
+            ended_s=ended_s,
+            parked=self.watcher.said("session ended, arm parked", since=mark),
+            twin_alive=not _gone(namespace["pid"]),
+        )
+        self.last_pid = namespace["pid"]
+        self.sessions = namespace["sessions"]
+        if end_with in ("rerun", "interrupt"):
+            # Interrupt wedges the NPU session. Rerun already ran the cleanup cell.
+            # Either way the next scenario needs its own kernel. The probe above already
+            # recorded whether this scenario's twin was still alive.
+            self.needs_new_kernel = True
+        elif error is None:
+            await self._settle()
+        if error is not None:
+            raise error
+        return namespace
+
+    async def _coverage_and_cleanup(self) -> None:
+        sessions = self.sessions
+        try:
+            text = await self._execute_new(SESSIONS)
+            line = next(t for t in reversed(text.splitlines()) if t.startswith("SESSIONS "))
+            sessions = json.loads(line[len("SESSIONS "):])
+        except Exception:
+            if sessions is None:
+                raise
+        _assert_yolo_on_npu(sessions)
+        assert self.watcher is not None
+        fallback = [line.strip() for line in self.watcher.text().splitlines() if _FALLBACK.search(line)]
+        assert not fallback, f"02_digital_twin fell back to the CPU: {fallback}"
+        if self.last_pid is not None and not _gone(self.last_pid):
+            # A second hands.close() raises, so skip this when a scenario already ran c0000018.
+            await self.client.async_execute_cell(self.nb.cells[self.cleanup], self.cleanup)
+            _assert_twin_gone(self.last_pid)
 
 
 @pytest.fixture(scope="module")
@@ -148,25 +332,18 @@ def observers(workshop_cfg):
     probe.close()
 
 
-@pytest.fixture
-def no_twin(observers, workshop_cfg):
+@pytest.fixture(scope="module")
+def kernel(observers, workshop_cfg):
     probe, _scene = observers
     state = workshop_cfg["robot"]["state_topic"]
     assert probe.wait_publishers(state, 0, timeout=15), "a twin already runs on the test domain"
-    yield
+    session = NotebookKernel()
+    session.start()
+    try:
+        yield session
+    finally:
+        session.finish()
     assert probe.wait_publishers(state, 0, timeout=20), "the notebook's twin node outlived its cleanup cell"
-
-
-def _assert_closed(namespace: dict, pid: int) -> None:
-    yolo = [(model, provider) for model, provider in namespace["sessions"] if "yolo" in model.lower()]
-    assert yolo, "the notebook made no YOLO session"
-    off_npu = [(Path(model).name, provider) for model, provider in yolo if provider != "VitisAIExecutionProvider"]
-    assert not off_npu, f"YOLO ran off the NPU: {off_npu}"
-    assert not namespace["dispatcher_alive"], "the console's dispatch thread outlived end session"
-    deadline = time.time() + 15.0
-    while not _gone(pid) and time.time() < deadline:
-        time.sleep(0.1)
-    assert _gone(pid), "the cleanup cell left the twin node running"
 
 
 @pytest.mark.parametrize(
@@ -178,7 +355,7 @@ def _assert_closed(namespace: dict, pid: int) -> None:
     ],
     ids=["ball", "bottle", "toothbrush"],
 )
-def test_console_pickup(observers, no_twin, text, body, spoken):
+def test_console_pickup(observers, kernel, text, body, spoken):
     _probe, scene = observers
     seen = {}
 
@@ -187,19 +364,19 @@ def test_console_pickup(observers, no_twin, text, body, spoken):
         record = await console.record(text)
         seen["record"] = record
         seen["reading"] = scene.reading(body, after=time.time(), timeout=5.0)
-        await until(lambda: console.watcher.said(f"Got the {spoken}"), 5.0, f"'Got the {spoken}'")
+        await until(lambda: console.said(f"Got the {spoken}"), 5.0, f"'Got the {spoken}'")
 
-    namespace, pid = run_console(script)
+    namespace = kernel.run(script)
     record, reading = seen["record"], seen["reading"]
     assert record["body"] == body
     assert record["grasped"], record
     assert record["z"] - record["z0"] > 0.03, record
     assert reading["grasped"] and reading["xyz"][2] > 0.08, reading
     assert namespace["trace"] == [record], "the namespace trace and the iopub record differ"
-    _assert_closed(namespace, pid)
+    _assert_dispatcher_dead(namespace)
 
 
-def test_console_reset(observers, no_twin, workshop_cfg):
+def test_console_reset(observers, kernel, workshop_cfg):
     from common.motion import REST_POSE
 
     probe, scene = observers
@@ -211,14 +388,14 @@ def test_console_reset(observers, no_twin, workshop_cfg):
         first = await console.record("pick up the toothbrush")
         assert first["grasped"], first
         console.click("reset")
-        await until(lambda: console.watcher.said(RESET_LINE), 15.0, "the reset line")
+        await until(lambda: console.said(RESET_LINE), 15.0, "the reset line")
         await asyncio.sleep(1.5)  # the props settle; the servos reach the parked goal
         seen["scene"] = scene.latest(after=time.time(), timeout=5.0)
         seen["joints"] = probe.joints(after=time.time(), timeout=5.0)
         console.type("pick up the ball")
         seen["ball"] = await console.record("pick up the ball")
 
-    namespace, pid = run_console(script)
+    namespace = kernel.run(script)
     for name, qpos in home.items():
         got = seen["scene"]["bodies"][name]
         assert got["xyz"] == pytest.approx(list(qpos[:3]), abs=0.01), name
@@ -233,7 +410,7 @@ def test_console_reset(observers, no_twin, workshop_cfg):
     assert [r["text"] for r in namespace["trace"]] == ["pick up the toothbrush", "pick up the ball"]
     panel = " ".join(line.strip() for line in namespace["log"])  # the panel wraps long lines
     assert f"robot: {RESET_LINE}" in panel, namespace["log"]
-    _assert_closed(namespace, pid)
+    _assert_dispatcher_dead(namespace)
 
 
 def _arm_moved(probe, start) -> bool:
@@ -241,9 +418,9 @@ def _arm_moved(probe, start) -> bool:
     return bool(j) and max(abs(j[k] - start[k]) for k in BODY_JOINTS) > 3.0
 
 
-def test_console_end_session_during_mimic(observers, no_twin):
+def test_console_end_session_during_mimic(observers, kernel):
     """"end session" while the arm mirrors the webcam: the console cell ends
-    within 20 s and parks the arm, and the cleanup cell closes the twin."""
+    within 20 s and parks the arm. The module teardown closes the twin once."""
     probe, _scene = observers
 
     async def script(console):
@@ -251,13 +428,13 @@ def test_console_end_session_during_mimic(observers, no_twin):
         console.type("copy my movements")
         await until(lambda: _arm_moved(probe, start), 30.0, "the arm to follow the webcam")
 
-    namespace, pid = run_console(script)
+    namespace = kernel.run(script)
     assert namespace["ended_s"] < 20.0, f"the console cell took {namespace['ended_s']:.0f} s to end"
     assert namespace["parked"], "the console cell did not park the arm"
-    _assert_closed(namespace, pid)
+    _assert_dispatcher_dead(namespace)
 
 
-def test_console_interrupted(observers, no_twin):
+def test_console_interrupted(observers, kernel):
     """The kernel's stop button ends the console like "end session": the arm
     parks at rest, and the twin keeps running until the cleanup cell closes it."""
     from common.motion import REST_POSE
@@ -273,7 +450,7 @@ def test_console_interrupted(observers, no_twin):
     async def after():
         seen["joints"] = probe.joints(after=time.time(), timeout=5.0)
 
-    namespace, pid = run_console(script, end_with="interrupt", after=after)
+    namespace = kernel.run(script, end_with="interrupt", after=after)
     assert namespace["ended_s"] < 20.0, f"the console cell took {namespace['ended_s']:.0f} s to end"
     assert namespace["parked"], "the interrupted console cell did not park the arm"
     assert namespace["twin_alive"], "the kernel's stop button also stopped the twin program"
@@ -281,10 +458,10 @@ def test_console_interrupted(observers, no_twin):
     assert joints, "no joint state from the twin after the interrupt"
     off = {k: round(joints[k] - REST_POSE[k], 1) for k in BODY_JOINTS if abs(joints[k] - REST_POSE[k]) > 4.0}
     assert not off, f"the arm did not reach rest after the interrupt: {off}"
-    _assert_closed(namespace, pid)
+    _assert_dispatcher_dead(namespace)
 
 
-def test_console_run_and_advance(observers, no_twin):
+def test_console_run_and_advance(observers, kernel):
     """Run and advance on the running console cell, then on the cleanup cell:
     the session ends and parks the arm, the console cell does not start a
     second session, and the cleanup cell closes the twin."""
@@ -299,20 +476,21 @@ def test_console_run_and_advance(observers, no_twin):
 
     async def after():
         console = seen["console"]
-        await until(lambda: console.watcher.said("twin closed"), 60.0, "the cleanup cell's 'twin closed'")
+        await until(lambda: console.said("twin closed"), 60.0, "the cleanup cell's 'twin closed'")
         console._client.kc.execute('print("kernel free")')
-        await until(lambda: console.watcher.said("kernel free"), 30.0, "a cell run after the cleanup")
-        seen["parked"] = console.watcher.text().count("session ended, arm parked")
+        await until(lambda: console.said("kernel free"), 30.0, "a cell run after the cleanup")
+        seen["parked"] = console.count("session ended, arm parked")
 
-    namespace, pid = run_console(script, end_with="rerun", after=after)
+    namespace = kernel.run(script, end_with="rerun", after=after)
     assert namespace["ended_s"] < 20.0, f"the console cell took {namespace['ended_s']:.0f} s to end"
     assert seen["parked"] == 1, "the console cell ran a second session"
-    _assert_closed(namespace, pid)
+    _assert_dispatcher_dead(namespace)
+    _assert_twin_gone(namespace["pid"])
 
 
-def test_console_stop(observers, no_twin):
-    """The red stop button ends the console cell: the in-flight pickup is not a grasp,
-    the arm parks, and the cleanup cell closes the twin. Saying "stop" only halts the behavior."""
+def test_console_stop(observers, kernel):
+    """The red stop button ends the console cell: the in-flight pickup is not a grasp
+    and the arm parks. Saying "stop" only halts the behavior. The module teardown closes the twin."""
     from common.motion import REST_POSE
 
     probe, _scene = observers
@@ -328,11 +506,11 @@ def test_console_stop(observers, no_twin):
 
         await until(moving, 30.0, "the arm to start moving")
         console.click("stop")
-        await until(lambda: console.watcher.said("session ended, arm parked"), 20.0, "the console cell to end")
+        await until(lambda: console.said("session ended, arm parked"), 20.0, "the console cell to end")
         seen["record"] = await console.record("pick up the bottle", timeout=30.0)
         seen["joints"] = probe.joints(after=time.time(), timeout=5.0)
 
-    namespace, pid = run_console(script)
+    namespace = kernel.run(script)
     assert namespace["ended_s"] < 20.0, f"the console cell took {namespace['ended_s']:.0f} s to end"
     assert namespace["parked"], "the stop button did not end the console cell"
     assert seen["record"]["grasped"] is False, seen["record"]
@@ -341,4 +519,4 @@ def test_console_stop(observers, no_twin):
     assert joints, "no joint state from the twin after stop"
     off = {k: round(joints[k] - REST_POSE[k], 1) for k in BODY_JOINTS if abs(joints[k] - REST_POSE[k]) > 4.0}
     assert not off, f"the arm did not reach rest after stop: {off}"
-    _assert_closed(namespace, pid)
+    _assert_dispatcher_dead(namespace)

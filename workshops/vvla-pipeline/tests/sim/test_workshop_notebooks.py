@@ -41,7 +41,13 @@ def _readme_order() -> list[str]:
 
 
 ORDER = _readme_order()
-PATHS = [path for folder in ORDER for path in sorted((NOTEBOOKS / folder).glob("*.ipynb"))]
+# 02_digital_twin runs in test_twin_notebook: one kernel, then every console scenario.
+PATHS = [
+    path
+    for folder in ORDER
+    for path in sorted((NOTEBOOKS / folder).glob("*.ipynb"))
+    if path.name != "02_digital_twin.ipynb"
+]
 
 # The student's actions in each live cell (by cell id); any other live cell is watched for 3 s.
 SCRIPTS = {

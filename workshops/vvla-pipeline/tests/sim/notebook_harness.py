@@ -207,26 +207,53 @@ class Watcher:
                     if isinstance(record, dict) and "text" in record:
                         self.records.append(record)
 
-    def mark(self) -> int:
+    def mark(self) -> "Mark":
+        """Cursor for output that arrives after this call. Earlier scenarios stay behind it."""
         with self._lock:
-            return len(self.stdout)
+            return Mark(len(self.stdout), len(self.records))
 
-    def said(self, phrase: str, since: int = 0) -> bool:
+    def said(self, phrase: str, since: "Mark | int" = 0) -> bool:
         with self._lock:
-            return phrase in "".join(self.stdout[since:])
+            return phrase in "".join(self.stdout[_stdout_at(since):])
+
+    def count(self, phrase: str, since: "Mark | int" = 0) -> int:
+        with self._lock:
+            return "".join(self.stdout[_stdout_at(since):]).count(phrase)
 
     def text(self) -> str:
         with self._lock:
             return "".join(self.stdout) + "".join(self.stderr)
 
-    def record(self, text: str) -> dict | None:
+    def record(self, text: str, since: "Mark | int" = 0) -> dict | None:
+        """The latest record of ``text`` after ``since``.
+
+        The latest record in the whole list is still the previous scenario's until
+        this command finishes, so a wait has to start behind the mark.
+        """
         with self._lock:
-            return next((r for r in self.records if r["text"] == text), None)
+            found = [r for r in self.records[_records_at(since):] if r["text"] == text]
+            return found[-1] if found else None
 
     def close(self) -> None:
         self._running = False
         self._thread.join(timeout=2.0)
         self._kc.stop_channels()
+
+
+@dataclass(frozen=True)
+class Mark:
+    """How far the watcher had read when a scenario began."""
+
+    stdout: int = 0
+    records: int = 0
+
+
+def _stdout_at(since: Mark | int) -> int:
+    return since.stdout if isinstance(since, Mark) else int(since)
+
+
+def _records_at(since: Mark | int) -> int:
+    return since.records if isinstance(since, Mark) else 0
 
 
 async def until(predicate, timeout: float, what: str):
@@ -242,11 +269,18 @@ async def until(predicate, timeout: float, what: str):
 class Console:
     """Widgets of a running cell, found by label, and the messages a browser sends them."""
 
-    def __init__(self, client, watcher: Watcher, before: set | None = None):
+    def __init__(self, client, watcher: Watcher, before: set | None = None, since: Mark | int = 0):
         self._client = client
         self.watcher = watcher
         self._before = set(before or ())
+        self.since = since
         self.widgets: dict[str, str] = {}
+
+    def said(self, phrase: str) -> bool:
+        return self.watcher.said(phrase, since=self.since)
+
+    def count(self, phrase: str) -> int:
+        return self.watcher.count(phrase, since=self.since)
 
     def _new(self):
         return {cid: s for cid, s in self._client.widget_state.items() if cid not in self._before}
@@ -283,7 +317,7 @@ class Console:
         self._send(comm_id, {"method": "custom", "content": {"event": "click"}})
 
     async def record(self, text: str, timeout: float = 240.0) -> dict:
-        return await until(lambda: self.watcher.record(text), timeout, f"the record of {text!r}")
+        return await until(lambda: self.watcher.record(text, since=self.since), timeout, f"the record of {text!r}")
 
 
 def cell_index(nb, cell_id: str) -> int:
