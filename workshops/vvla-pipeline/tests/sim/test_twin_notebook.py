@@ -11,9 +11,9 @@ The notebook runs top to bottom in the ``vvla-workshop`` kernel. Then the
 console cell (``c0000016``) runs for real: its ``ui_events`` loop and its
 dispatch thread. The test types into the console's text box and clicks its
 buttons with the same widget messages a browser sends. So a typed command
-takes the console's own path: ``submit`` -> ``on_transcript`` -> the
-``commands`` queue -> ``dispatch_loop`` -> ``run_command`` ->
-``handle_transcript``.
+takes the console's own path: ``submit`` -> ``voice.on_transcript`` -> the
+``voice.commands`` queue -> ``voice.dispatch_loop`` -> ``voice.run`` ->
+``handle_transcript`` (``voice`` is the notebook's ``common.twin_voice.VoiceCommands``).
 
 What the kernel does is checked three ways: a second client on the
 kernel's iopub channel (matched by content, so it does not matter which
@@ -25,7 +25,8 @@ The in-memory copy of the notebook starts with ``RIG_STANDINS``
 microphone. Whisper, Llama on the iGPU and YOLO on the NPU are real. The
 file on disk is not changed.
 
-``source /opt/ros/jazzy/setup.bash && pytest tests/sim -m docs``. The
+``source scripts/ryzen_ai_env.sh && source /opt/ros/jazzy/setup.bash && pytest tests/sim -m docs``
+(without ``ryzen_ai_env.sh`` YOLO cannot load the NPU and the test fails). The
 notebook kernel holds both YOLO NPU contexts, so this runs apart from the
 tests whose YOLO runs in the pytest process.
 """
@@ -48,12 +49,12 @@ nbformat = pytest.importorskip("nbformat")
 pytest.importorskip("nbclient")
 
 NOTEBOOK = NOTEBOOKS / "03_integration" / "02_digital_twin.ipynb"
-RESET_LINE = "Reset. Arm parked, objects back on the table."
+RESET_LINE = "Reset. Arm parked, objects back on the table."  # common.twin_voice.RESET_LINE
 
 NAMESPACE = '''\
 import json as _json
 print("NS " + _json.dumps({
-    "trace": pickup_trace,
+    "trace": voice.trace,
     "dispatcher_alive": dispatcher.is_alive(),
     "log": [line for line, _color in console._log],
     "pid": twin.pid,

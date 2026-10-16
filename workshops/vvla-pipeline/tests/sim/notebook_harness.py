@@ -22,7 +22,9 @@ and ``REPORT`` last. The rig's hardware is replaced, nothing else:
 * the microphone: none (Whisper still loads; Llama stays real).
 
 ``RIG_STANDINS`` also records every ONNX Runtime session the kernel makes,
-with the provider it got, so a test can check where YOLO ran.
+with the provider it got, so a test can check where YOLO ran, and turns on
+``common.twin_voice.REPORT_RECORDS`` so each console command's record
+reaches the kernel's output, where :meth:`Watcher.record` finds it.
 """
 
 from __future__ import annotations
@@ -149,6 +151,10 @@ class _NoMic:
 
 
 _speech.MicListener = _NoMic
+
+import common.twin_voice as _twin_voice
+
+_twin_voice.REPORT_RECORDS = True  # the test reads each command's record from the kernel's output
 '''
 
 REPORT = '''\

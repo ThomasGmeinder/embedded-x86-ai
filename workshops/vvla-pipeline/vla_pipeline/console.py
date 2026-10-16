@@ -40,6 +40,7 @@ LOG_LINES = (VIEW_H - 230) // 20  # what fits between the header and the arm HUD
 PANEL_W = 400
 FPS = 15.0
 IDLE_AFTER_S = 0.5  # a model untouched this long is run by the console itself
+_PROCESSOR = {"VitisAIExecutionProvider": "NPU", "CPUExecutionProvider": "CPU"}
 SHORT = {
     "shoulder_pan": "pan",
     "shoulder_lift": "lift",
@@ -173,10 +174,12 @@ class ModelTap:
         return time.monotonic() - self._stamp > IDLE_AFTER_S
 
     def provider(self) -> str:
+        """The processor the model runs on, for a tile title: NPU, CPU, or the provider's name."""
         session = getattr(self.obj, "session", None)
         if session is None:
             return "CPU"
-        return session.get_providers()[0].replace("ExecutionProvider", "")
+        p = session.get_providers()[0]
+        return _PROCESSOR.get(p, p.replace("ExecutionProvider", ""))
 
 
 def _view_source(cfg: dict):

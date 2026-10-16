@@ -203,9 +203,46 @@ def _bar(img, x, y, w, h, frac, color, mark: float | None = None) -> None:
         cv2.line(img, (mx, y - 3), (mx, y + h + 3), WHITE, 1)
 
 
+PROCESSOR = {"VitisAIExecutionProvider": "NPU", "CPUExecutionProvider": "CPU"}
+
+
 def _provider(model, default: str = "CPU") -> str:
-    p = getattr(model, "provider", None) or default
-    return str(p).replace("ExecutionProvider", "")
+    """The processor a model runs on, for a tile title: NPU, CPU, or the provider's name."""
+    p = str(getattr(model, "provider", None) or default)
+    return PROCESSOR.get(p, p.replace("ExecutionProvider", ""))
+
+
+def jpeg(img: np.ndarray, quality: int = 80) -> bytes:
+    """``img`` as JPEG bytes, what a notebook ``widgets.Image`` shows."""
+    return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])[1].tobytes()
+
+
+def open_webcam(cfg: dict):
+    """The webcam, YOLO-pose and MediaPipe Hands: ``(camera, pose, hands)``.
+
+    A scripted person stands in when the webcam gives no frame, for example
+    because another kernel holds it.
+    """
+    from common.fixtures import ScriptedHands, ScriptedPose, SyntheticCamera
+    from common.quiet import QuietHands, quiet_stderr
+    from models.hands import HandTracker
+    from models.vision import PoseEstimator
+    from ros.camera_client import make_camera
+
+    pose = PoseEstimator(cfg)
+    # MediaPipe's C++ init writes to stderr (absl, EGL, TFLite); QuietHands
+    # keeps later detections quiet too.
+    with quiet_stderr():
+        hands = QuietHands(HandTracker(cfg))
+        hands.process(np.zeros((64, 64, 3), np.uint8))
+    cam = make_camera(cfg, "operator")
+    if cam.read()[0]:
+        return cam, pose, hands
+    cam.close()
+    hands.close()
+    device = cfg["cameras"]["operator"].get("device")
+    print(f"webcam: no frames from {device} (in use by another kernel?) - a scripted person stands in")
+    return SyntheticCamera(), ScriptedPose(), ScriptedHands()
 
 
 class TwinConsole:
@@ -411,18 +448,24 @@ class TwinConsole:
                 cv2.putText(p, "   ".join(parts[i : i + 3]), (12, y + 36 + 18 * (i // 3)),
                             FONT, 0.42, GRAY, 1, cv2.LINE_AA)
 
+    def _webcam_tiles(self, frame) -> list[np.ndarray]:
+        pose, hands = self._pose_tile(frame).copy(), self._hands_tile(frame).copy()
+        _title(pose, f"operator: YOLO pose [{_provider(self._pose, 'off')}]")
+        _title(hands, f"operator: MediaPipe hands [{'CPU' if self._hands else 'off'}]")
+        return [pose, hands]
+
+    def webcam_tiles(self) -> np.ndarray:
+        """The console's two webcam tiles, YOLO pose and MediaPipe hands, side by side."""
+        frame = self.operator.latest() if self.operator is not None else None
+        return np.hstack(self._webcam_tiles(frame))
+
     def compose(self) -> np.ndarray:
         """One 1200 x 1100 BGR frame of the whole console."""
         operator_frame = self.operator.latest() if self.operator is not None else None
         armcam = self.armcam.latest() if self.armcam is not None else None
-        tiles = [
-            self._pose_tile(operator_frame).copy(),
-            self._hands_tile(operator_frame).copy(),
-            self._detect_tile(armcam).copy(),
-        ]
-        _title(tiles[0], f"operator: YOLO pose [{_provider(self._pose, 'off')}]")
-        _title(tiles[1], f"operator: MediaPipe hands [{'CPU' if self._hands else 'off'}]")
-        _title(tiles[2], f"arm: YOLO detect [{_provider(self._detector, 'off')}]")
+        detect = self._detect_tile(armcam).copy()
+        _title(detect, f"arm: YOLO detect [{_provider(self._detector, 'off')}]")
+        tiles = [*self._webcam_tiles(operator_frame), detect]
         return np.vstack([np.hstack(tiles), np.hstack([self._view_tile(), self._panel()])])
 
     def close(self) -> None:
