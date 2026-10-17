@@ -12,16 +12,17 @@ in any YOLO project - nothing here is AMD- or ROS-specific, which is exactly
 why it is provided instead of being a TODO. Read it once so you know what the
 helpers hand you; then spend your time on the NPU/ROS/wiring TODOs.
 
-Model heads. An end-to-end export needs no NMS:
-
-- YOLOv26s-pose:   ``[1, 300, 57]`` = xyxy, score, class, 17*(x, y, v)
-- YOLOv26s-detect: ``[1, 300, 6]``  = xyxy, score, class
-
-The default ultralytics ONNX export leaves the raw head instead (``nms``
-defaults to ``None``, which turns the end-to-end branch off):
+Model heads. The workshop export leaves ``nms`` unset, so the file is the
+raw one-to-many head and this module runs NMS:
 
 - YOLOv26s-pose:   ``[1, 56, 8400]`` = xywh, score, 17*(x, y, v)
 - YOLOv26s-detect: ``[1, 84, 8400]`` = xywh, 80 class scores
+
+``nms=False`` exports the one-to-one head (pose ``[1, 300, 57]``, detect
+``[1, 300, 6]``). That head does not go through NMS here, and its class
+scores are much lower. On the digital twin the sports ball scores 0.17 on
+the NPU at the default pose against 0.44 for the raw head, and 0.005
+against 0.72 when the ball is on the right. The decoders still accept it.
 """
 
 from __future__ import annotations
