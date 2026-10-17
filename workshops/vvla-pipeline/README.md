@@ -361,9 +361,8 @@ Unpack the software installer into `~/ryzen_ai-1.7.1` and create its virtual env
 
 ```bash
 mkdir -p ~/ryzen_ai-1.7.1
-cp ~/Downloads/ryzen_ai-1.7.1.tgz ~/ryzen_ai-1.7.1/
 cd ~/ryzen_ai-1.7.1
-tar -xvzf ryzen_ai-1.7.1.tgz
+tar -xvzf ~/Downloads/ryzen_ai-1.7.1.tgz
 ./install_ryzen_ai.sh -a yes -p $PWD/venv
 source /opt/xilinx/xrt/setup.sh
 source $PWD/venv/bin/activate
@@ -380,7 +379,7 @@ export RYZEN_AI_WHEELS=~/ryzen_ai-1.7.1
 cd embedded-x86-ai/workshops/vvla-pipeline
 ./bootstrap.sh --skip-compile
 source .venv/bin/activate
-pip install 'ultralytics' 'numpy==1.26.4' 'opencv-contrib-python==4.11.0.86'
+pip install 'ultralytics' 'onnxslim>=0.1.82' 'numpy==1.26.4' 'opencv-contrib-python==4.11.0.86'
 python scripts/export_yolo26s_pose.py
 python scripts/export_yolo26s_detect.py
 deactivate
