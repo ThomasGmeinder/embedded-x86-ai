@@ -31,6 +31,7 @@
 #   4. Builds llama.cpp with HIP/ROCm for the DETECTED arch into third_party/
 #   5. Downloads the models:
 #        - Whisper-base ONNX encoder/decoder
+#        - Whisper tokenizer + feature extractor (openai/whisper-base.en)
 #        - Llama-3.2-3B-Instruct GGUF Q4_K_M        (hf download)
 #      YOLO ONNX export is manual (Ultralytics is AGPL-3.0). See the README:
 #        python scripts/export_yolo26s_pose.py
@@ -574,6 +575,18 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# 4c2. SO-101 digital twin (run_pipeline.sh --digital-twin, app.py --digital-twin)
+# -----------------------------------------------------------------------------
+# Editable and --no-deps so the twin can't re-resolve numpy; its deps are
+# installed alongside numpy<2. The STL meshes are fetched (pinned + checksummed)
+# rather than committed.
+log "Installing the SO-101 digital twin (so101_sim, MuJoCo)"
+uv pip install 'mujoco>=3.1.3' 'PyOpenGL>=3.1' 'numpy<2' \
+  && uv pip install --no-deps -e "${REPO_ROOT}/so101_sim" \
+  && python -m so101_sim.assets \
+  || warn "Digital twin install incomplete - --digital-twin will not work. Retry: python -m so101_sim.assets"
+
+# -----------------------------------------------------------------------------
 # 4d. Enforce GUI-enabled OpenCV (LAST pip action, like onnxruntime)
 # -----------------------------------------------------------------------------
 # yolo_pose_npu.py and the mediapipe demo open windows via cv2.imshow(), which
@@ -608,6 +621,16 @@ dest = resolve(cfg.get("system", {}).get("models_dir", "models")) / mt
 enc, dec = download_whisper_onnx(mt, dest_dir=dest)
 print("encoder:", enc)
 print("decoder:", dec)
+PY
+
+  log "Caching the Whisper tokenizer and feature extractor"
+  PYTHONPATH="${REPO_ROOT}" python - <<'PY' || warn "Whisper tokenizer download failed - the first voice run will try Hugging Face again. Check the network, then rerun ./bootstrap.sh --skip-apt --skip-llama."
+from vla_pipeline.audio.whisper_npu import download_whisper_tokenizer
+from vla_pipeline.utils.config import load_config
+cfg = load_config()
+w = cfg["whisper"]
+tok = download_whisper_tokenizer(w.get("model_type", "whisper-base"), w.get("tokenizer"))
+print("tokenizer:", tok)
 PY
 
   log "YOLO ONNX export is a manual setup step — see README"
