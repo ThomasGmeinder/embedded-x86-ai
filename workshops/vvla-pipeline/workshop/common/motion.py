@@ -254,10 +254,14 @@ class ArmClient(ABC):
 
         Unlike streaming, this lets the servo's onboard controller produce
         the motion - smooth and continuous instead of host-stepped. "Settled"
-        is judged on the body joints only ("within ``tolerance_deg``", or "no
-        longer making progress" - a joint straining at a range limit never
-        reads exactly on target). The gripper's open-fraction readback needn't converge,
-        so a gripper-only move just gets ``gripper_settle_s`` to travel. ``stop_check`` aborts and halts the arm where it is.
+        is within ``tolerance_deg`` on the body joints. A joint straining at a
+        range limit never reads exactly on target, so a pause also counts:
+        ``settle_dwell_s`` once the arm is already within twice that tolerance,
+        and a full second when it is still far. A short hitch in the joint
+        reading must not end the move while tens of degrees are left. The
+        gripper's open-fraction readback needn't converge, so a gripper-only
+        move just gets ``gripper_settle_s`` to travel. ``stop_check`` aborts
+        and halts the arm where it is.
         """
         previous = self._send_limits
         self._send_limits = limits
@@ -278,6 +282,8 @@ class ArmClient(ABC):
 
             deadline = time.time() + timeout_s
             interval = 1.0 / poll_hz
+            near_deg = tolerance_deg * 2.0
+            limit_dwell_s = 1.0  # a far stall this long is a limit, not a hitch
             ref_dist, ref_time, started = _dist(), time.time(), False
             while time.time() < deadline:
                 if stop_check and stop_check():
@@ -287,21 +293,30 @@ class ArmClient(ABC):
                         pass
                     return
                 time.sleep(interval)
+                now = time.time()
                 dist = _dist()
                 if dist <= tolerance_deg:  # arrived
                     return
                 if ref_dist - dist > progress_eps_deg:
                     started = True  # still closing in - keep waiting
-                    ref_dist, ref_time = dist, time.time()
-                elif time.time() - ref_time >= settle_dwell_s:
-                    if started:  # moved, then stopped: settled
+                    ref_dist, ref_time = dist, now
+                elif now - ref_time >= settle_dwell_s:
+                    stalled_s = now - ref_time
+                    near = dist <= near_deg
+                    if started and (near or stalled_s >= limit_dwell_s):
                         return
                     # resend_s=None sends the goal once. Rewriting it restarts
                     # the servo profile, so a stop-triggered park passes None.
-                    if resend_s is not None and time.time() - last_send >= resend_s:
+                    # A stall that is still far from the goal is not resent either.
+                    if (
+                        not started
+                        and resend_s is not None
+                        and now - last_send >= resend_s
+                    ):
                         self.send_joints(target)
-                        last_send = time.time()
-                    ref_dist, ref_time = dist, time.time()
+                        last_send = now
+                    if not (started and not near):
+                        ref_dist, ref_time = dist, now
         finally:
             self._send_limits = previous
 
