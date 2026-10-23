@@ -22,6 +22,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from collections import deque
 
 from common import speech
 from common.fixtures import offline_parse_text
@@ -29,6 +30,7 @@ from common.imaging import resolve_class
 from common.intents import CommandRegistry, Intent, ParsedCommand, is_noise, is_stop
 
 RESET_LINE = "Reset. Arm parked, objects back on the table."
+MIC_OPEN_S = 5.0  # how long the microphone may take to open before the console falls back to typing
 
 # True: run() also shows each command's record as JSON output, which the
 # notebook tests read from the kernel (tests/sim/notebook_harness.py sets it).
@@ -69,8 +71,9 @@ class VoiceCommands:
         ctx.registry = CommandRegistry()
         for intent in behaviors.intents():
             ctx.registry.add(intent, console.track(intent.value, behaviors.get(intent)))
-        self.commands: queue.Queue[str] = queue.Queue()
-        self.busy = threading.Event()  # set while a behavior runs
+        self._work = threading.Condition()  # guards the two below; notified when either changes
+        self._waiting: deque[str] = deque()  # commands not yet run, oldest first
+        self._running = False  # a behavior runs
         self.holding = threading.Event()  # set while reset restores the scene
         self.trace: list[dict] = []
         self._listening: queue.Queue[str] | None = None  # set while listen() takes the sentences
@@ -81,7 +84,8 @@ class VoiceCommands:
             cfg, whisper.transcribe, self._utterance, on_level=console.on_level, on_drop=self._dropped
         ).start()
         console.transcribing = lambda: self.mic.transcribing
-        time.sleep(0.5)  # MicListener reports a missing microphone once it tried to open it
+        if not self.mic.opened.wait(MIC_OPEN_S):
+            self.mic.error = f"it did not open within {MIC_OPEN_S:.0f} s"
         if self.mic.error:
             console.voice = "typed"
             print(f"no microphone ({self.mic.error}) - type commands under the console")
@@ -175,8 +179,11 @@ class VoiceCommands:
             self.console.stopped()
             self._handle(self.ctx, text, self.parse)  # sets ctx.stop_event: the running behavior ends
             return
-        self.commands.put(text)
-        if self.busy.is_set():
+        with self._work:
+            self._waiting.append(text)
+            running = self._running
+            self._work.notify_all()
+        if running:
             self.ctx.stop_event.set()  # the running behavior ends; dispatch_loop runs the new command
 
     def run(self, text: str) -> dict:
@@ -209,11 +216,14 @@ class VoiceCommands:
 
     def drain(self) -> None:
         """Throw away every command still waiting."""
-        while True:
-            try:
-                self.commands.get_nowait()
-            except queue.Empty:
-                return
+        with self._work:
+            self._waiting.clear()
+
+    def _notify_when(self, finished: threading.Event) -> None:
+        """Wake dispatch_loop once ``finished`` is set (set by the console cell)."""
+        finished.wait()
+        with self._work:
+            self._work.notify_all()
 
     def dispatch_loop(self, finished: threading.Event) -> None:
         """Run commands one at a time until ``finished``; a newer command replaces a waiting one.
@@ -223,24 +233,26 @@ class VoiceCommands:
         """
         self.drain()
         self._live.set()
+        threading.Thread(target=self._notify_when, args=(finished,), daemon=True, name="session-end").start()
         try:
-            while not finished.is_set():
-                try:
-                    text = self.commands.get(timeout=0.2)
-                except queue.Empty:
-                    continue
-                if self.holding.is_set():
-                    self.drain()
-                    continue
-                while not self.commands.empty():  # only the newest command runs
-                    text = self.commands.get_nowait()
-                self.busy.set()
+            while True:
+                with self._work:
+                    self._work.wait_for(lambda: self._waiting or finished.is_set())
+                    if finished.is_set():
+                        return
+                    text = self._waiting[-1]  # only the newest command runs
+                    self._waiting.clear()
+                    if self.holding.is_set():
+                        continue
+                    self._running = True
                 try:
                     self.run(text)
                 except Exception as e:
                     self.console.say(f"(that failed: {e})")
                 finally:
-                    self.busy.clear()
+                    with self._work:
+                        self._running = False
+                        self._work.notify_all()
         finally:
             self._live.clear()
 
@@ -249,9 +261,8 @@ class VoiceCommands:
         self.holding.set()
         self.ctx.stop_event.set()
         self.drain()
-        deadline = time.time() + 3.0  # the running behavior gets 3 s to stop
-        while self.busy.is_set() and time.time() < deadline:
-            time.sleep(0.05)
+        with self._work:  # the running behavior gets 3 s to stop
+            self._work.wait_for(lambda: not self._running, 3.0)
         self.drain()
         try:
             self.ctx.shared_state.pop("grip_lock", None)

@@ -31,6 +31,9 @@ import numpy as np
 
 from vla_pipeline.robot.arm_interface import GRIPPER_TORQUE_LIMIT
 
+from common.twin_console import FanoutCamera, ModelTap, provider_name  # noqa: E402
+from so101_sim import MOTOR_SHORT  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 WINDOW = "SO-101 twin console"
@@ -39,147 +42,9 @@ VIEW_W, VIEW_H = 800, 800  # tall enough for the raised arm (wave)
 LOG_LINES = (VIEW_H - 230) // 20  # what fits between the header and the arm HUD
 PANEL_W = 400
 FPS = 15.0
-IDLE_AFTER_S = 0.5  # a model untouched this long is run by the console itself
-_PROCESSOR = {"VitisAIExecutionProvider": "NPU", "CPUExecutionProvider": "CPU"}
-SHORT = {
-    "shoulder_pan": "pan",
-    "shoulder_lift": "lift",
-    "elbow_flex": "elbow",
-    "wrist_flex": "flex",
-    "wrist_roll": "roll",
-    "gripper": "grip",
-}
-
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 WHITE, GRAY, DIM = (235, 235, 235), (150, 150, 150), (90, 90, 90)
 GREEN, YELLOW, RED, CYAN = (80, 200, 80), (60, 200, 230), (60, 60, 230), (220, 200, 80)
-
-
-class FanoutCamera:
-    """One reader thread; every consumer thread gets each new frame once.
-
-    ``read()`` blocks for the next frame this thread hasn't seen, so behaviors
-    keep V4L2-like pacing while the console reads the same stream.
-    """
-
-    def __init__(self, inner, timeout_s: float = 1.0):
-        self.inner = inner
-        self.role = getattr(inner, "role", "?")
-        self._timeout = timeout_s
-        self._cond = threading.Condition()
-        self._frame: np.ndarray | None = None
-        self._seq = 0
-        self._stamp = 0.0
-        self._wall = 0.0
-        self._seen: dict[int, int] = {}
-        self._running = True
-        self._thread = threading.Thread(
-            target=self._pump, daemon=True, name=f"fanout-{self.role}"
-        )
-        self._thread.start()
-
-    def _pump(self) -> None:
-        last = None
-        while self._running:
-            try:
-                ok, frame = self.inner.read()
-            except Exception as e:
-                logger.debug("[console] %s read failed: %s", self.role, e)
-                ok, frame = False, None
-            if not ok or frame is None:
-                time.sleep(0.02)
-                continue
-            if frame is last:  # latest-frame clients return the same array until a new one lands
-                time.sleep(0.005)
-                continue
-            last = frame
-            with self._cond:
-                self._frame, self._stamp, self._wall = frame, time.monotonic(), time.time()
-                self._seq += 1
-                self._cond.notify_all()
-
-    def read(self) -> tuple[bool, np.ndarray | None]:
-        tid = threading.get_ident()
-        with self._cond:
-            if not self._cond.wait_for(
-                lambda: self._seq > self._seen.get(tid, 0), timeout=self._timeout
-            ):
-                return False, None
-            self._seen[tid] = self._seq
-            return True, self._frame
-
-    def read_after(self, settled_at: float) -> tuple[bool, np.ndarray | None]:
-        """Next pumped frame whose arrival is later than ``settled_at``."""
-        deadline = time.monotonic() + max(self._timeout, 0.5)
-        with self._cond:
-            while self._frame is None or self._wall <= settled_at:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return False, None
-                self._cond.wait(timeout=remaining)
-            self._seen[threading.get_ident()] = self._seq
-            return True, self._frame
-
-    def latest(self) -> np.ndarray | None:
-        """Newest frame without blocking, or None if the stream is stale."""
-        with self._cond:
-            if self._frame is None or time.monotonic() - self._stamp > self._timeout:
-                return None
-            return self._frame
-
-    def ok(self) -> bool:
-        return self.latest() is not None
-
-    def close(self) -> None:
-        self._running = False
-        self._thread.join(timeout=1.0)
-        close = getattr(self.inner, "close", None)
-        if close:
-            close()
-
-    def __getattr__(self, name):
-        return getattr(self.inner, name)
-
-
-class ModelTap:
-    """Wrap ``obj.method`` in place: serialise calls and keep the last result.
-
-    Patching the instance (not wrapping the object) also catches internal
-    calls such as ``ObjectDetector.find`` -> ``self.infer``.
-    """
-
-    def __init__(self, obj, method: str):
-        self.obj = obj
-        self.last = None
-        self._stamp = 0.0
-        self._lock = threading.Lock()
-        self._inner = getattr(obj, method)
-
-        def tapped(*args, **kwargs):
-            result = self.call(*args, **kwargs)
-            self._stamp = time.monotonic()
-            return result
-
-        setattr(obj, method, tapped)
-
-    def call(self, *args, **kwargs):
-        """Run the model for the console; doesn't count as a behavior using it."""
-        with self._lock:
-            result = self._inner(*args, **kwargs)
-        self.last = result
-        return result
-
-    def idle(self) -> bool:
-        """True while no behavior has called the model recently."""
-        return time.monotonic() - self._stamp > IDLE_AFTER_S
-
-    def provider(self) -> str:
-        """The processor the model runs on, for a tile title: NPU, CPU, or the provider's name."""
-        session = getattr(self.obj, "session", None)
-        if session is None:
-            return "CPU"
-        p = session.get_providers()[0]
-        return _PROCESSOR.get(p, p.replace("ExecutionProvider", ""))
 
 
 def _view_source(cfg: dict):
@@ -296,11 +161,7 @@ class TwinConsole:
         ctx.stop_event.set()
         if dispatcher is not None:
             dispatcher.discard()
-        deadline = time.time() + 3.0
-        busy = getattr(dispatcher, "busy", None)
-        while busy is not None and busy.is_set() and time.time() < deadline:
-            time.sleep(0.05)
-        if dispatcher is not None:
+            dispatcher.wait_idle(3.0)  # the running behavior gets 3 s to stop
             dispatcher.discard()
         try:
             state = getattr(ctx, "shared_state", None)
@@ -461,7 +322,7 @@ class TwinConsole:
             cv2.putText(p, text, (12, y), FONT, 0.45, GREEN if grasp else WHITE, 1, cv2.LINE_AA)
             _bar(p, 12, y + 8, PANEL_W - 24, 8, load / full, GREEN if grasp else GRAY, mark=level / full)
         if joints:
-            parts = [f"{SHORT.get(n, n)} {v:+.0f}" for n, v in joints.items()]
+            parts = [f"{MOTOR_SHORT.get(n, n)} {v:+.0f}" for n, v in joints.items()]
             for i in range(0, len(parts), 3):
                 cv2.putText(p, "   ".join(parts[i : i + 3]), (12, y + 36 + 18 * (i // 3)), FONT, 0.42, GRAY, 1, cv2.LINE_AA)
 
@@ -473,9 +334,9 @@ class TwinConsole:
             self._hands_tile(operator_frame).copy(),
             self._detect_tile(armcam).copy(),
         ]
-        _title(tiles[0], f"operator: YOLO pose [{self.pose.provider() if self.pose else 'off'}]")
-        _title(tiles[1], f"operator: MediaPipe hands [{self.hands.provider() if self.hands else 'off'}]")
-        _title(tiles[2], f"arm: YOLO detect [{self.detector.provider() if self.detector else 'off'}]")
+        _title(tiles[0], f"operator: YOLO pose [{provider_name(self.pose.obj) if self.pose else 'off'}]")
+        _title(tiles[1], f"operator: MediaPipe hands [{provider_name(self.hands.obj) if self.hands else 'off'}]")
+        _title(tiles[2], f"arm: YOLO detect [{provider_name(self.detector.obj) if self.detector else 'off'}]")
         top = np.hstack(tiles)
         bottom = np.hstack([self._view_tile(), self._panel()])
         return np.vstack([top, bottom])

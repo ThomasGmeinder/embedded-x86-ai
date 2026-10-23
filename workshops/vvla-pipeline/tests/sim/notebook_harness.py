@@ -31,11 +31,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import threading
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 PIPE_ROOT = Path(__file__).resolve().parents[2]
 NOTEBOOKS = PIPE_ROOT / "workshop" / "notebooks"
@@ -48,6 +50,7 @@ RIG_STANDINS = '''\
 #   microphone       -> none
 import importlib.util as _ilu
 import sys as _sys
+import threading as _threading
 import time as _time
 from pathlib import Path as _Path
 
@@ -141,7 +144,8 @@ class _NoMic:
     transcribing = False
 
     def __init__(self, *args, **kwargs):
-        pass
+        self.opened = _threading.Event()
+        self.opened.set()  # tried, and failed: see error
 
     def start(self):
         return self
@@ -176,41 +180,111 @@ def kernel_env() -> dict:
 
 
 class Watcher:
-    """A second client on the kernel's iopub channel: stdout, stderr and JSON displays, any parent."""
+    """A second client of the kernel, as a browser tab is: it reads iopub
+    (stdout, stderr, JSON displays and widget state, any parent) and sends
+    widget messages and code on its own shell socket.
+
+    Widget state is kept from the same comm messages the browser gets, so a
+    waiter woken by a message sees the state that message carried.
+    """
 
     def __init__(self, connection_info: dict):
+        import zmq
         from jupyter_client import BlockingKernelClient
 
         self._kc = BlockingKernelClient()
         self._kc.load_connection_info(connection_info)
-        self._kc.start_channels(shell=False, stdin=False, hb=False, control=False)
+        self._kc.start_channels(shell=True, stdin=False, hb=False, control=False)
         self._lock = threading.Lock()
         self.stdout: list[str] = []
         self.stderr: list[str] = []
         self.records: list[dict] = []
-        self._running = True
+        self._widgets: dict[str, dict] = {}
+        self._updates = 0  # widget updates the kernel sent (a live view's frames)
+        self._listeners: list = []
+        wake = f"inproc://iopub-watch-{id(self)}"
+        self._wake_rx = self._kc.context.socket(zmq.PAIR)
+        self._wake_rx.bind(wake)
+        self._wake_tx = self._kc.context.socket(zmq.PAIR)
+        self._wake_tx.connect(wake)
         self._thread = threading.Thread(target=self._pump, daemon=True, name="iopub-watch")
         self._thread.start()
 
     def _pump(self) -> None:
-        while self._running:
-            try:
-                msg = self._kc.get_iopub_msg(timeout=0.2)
-            except Exception:
-                continue
-            kind, content = msg["msg_type"], msg["content"]
+        import zmq
+
+        iopub = self._kc.iopub_channel
+        poller = zmq.Poller()
+        poller.register(iopub.socket, zmq.POLLIN)
+        poller.register(self._wake_rx, zmq.POLLIN)
+        while True:
+            ready = dict(poller.poll())
+            if self._wake_rx in ready:
+                return
+            self._take(iopub.get_msg(timeout=0))
+
+    def _take(self, msg: dict) -> None:
+        kind, content = msg["msg_type"], msg["content"]
+        with self._lock:
+            if kind == "stream":
+                (self.stdout if content.get("name") == "stdout" else self.stderr).append(content["text"])
+            elif kind in ("display_data", "execute_result"):
+                record = content.get("data", {}).get("application/json")
+                if isinstance(record, dict) and "text" in record:
+                    self.records.append(record)
+            elif kind == "comm_open":
+                self._widgets[content["comm_id"]] = dict(content.get("data", {}).get("state", {}))
+            elif kind == "comm_msg":
+                data = content.get("data", {})
+                if data.get("method") in ("update", "echo_update"):
+                    self._widgets.setdefault(content["comm_id"], {}).update(data.get("state", {}))
+                    self._updates += data["method"] == "update"
+            for wake in self._listeners:  # under the lock: none runs after its unsubscribe returns
+                wake()
+
+    def send_comm(self, comm_id: str, data: dict) -> None:
+        """A widget message from this client, as a browser sends it.
+
+        Never on nbclient's socket: nbclient waits there for a cell's reply
+        with a separate poller, and a send on that socket can swallow the
+        poller's wake-up.
+        """
+        kc = self._kc
+        kc.shell_channel.send(kc.session.msg("comm_msg", {"comm_id": comm_id, "data": data}))
+
+    def execute(self, code: str) -> None:
+        """Run ``code`` from this client, as a second browser tab would. Its reply is not read."""
+        self._kc.execute(code)
+
+    def subscribe(self, callback):
+        """Call ``callback()`` after every kernel message from now on; returns the unsubscribe."""
+        with self._lock:
+            self._listeners.append(callback)
+
+        def unsubscribe() -> None:
             with self._lock:
-                if kind == "stream":
-                    (self.stdout if content.get("name") == "stdout" else self.stderr).append(content["text"])
-                elif kind in ("display_data", "execute_result"):
-                    record = content.get("data", {}).get("application/json")
-                    if isinstance(record, dict) and "text" in record:
-                        self.records.append(record)
+                self._listeners.remove(callback)
+
+        return unsubscribe
+
+    def widgets(self) -> dict[str, dict]:
+        """Every widget's state, by comm id, as the kernel last sent it."""
+        with self._lock:
+            return {cid: dict(state) for cid, state in self._widgets.items()}
+
+    def updates_since(self, since: "Mark") -> int:
+        with self._lock:
+            return self._updates - since.updates
 
     def mark(self) -> "Mark":
         """Cursor for output that arrives after this call. Earlier scenarios stay behind it."""
         with self._lock:
-            return Mark(len(self.stdout), len(self.records))
+            return Mark(len(self.stdout), len(self.records), self._updates, len(self.stderr))
+
+    def output_since(self, since: "Mark") -> tuple[str, str]:
+        """``(stdout, stderr)`` the kernel printed after ``since``, from any thread."""
+        with self._lock:
+            return "".join(self.stdout[since.stdout:]), "".join(self.stderr[since.stderr:])
 
     def said(self, phrase: str, since: "Mark | int" = 0) -> bool:
         with self._lock:
@@ -235,8 +309,10 @@ class Watcher:
             return found[-1] if found else None
 
     def close(self) -> None:
-        self._running = False
+        self._wake_tx.send(b"")
         self._thread.join(timeout=2.0)
+        self._wake_tx.close()
+        self._wake_rx.close()
         self._kc.stop_channels()
 
 
@@ -246,6 +322,8 @@ class Mark:
 
     stdout: int = 0
     records: int = 0
+    updates: int = 0
+    stderr: int = 0
 
 
 def _stdout_at(since: Mark | int) -> int:
@@ -256,21 +334,52 @@ def _records_at(since: Mark | int) -> int:
     return since.records if isinstance(since, Mark) else 0
 
 
-async def until(predicate, timeout: float, what: str):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        value = predicate()
-        if value:
-            return value
-        await asyncio.sleep(0.1)
-    raise AssertionError(f"timed out after {timeout:.0f} s waiting for {what}")
+async def until(predicate, timeout: float, what: str, *sources, task=None):
+    """``predicate()`` once it holds, checked again whenever a source reports new data.
+
+    ``sources`` have ``subscribe(callback) -> unsubscribe`` (the
+    :class:`Watcher`, a ROS probe); ``task`` ending also wakes the check.
+    Fails when ``timeout`` passes first.
+    """
+    loop = asyncio.get_running_loop()
+    changed = asyncio.Event()
+
+    def wake(*_):
+        loop.call_soon_threadsafe(changed.set)
+
+    unsubscribe = [source.subscribe(wake) for source in sources]
+    if task is not None:
+        task.add_done_callback(wake)
+    started = loop.time()
+    deadline = started + timeout
+    try:
+        while True:
+            changed.clear()
+            value = predicate()
+            if value:
+                logger.info("%s after %.2f s (budget %.0f s)", what, loop.time() - started, timeout)
+                return value
+            if loop.time() >= deadline:
+                raise AssertionError(f"timed out after {timeout:.0f} s waiting for {what}")
+            try:
+                await asyncio.wait_for(changed.wait(), deadline - loop.time())
+            except asyncio.TimeoutError:
+                pass  # one last look at the predicate, then fail
+    finally:
+        for off in unsubscribe:
+            off()
+        if task is not None:
+            task.remove_done_callback(wake)
 
 
 class Console:
-    """Widgets of a running cell, found by label, and the messages a browser sends them."""
+    """Widgets of a running cell, found by label, and the messages a browser sends them.
 
-    def __init__(self, client, watcher: Watcher, before: set | None = None, since: Mark | int = 0):
-        self._client = client
+    ``before`` is the watcher's widget ids from before the cell ran; the
+    cell's own widgets are the ones that appear after.
+    """
+
+    def __init__(self, watcher: Watcher, before: set | None = None, since: Mark | int = 0):
         self.watcher = watcher
         self._before = set(before or ())
         self.since = since
@@ -283,7 +392,7 @@ class Console:
         return self.watcher.count(phrase, since=self.since)
 
     def _new(self):
-        return {cid: s for cid, s in self._client.widget_state.items() if cid not in self._before}
+        return {cid: s for cid, s in self.watcher.widgets().items() if cid not in self._before}
 
     def buttons(self) -> dict[str, str]:
         return {s["description"]: cid for cid, s in self._new().items() if s.get("_model_name") == "ButtonModel"}
@@ -303,21 +412,21 @@ class Console:
         self.widgets = found
         return {"typed", "stop", "reset", "end session"} <= found.keys()
 
-    def _send(self, comm_id: str, data: dict) -> None:
-        kc = self._client.kc
-        kc.shell_channel.send(kc.session.msg("comm_msg", {"comm_id": comm_id, "data": data}))
-
     def type(self, text: str, comm_id: str | None = None) -> None:
         """Type ``text`` into a text box and press Enter."""
         target = comm_id or self.widgets.get("typed") or self.text_box()
-        self._send(target, {"method": "update", "state": {"value": text}, "buffer_paths": []})
+        self.watcher.send_comm(target, {"method": "update", "state": {"value": text}, "buffer_paths": []})
 
     def click(self, label: str) -> None:
         comm_id = self.widgets.get(label) or self.buttons()[label]
-        self._send(comm_id, {"method": "custom", "content": {"event": "click"}})
+        self.watcher.send_comm(comm_id, {"method": "custom", "content": {"event": "click"}})
 
-    async def record(self, text: str, timeout: float = 240.0) -> dict:
-        return await until(lambda: self.watcher.record(text, since=self.since), timeout, f"the record of {text!r}")
+    async def record(self, text: str, timeout: float = 240.0, since: Mark | None = None) -> dict:
+        """The record of ``text`` after ``since`` (default: since the scenario began)."""
+        after = self.since if since is None else since
+        return await until(
+            lambda: self.watcher.record(text, since=after), timeout, f"the record of {text!r}", self.watcher,
+        )
 
 
 def cell_index(nb, cell_id: str) -> int:
@@ -355,43 +464,60 @@ class NotebookRun:
     sessions: list = field(default_factory=list)
 
 
-# A student action: ("type", text), ("click", label), ("wait_for", phrase, timeout_s) or ("sleep", s).
-DEFAULT_ACTIONS = (("sleep", 3.0),)
+# A student action: ("type", text), ("click", label), ("wait_for", phrase, timeout_s),
+# or ("updates", n, timeout_s): the cell sent n widget updates, a live view's frames.
+# The kernel handles the clicks in the order they arrive, so the button that ends
+# the cell comes after every earlier action.
+DEFAULT_ACTIONS = (("updates", 3, 30.0),)
 
 
 async def _interact(client, watcher, nb, index: int, actions) -> None:
     """Run the looping cell at ``index``, act on its widgets, then click the button that ends it."""
-    console = Console(client, watcher, before=set(client.widget_state))
+    console = Console(watcher, before=set(watcher.widgets()))
     task = asyncio.create_task(client.async_execute_cell(nb.cells[index], index))
+    cell = nb.cells[index].get("id")
     await until(lambda: task.done() or any(b in console.buttons() for b in FINISH), 300.0,
-                f"the buttons of cell {nb.cells[index].get('id')}")
+                f"the buttons of cell {cell}", watcher, task=task)
     if task.done():
         task.result()
         return
-    mark = watcher.mark()  # a wait_for counts output from the last type/click on
+    mark = watcher.mark()  # a wait counts output from the last type/click on
     for action in actions:
         kind = action[0]
         if kind == "type":
-            mark = watcher.mark()
-            console.type(action[1])
+            # The cell creates its widgets one message at a time: wait for this one.
+            await until(lambda: task.done() or console.text_box(), 60.0, f"the text box of cell {cell}",
+                        watcher, task=task)
+            if not task.done():
+                mark = watcher.mark()
+                console.type(action[1])
         elif kind == "click":
-            mark = watcher.mark()
-            console.click(action[1])
+            await until(lambda: task.done() or action[1] in console.buttons(), 60.0,
+                        f"the {action[1]!r} button of cell {cell}", watcher, task=task)
+            if not task.done():
+                mark = watcher.mark()
+                console.click(action[1])
         elif kind == "wait_for":
             await until(lambda: task.done() or watcher.said(action[1], since=mark), action[2],
-                        f"{action[1]!r} from cell {nb.cells[index].get('id')}")
-        elif kind == "sleep":
-            await asyncio.sleep(action[1])
+                        f"{action[1]!r} from cell {cell}", watcher, task=task)
+        elif kind == "updates":
+            await until(lambda: task.done() or watcher.updates_since(mark) >= action[1], action[2],
+                        f"{action[1]} widget updates from cell {cell}", watcher, task=task)
+        else:
+            raise ValueError(f"unknown student action {action!r}")
         if task.done():
             task.result()
             return
     console.click(next(b for b in FINISH if b in console.buttons()))
-    await asyncio.wait_for(task, timeout=120.0)
+    # Not wait_for: nbclient reports a cancelled cell as "Kernel died".
+    if not (await asyncio.wait({task}, timeout=120.0))[0]:
+        raise TimeoutError(f"cell {cell} did not end within 120 s of its finish button")
+    task.result()
 
 
 def run_notebook(path: Path, script: dict | None = None) -> NotebookRun:
     """Every cell of ``path`` in order, in a fresh kernel; ``script`` maps a
-    looping cell's id to the student's actions (default: watch for 3 s)."""
+    looping cell's id to the student's actions (default: watch it draw three frames)."""
     import nbformat
     from nbclient.exceptions import CellExecutionError
 

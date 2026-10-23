@@ -184,13 +184,11 @@ def run_gesture_mimic(
             except cv2.error:
                 pass
         logger.info("Gesture mimic stopped - returning to rest pose.")
-        # Park home as ONE smooth move. resend_s=None disables move_to's resend
-        # loop (re-writing the goal restarts the servo profile, which looked like
-        # the arm repeatedly lurching toward rest on a stop). We deliberately do
-        # NOT pass stop_check here: on a voice "stop" the stop event is already
-        # set, and honoring it would abort this park instantly and leave the arm
-        # wherever it was - we want it to complete the single trip home.
-        arm.go_to_rest(resend_s=None)
+        # Park home as ONE goal. We deliberately do NOT pass stop_check here:
+        # on a voice "stop" the stop event is already set, and honoring it would
+        # abort this park instantly and leave the arm wherever it was - we want
+        # it to complete the single trip home.
+        arm.go_to_rest()
 
 
 def _hud(vis, joints, wrist_xy, obs) -> None:

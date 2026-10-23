@@ -28,8 +28,6 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
-import numpy as np
-
 from so101_sim import MOTOR_NAMES
 
 logger = logging.getLogger(__name__)
@@ -181,7 +179,7 @@ class SimBus:
             return {m: 0x20 if tripped[i] else 0 for m, i in zip(names, idx)}
         if data_name == "Moving":
             with w.lock:
-                moving = np.abs(w.servo.v_ref) > 1e-4
+                moving = w.servo.moving()
             return {m: int(moving[i]) for m, i in zip(names, idx)}
         if data_name == "Present_Voltage":
             return {m: 74 for m in names}  # 7.4 V supply

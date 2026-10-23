@@ -47,8 +47,7 @@ def ensure_common_path() -> None:
 ensure_common_path()
 
 from common.motion import (  # noqa: E402
-    DIRECT_MODE_ACCEL_RAW,
-    DIRECT_MODE_SPEED_RAW,
+    DEFAULT_CONTROL_HZ,
     GRASP_LIMITS,
     GRIPPER_CLOSED_FLOOR,
     GRIPPER_TORQUE_LIMIT,
@@ -64,8 +63,7 @@ from common.motion import (  # noqa: E402
 from so101_sim import MOTOR_NAMES  # noqa: E402
 
 __all__ = [
-    "DIRECT_MODE_ACCEL_RAW",
-    "DIRECT_MODE_SPEED_RAW",
+    "DEFAULT_CONTROL_HZ",
     "GRASP_LIMITS",
     "GRIPPER_CLOSED_FLOOR",
     "GRIPPER_TORQUE_LIMIT",

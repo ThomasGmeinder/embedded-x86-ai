@@ -16,9 +16,14 @@ tier-2 module in a pytest session shares it.
 
 from __future__ import annotations
 
+import csv
 import os
+import select
+import shutil
 import threading
 import time
+from collections import deque
+from pathlib import Path
 
 import numpy as np
 
@@ -38,13 +43,66 @@ def join_test_domain() -> None:
     use_private_domain(TEST_DOMAIN_ID)
 
 
+def process_gone(pid: int) -> bool:
+    """``pid`` has exited (a zombie counts)."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0]
+    except FileNotFoundError:
+        return True
+    return state == "Z"
+
+
+def wait_exit(pid: int, timeout: float) -> bool:
+    """True once ``pid`` has exited: the kernel's exit event on a pidfd."""
+    try:
+        fd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return True
+    try:
+        readable, _, _ = select.select([fd], [], [], timeout)
+    finally:
+        os.close(fd)
+    return bool(readable) or process_gone(pid)
+
+
+def assert_domain_free(message: str, exit_s: float = 0.0) -> None:
+    """No twin holds the test domain's lock; a holder gets ``exit_s`` to exit."""
+    from so101_sim.domain_lock import owner
+
+    pid = owner(TEST_DOMAIN_ID)
+    if pid and exit_s > 0:
+        wait_exit(pid, exit_s)
+        pid = owner(TEST_DOMAIN_ID)
+    assert pid is None, f"{message} (pid {pid})"
+
+
+def _clock(t: float) -> str:
+    return time.strftime("%H:%M:%S", time.localtime(t)) + f".{int(t % 1 * 1000):03d}"
+
+
+def twin_log_report(path, dest: Path, lines: int = 60) -> str:
+    """Copy the twin node's log into ``dest``; return its last ``lines`` lines."""
+    path = Path(path)
+    if not path.exists():
+        return f"twin node log: {path} is gone"
+    shutil.copyfile(path, dest / "twin_node.log")
+    tail = path.read_text(errors="replace").splitlines()[-lines:]
+    return f"twin node log -> twin_node.log, last {len(tail)} lines:\n" + "\n".join(tail)
+
+
 class Probe:
-    """Reads the test domain's graph and the arm's joint state, sends nothing."""
+    """Reads the test domain's graph, the arm's joint state and the servos'
+    motion state (``motion``, a :class:`~common.motion.MotionMonitor`), sends nothing.
+
+    Every joint state is kept for five minutes, with the time it arrived and
+    the time the twin stamped it, so a failed test can save the timeline.
+    """
 
     def __init__(self, state_topic: str):
         from sensor_msgs.msg import JointState
 
-        from common.ros_helpers import parse_joint_state
+        from common.motion import MotionMonitor
+        from common.ros_helpers import parse_joint_state, subscribe_motion_state
         from common.twin_ros import _sensor_qos, _Spinner
 
         self._parse = parse_joint_state
@@ -53,13 +111,66 @@ class Probe:
         self._cond = threading.Condition()
         self._joints: dict | None = None
         self._joints_t = 0.0
+        self._history: deque = deque(maxlen=60 * 300)
+        self._listeners: list = []
         self.node.create_subscription(JointState, state_topic, self._on_state, _sensor_qos())
+        self.motion = MotionMonitor()
+        subscribe_motion_state(self.node, self.motion)
 
     def _on_state(self, msg) -> None:
         joints, _effort = self._parse(msg)
+        now = time.time()
+        stamp = msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec
         with self._cond:
-            self._joints, self._joints_t = joints, time.time()
+            self._joints, self._joints_t = joints, now
+            self._history.append((now, stamp, joints))
             self._cond.notify_all()
+            for wake in self._listeners:  # under the lock: none runs after its unsubscribe returns
+                wake()
+
+    def subscribe(self, callback):
+        """Call ``callback()`` after every joint state from now on; returns the unsubscribe."""
+        with self._cond:
+            self._listeners.append(callback)
+
+        def unsubscribe() -> None:
+            with self._cond:
+                self._listeners.remove(callback)
+
+        return unsubscribe
+
+    def failure_report(self, dest: Path, since: float | None) -> str:
+        """``joints.csv`` of every joint state since ``since``, its longest gaps, and its last 4 s."""
+        from common.motion import joints_text
+        from so101_sim import MOTOR_NAMES
+
+        with self._cond:
+            rows = [h for h in self._history if since is None or h[0] >= since]
+        if not rows:
+            return "joint states: none arrived during the test"
+        with open(dest / "joints.csv", "w", newline="") as f:
+            out = csv.writer(f)
+            out.writerow(["received", "stamp", *MOTOR_NAMES])
+            for recv, stamp, j in rows:
+                out.writerow([
+                    f"{recv:.3f}", f"{stamp:.3f}", *(f"{j[m]:.2f}" if m in j else "" for m in MOTOR_NAMES),
+                ])
+        recv = np.array([r[0] for r in rows])
+        sent = np.array([r[1] for r in rows])
+        lines = [f"joint states: {len(rows)} over {recv[-1] - recv[0]:.1f} s -> joints.csv"]
+        if len(rows) > 1:
+            i, k = int(np.argmax(np.diff(recv))), int(np.argmax(np.diff(sent)))
+            lines.append(
+                f"longest gap: {recv[i + 1] - recv[i]:.2f} s between arrivals after {_clock(recv[i])}, "
+                f"{sent[k + 1] - sent[k]:.2f} s between twin stamps after {_clock(sent[k])}"
+            )
+        lines.append("last 4 s, every 0.25 s:")
+        shown = None
+        for recv_t, _stamp, j in rows:
+            if recv_t >= recv[-1] - 4.0 and (shown is None or recv_t - shown >= 0.25):
+                lines.append(f"  {_clock(recv_t)} {joints_text(j)}")
+                shown = recv_t
+        return "\n".join(lines)
 
     def joints(self, after: float | None = None, timeout: float = 2.0) -> dict | None:
         """The newest joint state, or the first received after ``after``."""
@@ -72,17 +183,16 @@ class Probe:
                 self._cond.wait(timeout=remaining)
             return dict(self._joints)
 
-    def publishers(self, topic: str) -> int:
-        return int(self.node.count_publishers(topic))
+    def first_message(self, topic: str, msg_type, timeout: float) -> bool:
+        """True once a message arrives on ``topic``, within ``timeout``."""
+        from common.twin_ros import _sensor_qos
 
-    def wait_publishers(self, topic: str, count: int, timeout: float) -> bool:
-        """Wait until ``topic`` has exactly ``count`` publishers."""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self.publishers(topic) == count:
-                return True
-            time.sleep(0.1)
-        return self.publishers(topic) == count
+        got = threading.Event()
+        sub = self.node.create_subscription(msg_type, topic, lambda _m: got.set(), _sensor_qos())
+        try:
+            return got.wait(timeout)
+        finally:
+            self.node.destroy_subscription(sub)
 
     def topics(self) -> set[str]:
         return {name for name, _types in self.node.get_topic_names_and_types()}
@@ -173,27 +283,44 @@ class TwinRig:
             headless=True,
         )
         self.ctx.say = self.said.append
+        self._crashes: list[str] = []
 
     def said_any(self, phrase: str) -> bool:
         return any(phrase.lower() in m.lower() for m in self.said)
 
+    def failure_report(self, dest: Path, since: float | None) -> str:
+        """What the robot said, and the twin node's log."""
+        said = "\n".join(f"  {m}" for m in self.said[-15:]) or "  (nothing)"
+        return f"robot said:\n{said}\n\n" + twin_log_report(self.twin.log_path, dest)
+
     def start(self, text: str) -> threading.Thread:
-        """Run ``text`` through ``handle_transcript`` on a thread, as the console's dispatcher does."""
+        """Run ``text`` through ``handle_transcript`` on a thread, as the console's dispatcher does.
+
+        A crash is recorded; :meth:`run` and :meth:`close` raise it, so it fails the test.
+        """
         from integration.dispatch import handle_transcript
 
-        worker = threading.Thread(
-            target=handle_transcript, args=(self.ctx, text, keyword_parse), daemon=True, name=text
-        )
+        def behave() -> None:
+            try:
+                handle_transcript(self.ctx, text, keyword_parse)
+            except Exception as e:
+                self._crashes.append(f"{text!r}: {e!r}")
+                raise
+
+        worker = threading.Thread(target=behave, daemon=True, name=text)
         worker.start()
         return worker
 
     def run(self, text: str, timeout: float) -> None:
+        from rigs import raise_crashes
+
         worker = self.start(text)
         worker.join(timeout)
         if worker.is_alive():
             self.ctx.stop_event.set()
             worker.join(10.0)
             raise TimeoutError(f"{text!r} did not finish within {timeout:.0f} s; robot said {self.said}")
+        raise_crashes(self._crashes)
 
     def stop(self) -> None:
         """The console's stop button: ``handle_transcript`` with "stop", from another thread."""
@@ -202,6 +329,8 @@ class TwinRig:
         handle_transcript(self.ctx, "stop", keyword_parse)
 
     def close(self) -> None:
+        from rigs import raise_crashes
+
         self.ctx.stop_event.set()
         for cam in (self.armcam, self.operator):
             try:
@@ -209,3 +338,4 @@ class TwinRig:
             except Exception:
                 pass
         self.twin.close()
+        raise_crashes(self._crashes)

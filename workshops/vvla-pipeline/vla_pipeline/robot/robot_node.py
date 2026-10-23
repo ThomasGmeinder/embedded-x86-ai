@@ -47,6 +47,7 @@ import time
 logger = logging.getLogger(__name__)
 
 from vla_pipeline.robot.arm_interface import (
+    DEFAULT_CONTROL_HZ,
     GRASP_LIMITS,
     MOTOR_NAMES,
     REST_POSE,
@@ -55,6 +56,9 @@ from vla_pipeline.robot.arm_interface import (
     clamp_joints,
 )
 from vla_pipeline.utils.config import load_config
+
+from common.motion import MotionMonitor, await_reported_motion  # noqa: E402
+from common.ros_helpers import motion_state_msg, motion_state_publisher, subscribe_motion_state  # noqa: E402
 
 try:  # ROS 2 is optional at import time so non-ROS machines can run dry tests
     import rclpy
@@ -125,7 +129,7 @@ class So101ServerNode(Node):
         _require_ros2()
         super().__init__("so101_server_node")
         r = cfg["robot"]
-        self._control_fps = float(r.get("control_fps", 30.0))
+        self._control_fps = float(r.get("control_fps", DEFAULT_CONTROL_HZ))
         self._shutting_down = False
         # Opt-in loop profiling: `SO101_PROFILE=1` makes the control loop report
         # its ACTUAL rate and per-section timing once a second, so motion-quality
@@ -162,9 +166,7 @@ class So101ServerNode(Node):
                     "    python -m vla_pipeline.robot.arm_interface --calibrate\n"
                     "(run_pipeline.sh now does this automatically before launch)."
                 )
-            self._arm = LeRobotArm(
-                r["motor_port"], r["robot_id"], r.get("max_relative_target", 8.0)
-            )
+            self._arm = LeRobotArm(r["motor_port"], r["robot_id"], r.get("max_relative_target", 8.0))
             self.get_logger().info(f"SO101Follower connected on {r['motor_port']}")
         # The client already clamped this move. The bus backstop is the grasp
         # envelope (wrist_flex to 90°). The desk cap (67.5°) is what the
@@ -198,6 +200,8 @@ class So101ServerNode(Node):
         self._state_pub = self.create_publisher(
             JointState, r["state_topic"], _best_effort_qos()
         )
+        # The servos' own report of the goal they run toward; clients wait on it.
+        self._motion_pub = motion_state_publisher(self)
 
         self._running = True
         self._control_thread = threading.Thread(target=self._control_loop, daemon=True)
@@ -266,7 +270,8 @@ class So101ServerNode(Node):
                 p_worst = p_dt
             with self._target_lock:
                 target = dict(self._target)
-                fresh = (time.time() - self._last_cmd_time) < 1.0
+                cmd_time = self._last_cmd_time
+                fresh = (time.time() - cmd_time) < 1.0
                 generation = self._target_gen
                 torque_limit, self._torque_limit = self._torque_limit, None
 
@@ -309,6 +314,7 @@ class So101ServerNode(Node):
                     ],
                 )
                 self._state_pub.publish(msg)
+                self._motion_pub.publish(motion_state_msg(self._arm, cmd_time, joints))
                 bus_errors = 0
             except Exception as e:  # transport retries exhausted, or shutdown race
                 bus_errors += 1
@@ -392,31 +398,30 @@ class Ros2ArmClient(ArmClient):
         self._state_lock = threading.Lock()
         self._state: dict[str, float] | None = None
         self._effort: float | None = None
+        self._state_ready = threading.Event()
+        self._motion = MotionMonitor()
+        self._tick_s = 1.0 / float(r.get("control_fps", DEFAULT_CONTROL_HZ))  # the server's control period
         self._node.create_subscription(
             JointState, r["state_topic"], self._on_state, _best_effort_qos()
         )
+        subscribe_motion_state(self._node, self._motion)
 
-        # One subscription callback to service, so a single-threaded executor is
-        # the right fit - and it avoids rclpy's "MultiThreadedExecutor is used
-        # with a single thread" warning seen in the logs.
+        # The node's callbacks run one at a time, so a single-threaded executor
+        # is the right fit - and it avoids rclpy's "MultiThreadedExecutor is
+        # used with a single thread" warning seen in the logs.
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
         self._spin_stop = threading.Event()
         self._spin_thread = threading.Thread(target=self._spin, daemon=True, name="so101_arm_client")
         self._spin_thread.start()
 
-        deadline = time.time() + state_timeout_s
-        while time.time() < deadline:
-            with self._state_lock:
-                if self._state is not None:
-                    logger.info("Ros2ArmClient: state stream live.")
-                    return
-            time.sleep(0.05)
-        self.close()
-        raise TimeoutError(
-            f"No JointState on {r['state_topic']} within {state_timeout_s}s - "
-            "is the server node running? (python -m vla_pipeline.robot.robot_node --server)"
-        )
+        if not self._state_ready.wait(state_timeout_s):
+            self.close()
+            raise TimeoutError(
+                f"No JointState on {r['state_topic']} within {state_timeout_s}s - "
+                "is the server node running? (python -m vla_pipeline.robot.robot_node --server)"
+            )
+        logger.info("Ros2ArmClient: state stream live.")
 
     def _spin(self) -> None:
         """Spin in short slices until :meth:`close`. A thread still inside
@@ -439,6 +444,11 @@ class Ros2ArmClient(ArmClient):
         with self._state_lock:
             self._state = state
             self._effort = effort
+        self._state_ready.set()
+
+    def _await_motion(self, joints: list, sent_at: float, stop_check) -> tuple[str, dict]:
+        """Wait on the server's motion state for the goal sent at ``sent_at``."""
+        return await_reported_motion(self._motion, joints, sent_at, self._tick_s, stop_check, self.get_joints)
 
     def reset_sim(self) -> bool:
         """Ask the digital-twin server to park the arm and restore the props."""
@@ -448,11 +458,12 @@ class Ros2ArmClient(ArmClient):
             self._reset_client = self._node.create_client(Trigger, "/so101/reset_scene")
         if not self._reset_client.wait_for_service(timeout_sec=0.5):
             return False
+        done = threading.Event()
         future = self._reset_client.call_async(Trigger.Request())
-        deadline = time.time() + 2.0
-        while not future.done() and time.time() < deadline:
-            time.sleep(0.02)
-        result = future.result() if future.done() else None
+        future.add_done_callback(lambda _f: done.set())
+        if not done.wait(2.0):
+            return False
+        result = future.result()
         return bool(result and result.success)
 
     def send_joints(self, joints: dict[str, float]) -> None:

@@ -309,6 +309,22 @@ def _hold_fns(stack: str):
     return holding, ease_grip
 
 
+def _squeeze(twin, cfg, stack: str, body: str, resolved: str):
+    """The hand at the grasp around ``body``, the jaws closed on it: ``(arm, gripped, hold, plan, truth)``."""
+    plan, _approach, _joints, truth, _pan, _kin = _accepted(twin, cfg, stack, body, resolved)
+    assert plan is not None, f"{stack} found no graspable view of the {body}"
+    *_, Arm, close, grip_of, _floor = _stack(stack)
+    world = twin.world
+    world.reset(plan.grasp)
+    for other in world.objects:
+        if other != body:
+            world.hide(other)
+    world.place(body, truth)
+    arm = Arm(cfg, world=world)
+    gripped, hold = close(arm, grip_of(cfg), start_from=75.0, ease=False)
+    return arm, gripped, hold, plan, truth
+
+
 @pytest.mark.parametrize("stack,body,resolved", _CASES)
 def test_close_holds_the_object(twins, pipeline_cfg, workshop_cfg, stack, body, resolved):
     """The close runs after the hand is down, both jaws keep the object up to
@@ -319,18 +335,10 @@ def test_close_holds_the_object(twins, pipeline_cfg, workshop_cfg, stack, body, 
 
     cfg = pipeline_cfg if stack == "pipeline" else workshop_cfg
     twin = twins(stack, cfg)
-    plan, _approach, _joints, truth, _pan, _kin = _accepted(twin, cfg, stack, body, resolved)
-    assert plan is not None, f"{stack} found no graspable view of the {body}"
-    *_, Arm, close, grip_of, floor = _stack(stack)
+    *_, grip_of, floor = _stack(stack)
     world = twin.world
-    world.reset(plan.grasp)
-    for other in world.objects:
-        if other != body:
-            world.hide(other)
-    world.place(body, truth)
-    arm = Arm(cfg, world=world)
     try:
-        gripped, hold = close(arm, grip_of(cfg), start_from=75.0, ease=False)
+        arm, gripped, hold, plan, truth = _squeeze(twin, cfg, stack, body, resolved)
         assert gripped, f"{stack} reported no contact on the {body}"
         time.sleep(0.3)
         assert world.is_grasped(body), f"{stack} {body} is not held by both jaws"
@@ -363,5 +371,23 @@ def test_close_holds_the_object(twins, pipeline_cfg, workshop_cfg, stack, body, 
         world.hide(body)
         time.sleep(0.5)
         assert not holding(arm, grip_of(cfg), hold), f"{stack}: holding() with empty jaws"
+    finally:
+        world.reset()
+
+
+@pytest.mark.parametrize("stack", ["pipeline", "workshop"])
+def test_the_jaws_open_after_a_squeeze(twins, pipeline_cfg, workshop_cfg, stack):
+    """A squeezed jaw stops at the object while its servo setpoint goes on past it.
+    The release is planned from that setpoint, so it ends within its profile."""
+    from common.motion import JOINT_LIMITS
+
+    cfg = pipeline_cfg if stack == "pipeline" else workshop_cfg
+    twin = twins(stack, cfg)
+    world = twin.world
+    try:
+        arm, gripped, _hold, _plan, _truth = _squeeze(twin, cfg, stack, "sports_ball", "sports ball")
+        assert gripped, f"{stack} reported no contact on the sports_ball"
+        assert arm.move_to({"gripper": JOINT_LIMITS["gripper"][1]}) == "arrived"
+        assert not world.is_grasped("sports_ball"), f"{stack}: the open jaws still hold the sports_ball"
     finally:
         world.reset()

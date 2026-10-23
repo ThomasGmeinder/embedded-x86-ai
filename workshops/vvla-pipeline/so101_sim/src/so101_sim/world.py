@@ -57,6 +57,12 @@ _FIXED_FINGER = frozenset({
 
 TABLE_Z = -0.005  # tabletop surface height in scene_vvla.xml
 
+# A prop at rest: resting contact jitter in this scene stays under 0.1 mm/s and
+# 0.003 rad/s, and a prop dropped 5 cm is below both within 0.3 s. At these
+# limits it moves 0.03 mm per 30 fps camera frame.
+SETTLED_M_S = 0.001
+SETTLED_RAD_S = 0.01
+
 
 def _yaw_deg(quat) -> float:
     """Z rotation of a MuJoCo ``(w, x, y, z)`` quaternion, in degrees."""
@@ -99,6 +105,8 @@ class SimWorld:
         self.data = mujoco.MjData(self.model)
         self.dt = float(self.model.opt.timestep)
         self.lock = threading.RLock()
+        self._stepped = threading.Condition(self.lock)  # notified after each physics pass, and on stop
+        self._passes = 0
 
         self.jmap = JointMap(self.cfg["joint_map"], self.cfg["gripper_map"])
         m = self.model
@@ -134,6 +142,9 @@ class SimWorld:
         self._thread: threading.Thread | None = None
         self._viewer = None
         self._closed = False
+        self._dropped_s = self._worst_drop_s = 0.0  # sim time stalls dropped, logged once a second
+        self._drops = 0
+        self._drop_logged = 0.0
         self.reset()
         if start:
             self.start()
@@ -237,8 +248,16 @@ class SimWorld:
         )
         tau = np.where(self.servo.torque, tau, 0.0)
         self.current.update(tau, self.dt, moving=np.abs(self.servo.v_ref) > 1e-4)
-        if self.protection.update(self.current.load_frac(), self.dt):
+        load = self.current.load_frac()
+        if self.protection.update(load, self.dt):
             self._apply_torque_caps()
+            logger.info(
+                "overload protection tripped: %s",
+                ", ".join(
+                    f"{m} at {100 * load[i]:.0f}% load"
+                    for i, m in enumerate(MOTOR_NAMES) if self.protection.tripped[i]
+                ),
+            )
 
     def _apply_torque_caps(self) -> None:
         self.model.actuator_forcerange[self._act] = (
@@ -255,21 +274,44 @@ class SimWorld:
                 self._step_once()
 
     def _loop(self) -> None:
+        try:
+            self._run_loop()
+        finally:
+            with self._stepped:  # a waiter on next_step() sees the thread stop
+                self._stepped.notify_all()
+
+    def _run_loop(self) -> None:
         rtf = float(self.cfg.get("realtime_factor", 1.0))
         max_lag = float(self.cfg.get("max_catchup_s", 0.05))
         next_view = 0.0
         while self._running:
-            target = self._sim0 + (time.perf_counter() - self._wall0) * rtf
-            lag = target - self.data.time
-            n = int(lag / self.dt)
-            if lag > max_lag:  # stalled (GC, debugger, heavy load): drop time
-                with self.lock:
+            # reset() moves the sim clock and its epoch together under the lock;
+            # read apart, a reset in between looks like seconds of lag.
+            with self.lock:
+                lag = self._sim0 + (time.perf_counter() - self._wall0) * rtf - self.data.time
+                stalled = lag > max_lag  # GC, debugger, heavy load: drop the time
+                if stalled:
                     self._sync_epoch()
-                n = 1
-            if n > 0:
-                with self.lock:
-                    for _ in range(n):
-                        self._step_once()
+                steps = 1 if stalled else int(lag / self.dt)
+                for _ in range(steps):
+                    self._step_once()
+                if steps:
+                    self._passes += 1
+                    self._stepped.notify_all()
+                next_step = self._wall0 + (self.data.time + self.dt - self._sim0) / rtf
+            if stalled:
+                self._dropped_s += lag
+                self._worst_drop_s = max(self._worst_drop_s, lag)
+                self._drops += 1
+            if self._drops and time.monotonic() - self._drop_logged >= 1.0:
+                logger.info(
+                    "physics fell behind the wall clock: dropped %.2f s of sim time "
+                    "in %d stall(s), longest %.2f s",
+                    self._dropped_s, self._drops, self._worst_drop_s,
+                )
+                self._dropped_s = self._worst_drop_s = 0.0
+                self._drops = 0
+                self._drop_logged = time.monotonic()
             if self._viewer is not None and time.perf_counter() >= next_view:
                 next_view = time.perf_counter() + 1.0 / 60.0
                 try:
@@ -277,7 +319,7 @@ class SimWorld:
                         self._viewer.sync()
                 except Exception:
                     self._viewer = None
-            time.sleep(0.001)
+            time.sleep(max(next_step - time.perf_counter(), 0.0))  # real time: until the next physics step is due
 
     def _open_viewer(self) -> None:
         try:
@@ -315,6 +357,7 @@ class SimWorld:
                 self.servo.goal[i] = min(max(self.jmap.to_rad(name, cal), lo), hi)
                 if self.protection.clear(i):
                     self._apply_torque_caps()
+                    logger.info("overload protection cleared on %s by a new goal", name)
 
     def set_torque_limit(self, name: str, frac: float) -> None:
         """Torque_Limit: cap one servo's output at ``frac`` of stall torque."""
@@ -342,6 +385,21 @@ class SimWorld:
         with self.lock:
             g = self.servo.goal.copy()
         return {n: self.jmap.to_cal(n, g[i]) for i, n in enumerate(MOTOR_NAMES)}
+
+    def setpoint_cal(self) -> dict[str, float]:
+        """Where each servo's profile setpoint is: the next goal's profile starts here.
+
+        A jaw squeezing an object stops at the object while its setpoint goes on to the goal.
+        """
+        with self.lock:
+            q = self.servo.q_ref.copy()
+        return {n: self.jmap.to_cal(n, q[i]) for i, n in enumerate(MOTOR_NAMES)}
+
+    def profile_s(self, joints) -> float:
+        """Sim time until the servo profiles of ``joints`` end, from their state now."""
+        idx = [MOTOR_NAMES.index(j) for j in joints]
+        with self.lock:
+            return self.servo.steps_to_finish(idx, self.dt) * self.dt
 
     def set_torque(self, name: str, enabled: bool) -> None:
         """Torque_Enable: off makes the joint limp (actuator gains zeroed)."""
@@ -630,6 +688,30 @@ class SimWorld:
         with self.lock:
             g = self.data.body("gripper")
             return g.xmat.reshape(3, 3).T @ (self.data.body(body).xpos - g.xpos)
+
+    def next_step(self, seen: int) -> int:
+        """Block until the physics thread has stepped past pass ``seen``; return the new pass count.
+
+        ``passes`` is the count to start from. Raises RuntimeError once the thread is not running.
+        """
+        with self._stepped:
+            self._stepped.wait_for(lambda: self._passes != seen or not self._running)
+            if not self._running:
+                raise RuntimeError("the twin's physics thread is not running")
+            return self._passes
+
+    @property
+    def passes(self) -> int:
+        return self._passes
+
+    def props_settled(self) -> bool:
+        """Every prop is at rest: slower than :data:`SETTLED_M_S` and :data:`SETTLED_RAD_S`."""
+        with self.lock:
+            for _qadr, dadr in self._free.values():
+                v = self.data.qvel[dadr : dadr + 6]
+                if np.linalg.norm(v[:3]) >= SETTLED_M_S or np.linalg.norm(v[3:]) >= SETTLED_RAD_S:
+                    return False
+        return True
 
     def snapshot(self) -> dict:
         """Compact state for logs / video HUD (calibrated units)."""

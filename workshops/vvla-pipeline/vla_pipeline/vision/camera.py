@@ -118,6 +118,10 @@ class DirectCamera(CameraClient):
             return False, None
         return True, frame
 
+    def retry_at(self) -> float | None:
+        """When :meth:`read` next tries to reopen a lost device (``time.time()``); None while it is open."""
+        return self._next_retry if self._cap is None else None
+
     def read_after(self, settled_at: float) -> tuple[bool, np.ndarray | None]:
         """Discard buffered frames until a read blocks for a new exposure.
 
@@ -162,9 +166,10 @@ class Ros2Camera(CameraClient):
         if not rclpy.ok():
             rclpy.init()
         self._node = rclpy.create_node(f"camera_client_{role}")
-        self._lock = threading.Lock()
+        self._cond = threading.Condition()  # notified on every new frame, and on close
         self._frame: np.ndarray | None = None
         self._stamp = 0.0
+        self._closed = False
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -187,29 +192,37 @@ class Ros2Camera(CameraClient):
         )
         if msg.encoding == "rgb8":
             frame = frame[..., ::-1]
-        with self._lock:
+        with self._cond:
             self._frame = frame.copy()
             self._stamp = time.time()
+            self._cond.notify_all()
 
     def read(self) -> tuple[bool, np.ndarray | None]:
         """Return the latest frame if it isn't stale, else (False, None)."""
-        with self._lock:
+        with self._cond:
             if self._frame is None or (time.time() - self._stamp) > self._stale_after:
                 return False, None
             return True, self._frame
 
     def read_after(self, settled_at: float) -> tuple[bool, np.ndarray | None]:
-        """Newest cached frame whose stamp is later than ``settled_at``."""
-        deadline = time.time() + max(self._stale_after, 0.5)
-        while time.time() < deadline:
-            with self._lock:
-                if self._frame is not None and self._stamp > settled_at:
-                    return True, self._frame
-            time.sleep(0.02)
-        return False, None
+        """First frame that arrives after ``settled_at``, within the stream's staleness limit."""
+        ok, frame, _arrived = self.next_frame(settled_at, max(self._stale_after, 0.5))
+        return ok, frame
+
+    def next_frame(self, after: float, timeout: float | None = None) -> tuple[bool, np.ndarray | None, float]:
+        """``(ok, frame, arrived)``: the first frame that arrives after ``after``;
+        not ok once closed, or when ``timeout`` passes first."""
+        with self._cond:
+            self._cond.wait_for(lambda: self._closed or (self._frame is not None and self._stamp > after), timeout)
+            if self._closed or self._frame is None or self._stamp <= after:
+                return False, None, after
+            return True, self._frame, self._stamp
 
     def close(self) -> None:
-        """Shut down the executor and destroy the subscriber node."""
+        """Wake a waiting reader, shut down the executor and destroy the subscriber node."""
+        with self._cond:
+            self._closed = True
+            self._cond.notify_all()
         self._executor.shutdown()
         self._node.destroy_node()
 

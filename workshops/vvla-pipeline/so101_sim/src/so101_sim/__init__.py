@@ -45,6 +45,7 @@ __all__ = [
     "close_shared_world",
     "load_sim_config",
     "MOTOR_NAMES",
+    "MOTOR_SHORT",
 ]
 
 MOTOR_NAMES = (
@@ -55,6 +56,15 @@ MOTOR_NAMES = (
     "wrist_roll",
     "gripper",
 )
+# Labels for HUDs and log lines.
+MOTOR_SHORT = {
+    "shoulder_pan": "pan",
+    "shoulder_lift": "lift",
+    "elbow_flex": "elbow",
+    "wrist_flex": "flex",
+    "wrist_roll": "roll",
+    "gripper": "grip",
+}
 
 _LAZY = {
     "SimWorld": "so101_sim.world",

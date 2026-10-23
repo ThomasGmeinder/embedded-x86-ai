@@ -93,7 +93,7 @@ def _frame(kind: int) -> np.ndarray:
     return image
 
 
-def _find(frame, name):
+def _find(frame, name, conf=None):
     kind = int(frame[0, 0, 0])
     if kind == 0:
         return [], "sports ball"

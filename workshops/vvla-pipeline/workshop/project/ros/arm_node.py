@@ -40,6 +40,7 @@ import time
 
 from common.config import load_config
 from common.motion import (
+    DEFAULT_CONTROL_HZ,
     LIVE_MIMIC_LIMITS,
     MOTOR_NAMES,
     REST_POSE,
@@ -48,7 +49,7 @@ from common.motion import (
     make_arm_backend,
     set_active_limits,
 )
-from common.ros_helpers import GRIPPER_TORQUE_TOPIC, joint_state_msg
+from common.ros_helpers import GRIPPER_TORQUE_TOPIC, joint_state_msg, motion_state_msg, motion_state_publisher
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class So101ServerNode(Node):
         r = cfg["robot"]
         self.command_topic = r["command_topic"]
         self.state_topic = r["state_topic"]
-        self._control_fps = float(r.get("control_fps", 30.0))
+        self._control_fps = float(r.get("control_fps", DEFAULT_CONTROL_HZ))
         self._arm = arm if arm is not None else DryRunArm()
         # Real hardware behind this node: admit the extended live gesture-
         # mimic envelope end to end. Clients clamp every scripted behavior to
@@ -103,6 +104,9 @@ class So101ServerNode(Node):
         self._torque_limit = None  # next gripper Torque_Limit to write
         self._setup_ros()
         self.create_subscription(Int32, GRIPPER_TORQUE_TOPIC, self._on_torque_limit, 10)
+        # PROVIDED: the servos' own report of the goal they run toward. Clients
+        # wait on it to know a move has finished (common.motion.MotionMonitor).
+        self._motion_pub = motion_state_publisher(self)
 
         self._running = True
         self._thread = threading.Thread(target=self._control_loop, daemon=True)
@@ -165,7 +169,8 @@ class So101ServerNode(Node):
             t0 = time.perf_counter()
             with self._lock:
                 target = dict(self._target)
-                fresh = (time.time() - self._last_cmd_time) < 1.0
+                cmd_time = self._last_cmd_time
+                fresh = (time.time() - cmd_time) < 1.0
                 torque_limit, self._torque_limit = self._torque_limit, None
             try:
                 if torque_limit is not None:
@@ -186,6 +191,7 @@ class So101ServerNode(Node):
                     self._gripper_load = math.nan if load is None else float(load)
 
                 self._publish_state(joints)
+                self._motion_pub.publish(motion_state_msg(self._arm, cmd_time, joints))
             except NotImplementedError:
                 raise
             except Exception as e:  # a transient bus error must not kill the loop

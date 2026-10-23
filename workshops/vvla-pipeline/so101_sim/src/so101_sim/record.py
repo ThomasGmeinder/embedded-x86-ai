@@ -34,22 +34,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from so101_sim import MOTOR_NAMES
+from so101_sim import MOTOR_NAMES, MOTOR_SHORT
 
 logger = logging.getLogger(__name__)
 
 _HUD_H = 60
 _GRIPPER = MOTOR_NAMES.index("gripper")
 _CLOSE_LIMIT = 0.5  # the Torque_Limit (fraction) load_threshold is set for; a hold runs lower
-_SHORT = {
-    "shoulder_pan": "pan",
-    "shoulder_lift": "lift",
-    "elbow_flex": "elbow",
-    "wrist_flex": "wflex",
-    "wrist_roll": "roll",
-    "gripper": "grip",
-}
-
 
 class SimRecorder:
     """Record a twin run to ``path`` (.mp4) + ``path.with_suffix('.jsonl')``."""
@@ -307,7 +298,7 @@ class SimRecorder:
         head = f"t={t_sim:6.2f}s  {self.title}  {self._label}".strip()
         cv2.putText(hud, head[:110], (6, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         joints = "  ".join(
-            f"{_SHORT[m]} {snap['joints'][m]:6.1f}/{snap['goal'][m]:6.1f}" for m in MOTOR_NAMES
+            f"{MOTOR_SHORT[m]} {snap['joints'][m]:6.1f}/{snap['goal'][m]:6.1f}" for m in MOTOR_NAMES
         )
         cv2.putText(hud, joints, (6, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (190, 220, 255), 1)
         if self._events:

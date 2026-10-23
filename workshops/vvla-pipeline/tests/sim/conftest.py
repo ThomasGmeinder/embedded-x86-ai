@@ -11,18 +11,24 @@
     ./run_sim_tests.sh                                # NPU load order and the twin stacks
     ./run_sim_tests.sh --sim-yolo-device cpu          # YOLO on the CPU
     ./run_sim_tests.sh --sim-video failed             # keep only failing runs' videos
+    ./run_sim_tests.sh --sim-repeat 20 -x -k mimic    # hunt a flaky test
     ./run_sim_tests.sh --sim-eyes seg                 # ground-truth boxes instead of YOLO
     PROJECT=project ./run_sim_tests.sh -k workshop    # students' workshop code
 
 Videos + timelines land in ``_artifacts/sim_tests/<tier>/`` with an
-``index.html`` that plays them all.
+``index.html`` that plays them all. A failed test also leaves
+``_artifacts/sim_tests/failures/<test>/``: what each fixture with a
+``failure_report`` saved (joint timeline, twin node log, notebook kernel log),
+summarized at the end of its report.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,6 +58,15 @@ def pytest_addoption(parser):
     g.addoption("--sim-yolo-device", choices=("cpu", "npu"), default="npu",
                 help="where the YOLO eyes run (default npu, as in the notebooks; "
                      "./run_sim_tests.sh sources scripts/ryzen_ai_env.sh)")
+    g.addoption("--sim-repeat", type=int, default=1,
+                help="run every selected test this many times, to catch a flaky one")
+
+
+def pytest_generate_tests(metafunc):
+    repeat = metafunc.config.getoption("--sim-repeat")
+    if repeat > 1:
+        metafunc.fixturenames.append("_sim_run")
+        metafunc.parametrize("_sim_run", range(1, repeat + 1), ids=lambda i: f"run{i}")
 
 
 def _require_this_clone() -> None:
@@ -85,11 +100,43 @@ def pytest_configure(config):
     config._sim_results = {}
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    item._sim_t0 = time.time()
+
+
 @pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_makereport(item, call):
     rep = yield
     setattr(item, f"rep_{rep.when}", rep)
+    if rep.failed and rep.when in ("setup", "call"):
+        bundle = _failure_bundle(item)
+        if bundle:
+            rep.sections.append(("failure bundle", bundle))
     return rep
+
+
+def _failure_bundle(item) -> str:
+    """Evidence from every fixture with a ``failure_report(dest, since)``, saved under failures/<test>/."""
+    reporters, seen = [], set()
+    for value in getattr(item, "funcargs", {}).values():
+        for obj in value if isinstance(value, tuple) else (value,):
+            report = getattr(obj, "failure_report", None)
+            if callable(report) and id(obj) not in seen:
+                seen.add(id(obj))
+                reporters.append((type(obj).__name__, report))
+    if not reporters:
+        return ""
+    dest = Path(item.config.getoption("--sim-video-dir")) / "failures" / _slug(item.nodeid)
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True)
+    parts = [f"saved in {dest}"]
+    for name, report in reporters:
+        try:
+            parts.append(report(dest, getattr(item, "_sim_t0", None)))
+        except Exception as e:
+            parts.append(f"{name}.failure_report failed: {e!r}")
+    return "\n\n".join(parts)
 
 
 def _tier(item) -> str:

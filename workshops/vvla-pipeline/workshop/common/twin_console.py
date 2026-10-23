@@ -37,6 +37,8 @@ from collections import deque
 import cv2
 import numpy as np
 
+from so101_sim import MOTOR_SHORT
+
 from common.imaging import draw_skeleton
 from common.motion import GRIPPER_TORQUE_LIMIT
 
@@ -47,15 +49,6 @@ VIEW_W, VIEW_H = 800, 800  # tall enough for the raised arm (wave)
 LOG_LINES = (VIEW_H - 230) // 20  # what fits between the header and the arm HUD
 PANEL_W = 400
 IDLE_AFTER_S = 0.5  # a model untouched this long is run by the console itself
-SHORT = {
-    "shoulder_pan": "pan",
-    "shoulder_lift": "lift",
-    "elbow_flex": "elbow",
-    "wrist_flex": "flex",
-    "wrist_roll": "roll",
-    "gripper": "grip",
-}
-
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 WHITE, GRAY, DIM = (235, 235, 235), (150, 150, 150), (90, 90, 90)
 GREEN, YELLOW, RED, CYAN = (80, 200, 80), (60, 200, 230), (60, 60, 230), (220, 200, 80)
@@ -66,10 +59,17 @@ class FanoutCamera:
 
     ``read()`` blocks for the next frame this thread hasn't seen, so behaviors
     keep camera-like pacing while the console reads the same stream.
+
+    The reader blocks on the camera: a device or a paced stand-in in its
+    ``read()``, a latest-frame client (a ROS topic, the twin) in its
+    ``next_frame(after)``, which returns the first frame newer than ``after``.
+    A camera that stops giving frames ends the reader, unless it says when it
+    will try its device again (``retry_at()``, wall-clock seconds).
     """
 
     def __init__(self, inner, timeout_s: float = 1.0):
         self.inner = inner
+        self.role = getattr(inner, "role", "?")
         self._timeout = timeout_s
         self._cond = threading.Condition()
         self._frame: np.ndarray | None = None
@@ -77,33 +77,44 @@ class FanoutCamera:
         self._stamp = 0.0
         self._wall = 0.0
         self._seen: dict[int, int] = {}
+        self.last_stamp: float | None = None  # capture time of the last read_after() frame
         self._running = True
-        self._thread = threading.Thread(target=self._pump, daemon=True, name="fanout")
+        self._closed = threading.Event()
+        self._thread = threading.Thread(target=self._pump, daemon=True, name=f"fanout-{self.role}")
         self._thread.start()
 
+    def _next(self, after: float):
+        """``(ok, frame, captured)``: the camera's next frame and when its scene was captured.
+
+        A camera that knows the capture time (the twin's) says so in
+        ``last_stamp``; otherwise it is the arrival time.
+        """
+        if callable(getattr(self.inner, "next_frame", None)):
+            return self.inner.next_frame(after)
+        ok, frame = self.inner.read()
+        captured = getattr(self.inner, "last_stamp", None)
+        return ok, frame, time.time() if captured is None else float(captured)
+
     def _pump(self) -> None:
-        last = None
+        after = 0.0
         while self._running:
             try:
-                ok, frame = self.inner.read()
+                ok, frame, captured = self._next(after)
             except Exception as e:
-                logger.debug("[console] camera read failed: %s", e)
+                logger.warning("[console] %s camera read failed: %s", self.role, e)
                 ok, frame = False, None
-            if not ok or frame is None:
-                time.sleep(0.02)
+            if ok and frame is not None:
+                after = captured
+                with self._cond:
+                    self._frame, self._stamp, self._wall = frame, time.monotonic(), captured
+                    self._seq += 1
+                    self._cond.notify_all()
                 continue
-            if frame is last:  # latest-frame clients return the same array until a new one lands
-                time.sleep(0.005)
-                continue
-            last = frame
-            # A camera that knows when its frame's scene was captured
-            # (the twin's) says so in last_stamp; otherwise the arrival time.
-            captured = getattr(self.inner, "last_stamp", None)
-            with self._cond:
-                self._frame, self._stamp = frame, time.monotonic()
-                self._wall = time.time() if captured is None else float(captured)
-                self._seq += 1
-                self._cond.notify_all()
+            retry = getattr(self.inner, "retry_at", None)
+            retry_at = retry() if callable(retry) else None
+            if retry_at is None:
+                return  # closed, or a camera that will not give frames again
+            self._closed.wait(max(retry_at - time.time(), 0.0))  # the camera's own reopen schedule
 
     def read(self) -> tuple[bool, np.ndarray | None]:
         tid = threading.get_ident()
@@ -125,6 +136,7 @@ class FanoutCamera:
                     return False, None
                 self._cond.wait(timeout=remaining)
             self._seen[threading.get_ident()] = self._seq
+            self.last_stamp = self._wall
             return True, self._frame
 
     def latest(self) -> np.ndarray | None:
@@ -134,12 +146,17 @@ class FanoutCamera:
                 return None
             return self._frame
 
+    def ok(self) -> bool:
+        return self.latest() is not None
+
     def close(self) -> None:
+        """Close the camera, which wakes the reader blocked on it, then join the reader."""
         self._running = False
-        self._thread.join(timeout=1.0)
+        self._closed.set()
         close = getattr(self.inner, "close", None) or getattr(self.inner, "release", None)
         if close:
             close()
+        self._thread.join(timeout=1.0)
 
     def __getattr__(self, name):
         return getattr(self.inner, name)
@@ -206,9 +223,16 @@ def _bar(img, x, y, w, h, frac, color, mark: float | None = None) -> None:
 PROCESSOR = {"VitisAIExecutionProvider": "NPU", "CPUExecutionProvider": "CPU"}
 
 
-def _provider(model, default: str = "CPU") -> str:
-    """The processor a model runs on, for a tile title: NPU, CPU, or the provider's name."""
-    p = str(getattr(model, "provider", None) or default)
+def provider_name(model, default: str = "CPU") -> str:
+    """The processor a model runs on, for a tile title: NPU, CPU, or the provider's name.
+
+    From the model's ``provider`` (the workshop's models), else its ONNX ``session``.
+    """
+    p = getattr(model, "provider", None)
+    session = getattr(model, "session", None)
+    if p is None and session is not None:
+        p = session.get_providers()[0]
+    p = str(p or default)
     return PROCESSOR.get(p, p.replace("ExecutionProvider", ""))
 
 
@@ -443,14 +467,14 @@ class TwinConsole:
             cv2.putText(p, text, (12, y), FONT, 0.45, GREEN if grasp else WHITE, 1, cv2.LINE_AA)
             _bar(p, 12, y + 8, PANEL_W - 24, 8, load / full, GREEN if grasp else GRAY, mark=level / full)
         if joints:
-            parts = [f"{SHORT.get(n, n)} {v:+.0f}" for n, v in joints.items()]
+            parts = [f"{MOTOR_SHORT.get(n, n)} {v:+.0f}" for n, v in joints.items()]
             for i in range(0, len(parts), 3):
                 cv2.putText(p, "   ".join(parts[i : i + 3]), (12, y + 36 + 18 * (i // 3)),
                             FONT, 0.42, GRAY, 1, cv2.LINE_AA)
 
     def _webcam_tiles(self, frame) -> list[np.ndarray]:
         pose, hands = self._pose_tile(frame).copy(), self._hands_tile(frame).copy()
-        _title(pose, f"operator: YOLO pose [{_provider(self._pose, 'off')}]")
+        _title(pose, f"operator: YOLO pose [{provider_name(self._pose, 'off')}]")
         _title(hands, f"operator: MediaPipe hands [{'CPU' if self._hands else 'off'}]")
         return [pose, hands]
 
@@ -464,7 +488,7 @@ class TwinConsole:
         operator_frame = self.operator.latest() if self.operator is not None else None
         armcam = self.armcam.latest() if self.armcam is not None else None
         detect = self._detect_tile(armcam).copy()
-        _title(detect, f"arm: YOLO detect [{_provider(self._detector, 'off')}]")
+        _title(detect, f"arm: YOLO detect [{provider_name(self._detector, 'off')}]")
         tiles = [*self._webcam_tiles(operator_frame), detect]
         return np.vstack([np.hstack(tiles), np.hstack([self._view_tile(), self._panel()])])
 

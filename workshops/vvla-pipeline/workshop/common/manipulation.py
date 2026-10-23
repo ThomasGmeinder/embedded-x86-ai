@@ -41,7 +41,9 @@ from so101_sim.kinematics import OPEN_GRIPPER
 
 from common.imaging import KP
 from common.intents import Intent
-from common.motion import GRASP_LIMITS, GRIPPER_CLOSED_FLOOR, GRIPPER_TORQUE_LIMIT, JOINT_LIMITS, REST_POSE
+from common.motion import (
+    GRASP_LIMITS, GRIPPER_CLOSED_FLOOR, GRIPPER_TORQUE_LIMIT, JOINT_LIMITS, REST_POSE, joints_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -598,6 +600,15 @@ def _log_sighting(pp, cam, frame, det, resolved, joints) -> None:
     )
 
 
+def _below_cutoff(find, frame, name) -> str:
+    """The strongest ``name`` box under the detector's cutoff, for the scan log."""
+    dets, _ = find(frame, name, 0.05)
+    if not dets:
+        return "none over 0.05"
+    best = max(dets, key=lambda d: d.score)
+    return "best %.2f at %s" % (best.score, tuple(round(float(v)) for v in best.box))
+
+
 def _sweep_views(arm, camera, find, name, pose, pans, pp, stop_check, *, near=False, first=True, cam=None, accept=None):
     """Walk the pans until one settled frame can be grasped.
 
@@ -616,16 +627,27 @@ def _sweep_views(arm, camera, find, name, pose, pans, pp, stop_check, *, near=Fa
         )
         if stop_check and stop_check():
             return views, "stopped", saw_small, saw_large
-        logger.info("scan near pan %.1f" if near else "scan pan %.1f", float(pan))
         settled_at = time.time()
         ok, frame = _read_settled(camera, settled_at)
         joints = dict(arm.get_joints())
+        stamp = getattr(camera, "last_stamp", None)
+        if not ok or frame is None:
+            seen = "no frame"
+        elif stamp is None:
+            seen = "frame"
+        else:
+            seen = f"frame captured {stamp - settled_at:+.2f} s after the move"
+        logger.info(
+            "%s %.1f: %s | joints %s",
+            "scan near pan" if near else "scan pan", float(pan), seen, joints_text(joints),
+        )
         if not ok or frame is None:
             continue
         dets, resolved = find(frame, name)
         if resolved is None:
             return views, "unknown", saw_small, saw_large
         if not dets:
+            logger.info("scan: no %s box over the cutoff (%s)", resolved, _below_cutoff(find, frame, name))
             continue
         shape = _shape_of(resolved)
         height, width = frame.shape[:2]
@@ -844,9 +866,8 @@ def _execute_plan(arm, plan, stop_check, limits) -> bool:
     for poses, duration_s in legs:
         if not _follow(arm, poses, stop_check, limits, duration_s):
             return False
-        # 0.5° is about 2 mm at the jaws. With the default 1° of progress the
-        # last degree never counts as moving, and the goal is resent until the timeout.
-        arm.move_to(poses[-1], tolerance_deg=0.5, progress_eps_deg=0.1, stop_check=stop_check, limits=limits)
+        # 0.5° is about 2 mm at the jaws: a leg that ends farther off logs as blocked.
+        arm.move_to(poses[-1], tolerance_deg=0.5, stop_check=stop_check, limits=limits)
         if stop_check and stop_check():
             return False
     return True

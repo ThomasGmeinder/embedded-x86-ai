@@ -177,8 +177,8 @@ class MicListener:
     ``transcribing`` is True while Whisper runs. ``on_drop(reason)`` hears
     about every utterance that never becomes text: speech too short to count,
     a transcript with no words, and microphone audio lost because the CPU was
-    too busy to read it. ``error`` holds the reason if the microphone could
-    not be opened.
+    too busy to read it. ``opened`` is set once the microphone was tried;
+    ``error`` then holds the reason if it could not be opened.
     """
 
     OVERFLOW_REPORT_S = 2.0  # at most one "audio lost" report per this many seconds
@@ -194,8 +194,10 @@ class MicListener:
         self.on_drop = on_drop
         self.transcribing = False
         self.error: str | None = None
+        self.opened = threading.Event()
         self.overflows = 0  # microphone blocks lost since start
-        self._stop = threading.Event()
+        self._blocks: queue.Queue = queue.Queue()  # microphone blocks; None ends the listener
+        self._jobs: queue.Queue = queue.Queue()  # utterances for Whisper; None ends the decoder
         self._thread = threading.Thread(target=self._run, daemon=True, name="mic")
 
     def _dropped(self, reason: str) -> None:
@@ -206,25 +208,48 @@ class MicListener:
             except Exception:
                 logger.exception("on_drop failed")
 
-    def _audio_in(self, blocks: queue.Queue, indata, frames, time_info, status) -> None:
+    def _audio_in(self, indata, frames, time_info, status) -> None:
         """sounddevice callback: queue the block; count blocks the device had to throw away."""
         if status.input_overflow:
             self.overflows += 1
-        blocks.put(indata[:, 0].copy())
+        self._blocks.put(indata[:, 0].copy())
 
     def start(self) -> "MicListener":
         self._thread.start()
         return self
 
     def stop(self) -> None:
-        self._stop.set()
+        self._blocks.put(None)
         self._thread.join(timeout=2.0)
+
+    def _decode(self) -> None:
+        while (audio := self._jobs.get()) is not None:
+            self.transcribing = True
+            try:
+                t = time.perf_counter()
+                text = self.transcribe(audio)
+                logger.info(
+                    "ASR %.1fs of audio in %.0f ms: %r",
+                    len(audio) / SAMPLE_RATE,
+                    (time.perf_counter() - t) * 1e3,
+                    text,
+                )
+            except Exception as e:
+                logger.exception("transcription failed")
+                self._dropped(f"transcription failed ({e})")
+                continue
+            finally:
+                self.transcribing = False
+            if text:
+                self.on_text(text)
+            else:
+                self._dropped("Whisper heard no words")
 
     def _run(self) -> None:
         import sounddevice as sd
 
-        blocks: queue.Queue = queue.Queue()
         seg = Segmenter(self.cfg)
+        t = time.perf_counter()
         try:
             stream = sd.InputStream(
                 samplerate=SAMPLE_RATE,
@@ -232,50 +257,21 @@ class MicListener:
                 dtype="float32",
                 blocksize=BLOCK,
                 device=self.device,
-                callback=lambda *args: self._audio_in(blocks, *args),
+                callback=self._audio_in,
             )
+            stream.start()
+            logger.info("microphone opened in %.3f s", time.perf_counter() - t)
         except Exception as e:
             self.error = str(e)
             logger.error("microphone unavailable: %s", e)
             return
+        finally:
+            self.opened.set()
+        threading.Thread(target=self._decode, daemon=True, name="asr").start()
         t0 = time.monotonic()
-        jobs: queue.Queue = queue.Queue()
-
-        def _decode() -> None:
-            while not self._stop.is_set():
-                try:
-                    audio = jobs.get(timeout=0.2)
-                except queue.Empty:
-                    continue
-                self.transcribing = True
-                try:
-                    t = time.perf_counter()
-                    text = self.transcribe(audio)
-                    logger.info(
-                        "ASR %.1fs of audio in %.0f ms: %r",
-                        len(audio) / SAMPLE_RATE,
-                        (time.perf_counter() - t) * 1e3,
-                        text,
-                    )
-                except Exception as e:
-                    logger.exception("transcription failed")
-                    self._dropped(f"transcription failed ({e})")
-                    continue
-                finally:
-                    self.transcribing = False
-                if text:
-                    self.on_text(text)
-                else:
-                    self._dropped("Whisper heard no words")
-
-        threading.Thread(target=_decode, daemon=True, name="asr").start()
         reported, reported_at = 0, 0.0
-        with stream:
-            while not self._stop.is_set():
-                try:
-                    block = blocks.get(timeout=0.2)
-                except queue.Empty:
-                    continue
+        try:
+            while (block := self._blocks.get()) is not None:
                 rms = float(np.sqrt(np.mean(np.square(block))))
                 audio = seg.push(block, rms)
                 if self.on_level is not None:
@@ -289,4 +285,8 @@ class MicListener:
                 if seg.dropped_s:
                     self._dropped(f"too short to hear ({seg.dropped_s:.2f} s of speech)")
                 if audio is not None:
-                    jobs.put(audio)
+                    self._jobs.put(audio)
+        finally:
+            stream.stop()
+            stream.close()
+            self._jobs.put(None)

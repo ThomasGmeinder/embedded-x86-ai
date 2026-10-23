@@ -8,8 +8,9 @@
 """``LeRobotArm`` on the MuJoCo digital twin instead of the Feetech bus.
 
 :class:`SimArmClient` is that transport with a :class:`so101_sim.SimFollower`
-in place of ``SO101Follower``. The slew clamp, direct-goal profile writes and
-effort probe are the ones on :class:`common.motion.LeRobotArm`.
+in place of ``SO101Follower``. The slew clamp, the per-move servo profile
+writes, the motion-state reads and the effort probe are the ones on
+:class:`common.motion.LeRobotArm`.
 
 Selected with ``robot.backend: sim`` (see ``make_arm`` and the ROS server
 node). The world is per process (``so101_sim.shared_world``) so the arm and
@@ -21,13 +22,12 @@ from __future__ import annotations
 import logging
 
 from vla_pipeline.robot.arm_interface import (
-    DIRECT_MODE_ACCEL_RAW,
-    DIRECT_MODE_SPEED_RAW,
-    GRIPPER_TORQUE_LIMIT,
     REST_POSE,
     LeRobotArm,
     sim_world,
 )
+
+from common.motion import MotionTimeout, settled  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -50,15 +50,34 @@ class SimArmClient(LeRobotArm):
         )
         self._robot.config.disable_torque_on_disconnect = False
         self._robot.connect()
-        self._effort_register = False
-        self._coordinated_joints = []
         logger.info("SO101 digital twin connected (MuJoCo, %s)", self.world.scene_path.name)
-        self._direct_goal = max_relative_target is None
-        if self._direct_goal:
-            self.set_motion_profile(
-                speed=DIRECT_MODE_SPEED_RAW, acceleration=DIRECT_MODE_ACCEL_RAW,
-            )
-        self.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
+        self._init_transport(max_relative_target)
+
+    def _plan_start(self) -> dict:
+        """The twin's profile starts from its setpoint, which a squeezed jaw leaves past the object."""
+        return self.world.setpoint_cal()
+
+    def _await_motion(self, joints: list, sent_at: float, stop_check) -> tuple[str, dict]:
+        """The twin's physics owns the servo profiles: check them after each physics pass.
+
+        The twin computes how long its profiles still run (:meth:`SimWorld.profile_s`,
+        braking included after a goal written mid-move). That sim time, plus the
+        physics step the end shows in, bounds the wait.
+        """
+        w = self.world
+        budget = w.profile_s(joints) + w.dt
+        deadline = float(w.data.time) + budget
+        seen = w.passes
+        while True:
+            now = float(w.data.time)  # before the state: still moving after `now` is a real overrun
+            state = {"joints": self.get_joints(), **self.read_motion_state(), "eta_s": self.last_eta_s}
+            if stop_check is not None and stop_check():
+                return "stopped", state
+            if settled(state, joints):
+                return "settled", state
+            if now > deadline:
+                raise MotionTimeout(f"servos {joints} still moving {budget:.3f} s of sim time after the goal: {state}")
+            seen = w.next_step(seen)
 
     def grip_report(self) -> str:
         return self.world.grip_report()

@@ -26,10 +26,11 @@ from __future__ import annotations
 import argparse
 import logging
 import threading
-import time
 
-from common.motion import GRIPPER_CLOSED_FLOOR, ArmClient, clamp_joints
-from common.ros_helpers import GRIPPER_TORQUE_TOPIC, joint_state_msg, parse_joint_state
+from common.motion import (
+    DEFAULT_CONTROL_HZ, GRIPPER_CLOSED_FLOOR, ArmClient, MotionMonitor, await_reported_motion, clamp_joints,
+)
+from common.ros_helpers import GRIPPER_TORQUE_TOPIC, joint_state_msg, parse_joint_state, subscribe_motion_state
 
 logger = logging.getLogger(__name__)
 
@@ -55,21 +56,29 @@ class Ros2ArmClient(ArmClient):
         self._pub = None
         self._torque_pub = None
         self._executor = None
+        # PROVIDED: the first state sets this event, and the server's motion
+        # state feeds this monitor (see _await_motion).
+        self._state_ready = threading.Event()
+        self._motion = MotionMonitor()
+        self._tick_s = 1.0 / float(r.get("control_fps", DEFAULT_CONTROL_HZ))  # the server's control period
+        handle_state = self._on_state
+
+        def _signal_state(msg) -> None:
+            handle_state(msg)
+            self._state_ready.set()
+
+        self._on_state = _signal_state
         self._setup_ros(r)
+        subscribe_motion_state(self._node, self._motion)
 
         # PROVIDED: block until the state stream is live - commanding an arm
         # whose state you can't see is how fingers get pinched.
-        deadline = time.time() + state_timeout_s
-        while time.time() < deadline:
-            with self._state_lock:
-                if self._state is not None:
-                    logger.info("Ros2ArmClient: state stream live.")
-                    return
-            time.sleep(0.05)
-        raise TimeoutError(
-            f"No JointState on {r['state_topic']} within {state_timeout_s}s - "
-            "is the server node running? (python -m ros.arm_node --dry-run)"
-        )
+        if not self._state_ready.wait(state_timeout_s):
+            raise TimeoutError(
+                f"No JointState on {r['state_topic']} within {state_timeout_s}s - "
+                "is the server node running? (python -m ros.arm_node --dry-run)"
+            )
+        logger.info("Ros2ArmClient: state stream live.")
 
     def _setup_ros(self, r: dict) -> None:
         """Create the client node, command publisher, and state subscription.
@@ -139,6 +148,10 @@ class Ros2ArmClient(ArmClient):
             if self._state is None:
                 raise RuntimeError("No arm state received yet.")
             return dict(self._state)
+
+    def _await_motion(self, joints: list, sent_at: float, stop_check) -> tuple[str, dict]:
+        """PROVIDED: wait on the server's motion state for the goal sent at ``sent_at``."""
+        return await_reported_motion(self._motion, joints, sent_at, self._tick_s, stop_check, self.get_joints)
 
     def get_gripper_load(self):
         """PROVIDED: latest gripper effort, or None (NaN on the wire)."""

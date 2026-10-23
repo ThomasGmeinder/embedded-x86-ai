@@ -440,6 +440,7 @@ def main() -> None:
                     line = input("you> ")
                 except EOFError:
                     shutdown.set()
+                    dispatcher.stop()
                     break
                 if line.strip():
                     _on_transcript(line.strip())
@@ -461,7 +462,9 @@ def main() -> None:
             )
             worker.start()
             console.run(shutdown, on_stop=lambda: _on_transcript("stop"))
+            shutdown.set()
             ctx.stop_event.set()
+            dispatcher.stop()
             worker.join(timeout=5.0)
     except KeyboardInterrupt:
         pass

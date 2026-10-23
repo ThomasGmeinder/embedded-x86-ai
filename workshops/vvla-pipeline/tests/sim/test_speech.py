@@ -80,7 +80,7 @@ def test_click_is_dropped_and_measured():
 
 
 class _FakeStream:
-    """``sounddevice.InputStream``: plays ``script`` blocks into the callback, 30 ms apart."""
+    """``sounddevice.InputStream``: plays ``script`` blocks into the callback, 2 ms apart."""
 
     script: list = []
 
@@ -93,12 +93,14 @@ class _FakeStream:
             self._callback(block[:, None], len(block), None, types.SimpleNamespace(input_overflow=overflow))
             time.sleep(0.002)
 
-    def __enter__(self):
+    def start(self):
         self._thread.start()
-        return self
 
-    def __exit__(self, *exc):
-        return False
+    def stop(self):
+        pass
+
+    def close(self):
+        pass
 
 
 def test_mic_listener_reports_what_never_becomes_text(monkeypatch):
@@ -113,10 +115,16 @@ def test_mic_listener_reports_what_never_becomes_text(monkeypatch):
     monkeypatch.setattr(speech.MicListener, "OVERFLOW_REPORT_S", 0.0)
 
     texts, drops = [], []
-    mic = speech.MicListener(CFG, lambda audio: "", texts.append, on_drop=drops.append).start()
-    deadline = time.time() + 10.0
-    while time.time() < deadline and len(drops) < 3:
-        time.sleep(0.05)
+    three = threading.Event()
+
+    def dropped(reason):
+        drops.append(reason)
+        if len(drops) >= 3:
+            three.set()
+
+    mic = speech.MicListener(CFG, lambda audio: "", texts.append, on_drop=dropped).start()
+    assert mic.opened.wait(5.0) and mic.error is None, mic.error
+    three.wait(10.0)
     mic.stop()
     assert not texts
     assert any(d.startswith("too short to hear") for d in drops), drops

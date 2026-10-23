@@ -70,11 +70,15 @@ def test_a_scene_snapshot_round_trips(world):
 
 
 class _Feed:
-    """A camera whose frames the test hands over; stamped if ``stamped``."""
+    """A camera whose frames the test hands over; stamped if ``stamped``.
+
+    ``read()`` blocks for the next frame, as a device read does.
+    """
 
     def __init__(self, stamped: bool):
         self._cond = threading.Condition()
         self._queue: list = []
+        self._closed = False
         if stamped:
             self.last_stamp = None
 
@@ -87,7 +91,8 @@ class _Feed:
 
     def read(self):
         with self._cond:
-            if not self._cond.wait_for(lambda: self._queue, timeout=0.05):
+            self._cond.wait_for(lambda: self._queue or self._closed)
+            if not self._queue:
                 return False, None
             frame, stamp = self._queue.pop(0)
         if hasattr(self, "last_stamp"):
@@ -95,7 +100,9 @@ class _Feed:
         return True, frame
 
     def close(self):
-        pass
+        with self._cond:
+            self._closed = True
+            self._cond.notify_all()
 
 
 def test_fanout_judges_a_stamped_frame_by_its_capture_time():
@@ -105,12 +112,9 @@ def test_fanout_judges_a_stamped_frame_by_its_capture_time():
     fan = FanoutCamera(feed, timeout_s=1.0)
     try:
         settled_at = time.time()
-        time.sleep(0.05)
         early = feed.push(stamp=settled_at - 0.1)  # rendered before the settle, delivered after
-        late = threading.Timer(0.2, lambda: feed.push(stamp=time.time()))
-        late.start()
+        feed.push(stamp=settled_at + 0.1)
         ok, frame = fan.read_after(settled_at)
-        late.join()
         assert ok and frame is not early
     finally:
         fan.close()
@@ -123,7 +127,6 @@ def test_fanout_falls_back_to_arrival_time_without_a_stamp():
     fan = FanoutCamera(feed, timeout_s=1.0)
     try:
         settled_at = time.time()
-        time.sleep(0.05)
         frame = feed.push()
         ok, got = fan.read_after(settled_at)
         assert ok and got is frame

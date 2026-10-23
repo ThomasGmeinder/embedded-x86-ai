@@ -27,9 +27,11 @@ from twin_ros_rig import (
     EXTENDED,
     TEST_DOMAIN_ID,
     Probe,
+    assert_domain_free,
     default_scene_snapshot,
     join_test_domain,
     quat_close,
+    wait_exit,
     xml_poses,
 )
 
@@ -53,11 +55,11 @@ def state_topic(workshop_cfg):
 
 
 @pytest.fixture
-def no_twin(probe, state_topic):
+def no_twin():
     """No twin on the test domain before the test, and none left after it."""
-    assert probe.wait_publishers(state_topic, 0, timeout=15), "a twin already runs on the test domain"
+    assert_domain_free("a twin already runs on the test domain")
     yield
-    assert probe.wait_publishers(state_topic, 0, timeout=20), "a twin node outlived its test"
+    assert_domain_free("a twin node outlived its test", exit_s=20.0)
 
 
 @pytest.fixture
@@ -85,15 +87,18 @@ def test_default_launch_is_unchanged(workshop_cfg, probe, state_topic, no_twin):
     from common.motion import GRASP_LIMITS
     from common.twin_ros import TwinArmClient
 
+    from std_msgs.msg import Bool
+
     log = tempfile.NamedTemporaryFile(prefix="twin_default_", suffix=".log", delete=False)
+    launched = time.time()
     proc = subprocess.Popen(
         [sys.executable, "-m", "so101_sim.node", "--config", str(DEFAULT_CONFIG),
          "--stack", "workshop", "--sim-cameras", "arm"],
         stdout=log, stderr=subprocess.STDOUT, env=os.environ.copy(),
     )
     try:
-        assert probe.wait_publishers(state_topic, 1, timeout=60), Path(log.name).read_text()
-        assert probe.wait_publishers("/cameras/arm/healthy", 1, timeout=20), "no workshop CameraNode"
+        assert probe.joints(after=launched, timeout=60), Path(log.name).read_text()
+        assert probe.first_message("/cameras/arm/healthy", Bool, timeout=20), "no workshop CameraNode"
         assert "/sim/scene" not in probe.topics()
         assert "/sim/reset_scene" not in probe.services()
         arm = TwinArmClient(workshop_cfg)
@@ -151,6 +156,7 @@ from sensor_msgs.msg import JointState
 rclpy.init()
 node = rclpy.create_node("other_domain_probe")
 pub = node.create_publisher(JointState, "/so101/joint_state", 1)
+print("UP", flush=True)
 seen = set()
 deadline = time.time() + float(sys.argv[1])
 while time.time() < deadline:
@@ -174,7 +180,11 @@ def test_the_twin_domain_is_private(workshop_cfg, no_twin):
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     try:
-        time.sleep(2.0)  # let the other domain's publisher announce itself
+        for line in other.stdout:
+            if line.startswith("UP"):
+                break
+        else:
+            pytest.fail("the other domain's publisher exited before it started")
         session = TwinSession(workshop_cfg)
         try:
             joints = session.arm.get_joints()
@@ -193,21 +203,13 @@ def test_the_twin_domain_is_private(workshop_cfg, no_twin):
 def test_a_second_twin_on_the_domain_is_refused(workshop_cfg, twin):
     from common.twin_ros import TwinSession
 
-    with pytest.raises(RuntimeError, match="already publishes"):
+    with pytest.raises(RuntimeError, match="already runs on ROS domain"):
         TwinSession(workshop_cfg)
     assert twin.scene.latest(after=time.time()) is not None, "the first twin stopped"
     assert twin.armcam.read()[0]
 
 
-def _gone(pid: int) -> bool:
-    try:
-        state = Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0]
-    except FileNotFoundError:
-        return True
-    return state == "Z"
-
-
-def test_the_node_dies_with_its_kernel(probe, state_topic, no_twin):
+def test_the_node_dies_with_its_kernel(no_twin):
     from jupyter_client import KernelManager
 
     km = KernelManager(kernel_name="vvla-workshop")
@@ -234,13 +236,8 @@ def test_the_node_dies_with_its_kernel(probe, state_topic, no_twin):
         reply = kc.execute_interactive(code, timeout=120, output_hook=hook)
         assert reply["content"]["status"] == "ok", "".join(out)
         pid = int(next(t for t in "".join(out).split("\n") if t.startswith("TWIN_PID")).split()[1])
-        assert probe.wait_publishers(state_topic, 1, timeout=10)
         os.kill(km.provisioner.process.pid, signal.SIGKILL)
-        deadline = time.time() + 5.0
-        while not _gone(pid) and time.time() < deadline:
-            time.sleep(0.1)
-        assert _gone(pid), "the twin node outlived its kernel"
-        assert probe.wait_publishers(state_topic, 0, timeout=15)
+        assert wait_exit(pid, 5.0), "the twin node outlived its kernel"
     finally:
         kc.stop_channels()
         try:
@@ -249,9 +246,10 @@ def test_the_node_dies_with_its_kernel(probe, state_topic, no_twin):
             pass
 
 
-def test_reset_service_restores_the_scene_and_parks_the_arm(workshop_cfg, no_twin):
-    from common.motion import REST_POSE
+def test_reset_service_restores_the_scene_and_parks_the_arm(workshop_cfg, probe, no_twin):
+    from common.motion import REST_POSE, settled
     from common.twin_ros import TwinSession
+    from so101_sim import MOTOR_NAMES
 
     moved = default_scene_snapshot(workshop_cfg)
     moved["bodies"]["sports_ball"][:3] = [0.22, -0.04, 0.015]
@@ -261,15 +259,19 @@ def test_reset_service_restores_the_scene_and_parks_the_arm(workshop_cfg, no_twi
         start = session.scene.latest()
         assert start["bodies"]["sports_ball"]["xyz"][:2] == pytest.approx([0.22, -0.04], abs=0.01)
         session.arm.go_to({"shoulder_pan": 30.0, "shoulder_lift": -40.0, "elbow_flex": 40.0})
+        pressed = time.time()
         assert session.reset_scene()
-        time.sleep(1.5)  # the props settle; the servos reach the parked goal
-        scene = session.scene.latest(after=time.time())
+        parked = probe.motion.wait(
+            lambda s: s["cmd_time"] >= pressed and settled(s, MOTOR_NAMES), 5.0, "the parked goal finished",
+        )
+        scene = session.scene.latest(after=parked["stamp"], settled=True)
+        assert scene is not None, "the props did not come to rest after the reset"
         for name, qpos in home.items():
             got = scene["bodies"][name]
             assert got["xyz"] == pytest.approx(list(qpos[:3]), abs=0.01), name
             assert quat_close(got["quat"], qpos[3:7]), name
             assert not got["grasped"], name
-        joints = session.arm.get_joints()
+        joints = parked["joints"]
         for k in BODY_JOINTS:
             assert joints[k] == pytest.approx(REST_POSE[k], abs=3.0), (k, joints)
         assert joints["gripper"] >= 70.0, joints

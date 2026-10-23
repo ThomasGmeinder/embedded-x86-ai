@@ -86,8 +86,9 @@ class _Spinner:
 
     A thread still inside ``executor.spin()`` when Python exits aborts the
     process ("terminate called without an active exception"), and
-    ``executor.shutdown()`` does not end it. So the thread spins in short
-    slices and ``close()`` joins it before shutting the executor down.
+    ``executor.shutdown()`` does not end it. So the thread runs one callback
+    at a time, and ``close()`` triggers a guard condition that wakes it to
+    see the stop, then joins it before shutting the executor down.
     """
 
     def __init__(self, name: str):
@@ -95,6 +96,7 @@ class _Spinner:
         from rclpy.executors import SingleThreadedExecutor
 
         self.node = rclpy.create_node(name)
+        self._wake = self.node.create_guard_condition(lambda: None)
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self.node)
         self._stop = threading.Event()
@@ -107,7 +109,7 @@ class _Spinner:
 
         while not self._stop.is_set():
             try:
-                self._executor.spin_once(timeout_sec=0.1)
+                self._executor.spin_once()
             except ExternalShutdownException:
                 return
 
@@ -116,6 +118,7 @@ class _Spinner:
             return
         self._closed = True
         self._stop.set()
+        self._wake.trigger()
         self._thread.join(timeout=2.0)
         self._executor.shutdown()
         try:
@@ -170,6 +173,7 @@ class TwinCamera:
         self._frame = None
         self._stamp = 0.0
         self._arrived = 0.0
+        self._closed = False
         self.last_stamp: float | None = None
         self._spin = _Spinner(f"twin_camera_{role}")
         self._spin.node.create_subscription(Image, topic, self._on_image, _sensor_qos())
@@ -192,25 +196,33 @@ class TwinCamera:
             return True, self._frame
 
     def read_after(self, settled_at: float):
-        """First frame whose scene was captured after ``settled_at``."""
-        deadline = time.time() + max(self._stale_after, 0.5)
+        """First frame whose scene was captured after ``settled_at``, within the stream's staleness limit."""
+        ok, frame, stamp = self.next_frame(settled_at, max(self._stale_after, 0.5))
+        if ok:
+            self.last_stamp = stamp
+        return ok, frame
+
+    def next_frame(self, after: float, timeout: float | None = None):
+        """``(ok, frame, captured)``: the first frame captured after ``after``;
+        not ok once closed, or when ``timeout`` passes first."""
         with self._cond:
-            while self._frame is None or self._stamp <= settled_at:
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    return False, None
-                self._cond.wait(timeout=remaining)
-            self.last_stamp = self._stamp
-            return True, self._frame
+            self._cond.wait_for(lambda: self._closed or (self._frame is not None and self._stamp > after), timeout)
+            if self._closed or self._frame is None or self._stamp <= after:
+                return False, None, after
+            return True, self._frame, self._stamp
 
     def close(self) -> None:
+        with self._cond:
+            self._closed = True
+            self._cond.notify_all()
         self._spin.close()
 
     release = close
 
 
 class TwinScene:
-    """The latest ``/sim/scene``: each prop's ``xyz``, ``quat`` and ``grasped``."""
+    """The latest ``/sim/scene``: each prop's ``xyz``, ``quat`` and ``grasped``, and
+    ``settled`` (every prop at rest)."""
 
     def __init__(self, topic: str = SCENE_TOPIC):
         from std_msgs.msg import String
@@ -226,11 +238,16 @@ class TwinScene:
             self._latest = data
             self._cond.notify_all()
 
-    def latest(self, after: float | None = None, timeout: float = 2.0) -> dict | None:
-        """The newest scene, or the first one stamped after ``after``."""
+    def latest(self, after: float | None = None, timeout: float = 2.0, settled: bool = False) -> dict | None:
+        """The newest scene, or the first one stamped after ``after`` (and, with
+        ``settled``, with every prop at rest); None when ``timeout`` passes first."""
         deadline = time.time() + timeout
         with self._cond:
-            while self._latest is None or (after is not None and self._latest["stamp"] <= after):
+            while (
+                self._latest is None
+                or (after is not None and self._latest["stamp"] <= after)
+                or (settled and not self._latest["settled"])
+            ):
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     return None
@@ -272,7 +289,6 @@ class TwinSession:
         scene: dict | None = None,
         domain_id: int | None = None,
         ready_timeout_s: float = 60.0,
-        discovery_s: float = 2.0,
     ):
         from common.config import DEFAULT_CONFIG
 
@@ -289,8 +305,8 @@ class TwinSession:
         self._scene_file = None
 
         use_private_domain(self.domain_id)
+        self._refuse_if_owned()
         self._probe = _Spinner("twin_session")
-        self._refuse_if_owned(discovery_s)
 
         from std_srvs.srv import Trigger
 
@@ -314,7 +330,9 @@ class TwinSession:
             # Its own session: Jupyter's stop button sends SIGINT to the kernel's
             # whole process group. The node still exits with this process.
             self._proc = subprocess.Popen(
-                cmd, stdout=log, stderr=subprocess.STDOUT, env=os.environ.copy(), start_new_session=True,
+                cmd, stdout=log, stderr=subprocess.STDOUT,
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},  # the log is current when a test copies it
+                start_new_session=True,
             )
         atexit.register(self.close)
         try:
@@ -327,48 +345,50 @@ class TwinSession:
     def pid(self) -> int | None:
         return None if self._proc is None else self._proc.pid
 
-    def _publishers(self, topic: str) -> int:
-        return int(self._probe.node.count_publishers(topic))
+    def _refuse_if_owned(self) -> None:
+        """The twin node holds its domain's lock (``so101_sim.domain_lock``) while it runs."""
+        from so101_sim.domain_lock import DomainTaken, owner
 
-    def _refuse_if_owned(self, discovery_s: float) -> None:
-        deadline = time.time() + discovery_s
-        while time.time() < deadline:
-            if self._publishers(self._state_topic):
-                self._probe.close()
-                raise RuntimeError(
-                    f"a twin already publishes {self._state_topic} on ROS domain "
-                    f"{self.domain_id}. Close the notebook that runs it, or find it with: "
-                    f"ROS_DOMAIN_ID={self.domain_id} ros2 node list"
-                )
-            time.sleep(0.1)
+        pid = owner(self.domain_id)
+        if pid is not None:
+            raise DomainTaken(self.domain_id, pid)
+
+    def _exited(self) -> RuntimeError | None:
+        if self._proc.poll() is None:
+            return None
+        return RuntimeError(f"the twin node exited with code {self._proc.returncode}:\n{_tail(self.log_path)}")
 
     def _wait_ready(self, timeout_s: float, cfg: dict) -> None:
+        """The node's first joint state, then the first arm frame and scene, within ``timeout_s``."""
+        from sensor_msgs.msg import JointState
+
         deadline = time.time() + timeout_s
 
         def remaining() -> float:
-            left = deadline - time.time()
-            if self._proc.poll() is not None:
-                raise RuntimeError(
-                    f"the twin node exited with code {self._proc.returncode}:\n{_tail(self.log_path)}"
-                )
-            if left <= 0:
-                raise TimeoutError(
-                    f"the twin node was not ready within {timeout_s:.0f} s:\n{_tail(self.log_path)}"
-                )
-            return left
+            return max(deadline - time.time(), 0.0)
 
-        while not (self._publishers(self._state_topic) and self._publishers(self._arm_topic)):
-            remaining()
-            time.sleep(0.1)
-        self.arm = TwinArmClient(cfg, state_timeout_s=min(remaining(), 10.0))
+        def not_ready(what: str) -> Exception:
+            return self._exited() or TimeoutError(
+                f"the twin node sent no {what} within {timeout_s:.0f} s:\n{_tail(self.log_path)}"
+            )
+
+        up = threading.Event()  # the first joint state, or the node's exit
+        threading.Thread(target=lambda: (self._proc.wait(), up.set()), daemon=True, name="twin-exit").start()
+        first = self._probe.node.create_subscription(JointState, self._state_topic, lambda _m: up.set(), _sensor_qos())
+        try:
+            up.wait(timeout_s)
+        finally:
+            self._probe.node.destroy_subscription(first)
+        if self._exited() is not None or not up.is_set():
+            raise not_ready("joint state")
+        self.arm = TwinArmClient(cfg, state_timeout_s=remaining())
         self.armcam = TwinCamera("arm", self._arm_topic)
         self.view = TwinCamera("view", VIEW_TOPIC)
         self.scene = TwinScene()
-        while not self.armcam.read()[0]:
-            remaining()
-            time.sleep(0.05)
-        while self.scene.latest(timeout=0.1) is None:
-            remaining()
+        if not self.armcam.next_frame(0.0, remaining())[0]:
+            raise not_ready("arm camera frame")
+        if self.scene.latest(timeout=remaining()) is None:
+            raise not_ready(SCENE_TOPIC)
         logger.info(
             "twin up on ROS domain %d (pid %d, log %s)", self.domain_id, self.pid, self.log_path
         )
@@ -377,12 +397,11 @@ class TwinSession:
         """Park the arm with the jaws open and put the props back (in the twin)."""
         if not self._reset_client.wait_for_service(timeout_sec=timeout_s):
             return False
+        done = threading.Event()
         future = self._reset_client.call_async(self._Trigger.Request())
-        deadline = time.time() + timeout_s
-        while not future.done():
-            if time.time() > deadline:
-                return False
-            time.sleep(0.02)
+        future.add_done_callback(lambda _f: done.set())
+        if not done.wait(timeout_s):
+            return False
         result = future.result()
         return bool(result and result.success)
 

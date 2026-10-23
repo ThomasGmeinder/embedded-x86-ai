@@ -20,7 +20,8 @@ the ``--text-commands`` stdin loop calls for every utterance:
 ``Dispatcher.run`` (main thread) parses each queued transcript with the
 grammar-constrained LLM, looks the intent up in the registry, runs the
 behavior, parks the arm if it crashes, and drains the queue to the newest
-command so a backlog never replays stale behaviors.
+command so a backlog never replays stale behaviors. It blocks on the queue;
+``Dispatcher.stop`` wakes it to see its ``shutdown`` event.
 
 Every step is reported to ``listeners`` (``fn(event, **data)``) so the
 digital-twin tests can timeline it next to the simulation video.
@@ -36,6 +37,8 @@ import time
 from vla_pipeline.llm.intents import Intent, ParsedCommand
 
 logger = logging.getLogger(__name__)
+
+_STOP = object()  # queued by Dispatcher.stop: run() wakes and checks its shutdown event
 
 
 class Dispatcher:
@@ -60,11 +63,13 @@ class Dispatcher:
         self.startup_grace_s = float(startup_grace_s)
         self._clock = clock
         self.start_time = clock()
-        self.transcripts: queue.Queue[str] = queue.Queue()
+        self.transcripts: queue.Queue = queue.Queue()
         self.listeners: list = []
         self.current: ParsedCommand | None = None
         self.busy = threading.Event()  # set while a behavior runs
         self.holding = threading.Event()  # set while the console is resetting the scene
+        self._work = threading.Condition()
+        self._pending = 0  # transcripts queued and not yet run or dropped, the running one included
 
     def _emit(self, event: str, **data) -> None:
         for fn in list(self.listeners):
@@ -91,6 +96,8 @@ class Dispatcher:
             logger.info("Ignoring %r (noise/hallucination gate).", text)
             self._emit("ignored", text=text, reason="noise")
             return
+        with self._work:
+            self._pending += 1
         self.transcripts.put(text)
         self._emit("queued", text=text)
         if self.busy.is_set():
@@ -138,35 +145,59 @@ class Dispatcher:
             self._emit("behavior_end", intent=cmd.intent.value, ok=ok, stopped=stopped)
         return cmd
 
-    def drain_to_newest(self) -> None:
-        """Drop queued transcripts except the newest one."""
-        newest = None
+    def _take_all(self) -> list[str]:
+        """Every queued transcript, oldest first; a queued stop stays queued."""
+        texts, stops = [], 0
         while True:
             try:
-                newest = self.transcripts.get_nowait()
+                item = self.transcripts.get_nowait()
             except queue.Empty:
                 break
-        if newest is not None:
-            self.transcripts.put(newest)
+            if item is _STOP:
+                stops += 1
+            else:
+                texts.append(item)
+        for _ in range(stops):
+            self.transcripts.put(_STOP)
+        return texts
+
+    def _finished(self, count: int) -> None:
+        if count:
+            with self._work:
+                self._pending -= count
+                self._work.notify_all()
+
+    def drain_to_newest(self) -> None:
+        """Drop queued transcripts except the newest one."""
+        texts = self._take_all()
+        if texts:
+            self.transcripts.put(texts[-1])
+        self._finished(max(len(texts) - 1, 0))
 
     def discard(self) -> None:
         """Drop every queued transcript."""
-        while True:
-            try:
-                self.transcripts.get_nowait()
-            except queue.Empty:
-                return
+        self._finished(len(self._take_all()))
+
+    def wait_idle(self, timeout: float) -> bool:
+        """True once no transcript is queued and no behavior runs; False when ``timeout`` passes first."""
+        with self._work:
+            return self._work.wait_for(lambda: self._pending == 0, timeout)
+
+    def stop(self) -> None:
+        """Wake :meth:`run` so it sees its ``shutdown`` event (set that first)."""
+        self.transcripts.put(_STOP)
 
     def run(self, shutdown: threading.Event) -> None:
-        """Dispatch loop until ``shutdown`` is set."""
+        """Dispatch loop until ``shutdown`` is set and :meth:`stop` is called."""
         while not shutdown.is_set():
+            text = self.transcripts.get()
+            if text is _STOP:
+                continue
             try:
-                text = self.transcripts.get(timeout=0.2)
-            except queue.Empty:
-                continue
-            if self.holding.is_set():
-                continue
-            self.dispatch(text)
+                if not self.holding.is_set():
+                    self.dispatch(text)
+            finally:
+                self._finished(1)
             if self.holding.is_set():
                 self.discard()
                 continue

@@ -213,5 +213,5 @@ def run_mimic(ctx, cmd=None) -> None:
             except Exception:
                 pass
         logger.info("Mimic stopped after %d frames - parking the arm.", frames)
-        ctx.arm.go_to_rest(duration_s=1.5, resend_s=None)
+        ctx.arm.go_to_rest(duration_s=1.5)
     return last_signals

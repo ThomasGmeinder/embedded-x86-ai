@@ -19,13 +19,60 @@ substitute its in-memory ROS shim, ``common.fakeros``, before first use).
 
 from __future__ import annotations
 
+import json
 import math
+import time
 
 import numpy as np
 
 # Gripper Torque_Limit (std_msgs/Int32, 0-1000): written by the server node's
 # control loop, the only thread on the bus.
 GRIPPER_TORQUE_TOPIC = "/so101/gripper_torque_limit"
+
+# std_msgs/String JSON, one per control tick: the servos' own report of the
+# goal they run toward (see common.motion.MotionMonitor).
+MOTION_STATE_TOPIC = "/so101/motion_state"
+
+
+def motion_state_msg(arm, cmd_time: float, joints: dict):
+    """The bus owner's motion state as ``std_msgs/String`` JSON.
+
+    ``cmd_time`` is when the owner last took a command; the servo flags come
+    from ``arm.read_motion_state()``, the goal and its predicted duration from
+    the transport that wrote it.
+    """
+    from std_msgs.msg import String
+
+    return String(data=json.dumps({
+        "stamp": time.time(),
+        "cmd_time": float(cmd_time),
+        "goal": dict(arm.goal),
+        "eta_s": float(arm.last_eta_s),
+        **arm.read_motion_state(),
+        "joints": dict(joints),
+    }))
+
+
+def _motion_state_qos():
+    from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+
+    return QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1)
+
+
+def motion_state_publisher(node):
+    """The bus owner's publisher on ``MOTION_STATE_TOPIC``; publish :func:`motion_state_msg` on it."""
+    from std_msgs.msg import String
+
+    return node.create_publisher(String, MOTION_STATE_TOPIC, _motion_state_qos())
+
+
+def subscribe_motion_state(node, monitor):
+    """Feed every motion state on ``MOTION_STATE_TOPIC`` into ``monitor``."""
+    from std_msgs.msg import String
+
+    return node.create_subscription(
+        String, MOTION_STATE_TOPIC, lambda m: monitor.update(json.loads(m.data)), _motion_state_qos()
+    )
 
 
 def ros2_available() -> bool:

@@ -82,9 +82,10 @@ class Ros2Camera:
     def __init__(self, role: str, topic: str, stale_after_s: float = 1.0):
         self.role = role
         self._stale_after = float(stale_after_s)
-        self._lock = threading.Lock()
+        self._cond = threading.Condition()  # notified on every new frame, and on close
         self._frame = None
         self._stamp = 0.0
+        self._closed = False
         self._executor = None
         self._node = None
         self._setup_ros(topic)
@@ -110,29 +111,37 @@ class Ros2Camera:
         frame = from_image_msg(msg)
         if frame is None:
             return
-        with self._lock:
+        with self._cond:
             self._frame = frame
             self._stamp = time.time()
+            self._cond.notify_all()
 
     def read(self):
         """Return the newest cached frame, or ``(False, None)`` if stale/missing."""
-        with self._lock:
+        with self._cond:
             if self._frame is None or (time.time() - self._stamp) > self._stale_after:
                 return False, None
             return True, self._frame
 
     def read_after(self, settled_at):
-        """Newest cached frame whose stamp is later than ``settled_at``."""
-        deadline = time.time() + max(self._stale_after, 0.5)
-        while time.time() < deadline:
-            with self._lock:
-                if self._frame is not None and self._stamp > settled_at:
-                    return True, self._frame
-            time.sleep(0.02)
-        return False, None
+        """First frame that arrives after ``settled_at``, within the stream's staleness limit."""
+        ok, frame, _arrived = self.next_frame(settled_at, max(self._stale_after, 0.5))
+        return ok, frame
+
+    def next_frame(self, after, timeout=None):
+        """``(ok, frame, arrived)``: the first frame that arrives after ``after``;
+        not ok once closed, or when ``timeout`` passes first."""
+        with self._cond:
+            self._cond.wait_for(lambda: self._closed or (self._frame is not None and self._stamp > after), timeout)
+            if self._closed or self._frame is None or self._stamp <= after:
+                return False, None, after
+            return True, self._frame, self._stamp
 
     def close(self) -> None:
-        """Stop the executor and destroy the client node."""
+        """Wake a waiting reader, stop the executor and destroy the client node."""
+        with self._cond:
+            self._closed = True
+            self._cond.notify_all()
         if self._executor is not None:
             self._executor.shutdown()
         if self._node is not None:

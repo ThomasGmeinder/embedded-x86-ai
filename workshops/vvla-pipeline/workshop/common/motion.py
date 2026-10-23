@@ -26,11 +26,12 @@ from __future__ import annotations
 import logging
 import math
 import sys
+import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from so101_sim import MOTOR_NAMES
+from so101_sim import MOTOR_NAMES, MOTOR_SHORT
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,12 @@ REST_POSE = {
     "wrist_roll": 86.8,
     "gripper": GRIPPER_CLOSED_FLOOR,
 }
+
+def joints_text(joints: dict) -> str:
+    """``pan 0.0 lift -96.5 ...`` for log lines, in motor order."""
+    return " ".join(
+        f"{MOTOR_SHORT[m]} {float(joints[m]):.1f}" for m in MOTOR_NAMES if m in joints
+    )
 
 # Software joint limits (degrees) - a hard backstop every command is clamped to.
 # These are the mechanical ranges pulled in by 25%, so the arm stops well
@@ -136,6 +143,103 @@ def clamp_joints(joints: dict, limits: dict | None = None) -> dict:
 
 
 # ----------------------------------------------------------------------------
+# Servo motion state
+# ----------------------------------------------------------------------------
+
+# STS3215 Status register (address 65): bit 5 is the overload protection.
+OVERLOAD_BIT = 0x20
+# A goal's wait is bounded by its servo profile's predicted duration times
+# this: the twin's Moving flag drops when its profile ends; a real servo may
+# hold Moving until the joint itself arrives, which lags under load.
+SETTLE_MARGIN = 1.5
+# The bus owner takes a command on its next control tick; this many ticks
+# also cover the transport and a loaded host's scheduling.
+ACK_TICKS = 10
+
+
+class MotionTimeout(RuntimeError):
+    """The servo bus owner never reported a goal finished within its budget."""
+
+
+class MotionMonitor:
+    """The newest motion state from the servo bus owner, with a condition that wakes on each.
+
+    A state is a dict: ``stamp``, ``cmd_time`` (when the owner last took a
+    command), ``goal`` (what the servos run toward), ``eta_s`` (that goal's
+    predicted profile duration), per-joint ``moving`` and ``overload`` flags
+    read from the servos, and ``joints``.
+    """
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._state: dict | None = None
+
+    def update(self, state: dict) -> None:
+        with self._cond:
+            self._state = state
+            self._cond.notify_all()
+
+    def latest(self) -> dict | None:
+        with self._cond:
+            return self._state
+
+    def wait(self, predicate, budget_s: float, what: str, stop_check=None) -> dict | None:
+        """The first state for which ``predicate`` holds, or None once ``stop_check`` fires.
+
+        Woken by each new state, so ``stop_check`` is evaluated once per owner
+        tick. Raises :class:`MotionTimeout` when ``budget_s`` passes first.
+        """
+        deadline = time.monotonic() + budget_s
+        with self._cond:
+            while True:
+                if stop_check is not None and stop_check():
+                    return None
+                if self._state is not None and predicate(self._state):
+                    return self._state
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise MotionTimeout(f"no {what} within {budget_s:.2f} s; last state: {self._state}")
+                self._cond.wait(remaining)
+
+
+def settled(state: dict, joints: list) -> bool:
+    """True when no servo in ``joints`` reports its profile still running."""
+    return not any(state["moving"].get(j, False) for j in joints)
+
+
+def motion_budget(eta_s: float, tick_s: float) -> float:
+    """How long a goal may take: its servo profile times :data:`SETTLE_MARGIN`
+    plus :data:`ACK_TICKS` control ticks of the bus owner."""
+    return eta_s * SETTLE_MARGIN + ACK_TICKS * tick_s
+
+
+def await_reported_motion(monitor: MotionMonitor, joints: list, sent_at: float, tick_s: float,
+                          stop_check, current_joints) -> tuple[str, dict]:
+    """A client's wait on the servo bus owner for the goal it sent at ``sent_at``.
+
+    First the owner's report that it took a command at or after ``sent_at``
+    (``cmd_time``), then its report that the servos in ``joints`` finished,
+    within :func:`motion_budget`. ``tick_s`` is the owner's control period.
+    Both clocks are this host's.
+    """
+    ack = monitor.wait(lambda s: s["cmd_time"] >= sent_at, ACK_TICKS * tick_s, "acknowledgement of the goal", stop_check)
+    if ack is not None:
+        acked_s = time.time() - sent_at
+        budget = motion_budget(float(ack["eta_s"]), tick_s)
+        done = monitor.wait(
+            lambda s: s["cmd_time"] >= sent_at and settled(s, joints), budget, "end of the move", stop_check,
+        )
+        if done is not None:
+            logger.info("servo report: goal taken after %.3f s (budget %.3f s), move budget %.3f s",
+                        acked_s, ACK_TICKS * tick_s, budget)
+            return "settled", done
+    latest = monitor.latest()
+    if latest is None:
+        latest = {"joints": current_joints(), "moving": {}, "overload": {}, "eta_s": 0.0}
+    return "stopped", latest
+
+
+# ----------------------------------------------------------------------------
 # ArmClient ABC + transports
 # ----------------------------------------------------------------------------
 
@@ -188,7 +292,6 @@ class ArmClient(ABC):
     def go_to(
         self, target: dict, duration_s: float = 2.0, fps: float = 30.0, stop_check=None,
         limits: dict | None = None, max_step_deg: float = 0.0,
-        resend_s: float | None = 0.5,
     ) -> None:
         """Move to ``target`` (partial dicts allowed).
 
@@ -199,15 +302,11 @@ class ArmClient(ABC):
         ``duration_s``. ``max_step_deg`` (0 = off) caps each tick so the
         command never jumps farther than that from the measured position.
         Direct-goal transports (``_direct_goal``) delegate to :meth:`move_to`:
-        the goal is sent once and the servo interpolates in firmware, so
-        ``duration_s``/``fps``/``max_step_deg`` no longer apply. ``resend_s``
-        of ``None`` sends that goal once and does not rewrite it.
+        the goal is sent once and the servo profiles the move, so
+        ``duration_s``/``fps``/``max_step_deg`` no longer apply.
         """
         if self._direct_goal:
-            return self.move_to(
-                target, timeout_s=max(duration_s * 2.0, 2.0), stop_check=stop_check,
-                limits=limits, resend_s=resend_s,
-            )
+            return self.move_to(target, stop_check=stop_check, limits=limits)
         previous = self._send_limits
         self._send_limits = limits
         try:
@@ -238,99 +337,64 @@ class ArmClient(ABC):
             self._send_limits = previous
 
     def move_to(
-        self,
-        target: dict,
-        timeout_s: float = 6.0,
-        tolerance_deg: float = 2.5,
-        poll_hz: float = 20.0,
-        progress_eps_deg: float = 1.0,
-        settle_dwell_s: float = 0.35,
-        gripper_settle_s: float = 1.0,
-        stop_check=None,
-        limits: dict | None = None,
-        resend_s: float | None = 0.5,
-    ) -> None:
-        """Send an absolute goal ONCE and wait until the arm settles.
+        self, target: dict, tolerance_deg: float = 2.5, stop_check=None, limits: dict | None = None,
+    ) -> str:
+        """Send an absolute goal ONCE and wait until the servos report it finished.
 
-        Unlike streaming, this lets the servo's onboard controller produce
-        the motion - smooth and continuous instead of host-stepped. "Settled"
-        is within ``tolerance_deg`` on the body joints. A joint straining at a
-        range limit never reads exactly on target, so a pause also counts:
-        ``settle_dwell_s`` once the arm is already within twice that tolerance,
-        and a full second when it is still far. A short hitch in the joint
-        reading must not end the move while tens of degrees are left. The
-        gripper's open-fraction readback needn't converge, so a gripper-only
-        move just gets ``gripper_settle_s`` to travel. ``stop_check`` aborts
-        and halts the arm where it is.
+        The servo's onboard profile produces the motion. The move is over when
+        every joint in ``target`` reports its profile done (the STS3215
+        ``Moving`` register), which :meth:`_await_motion` waits for once,
+        bounded by the profile's predicted duration. Returns ``"arrived"``
+        (body joints within ``tolerance_deg``), ``"blocked"`` (the servos
+        finished away from the goal: a limit, a contact, an overload) or
+        ``"stopped"`` (``stop_check`` fired; the arm halts where it is). The
+        gripper's open-fraction readback need not converge, so a gripper-only
+        move arrives when its servo finishes. Raises :class:`MotionTimeout`
+        when the servos never report the goal finished.
         """
         previous = self._send_limits
         self._send_limits = limits
         try:
             target = clamp_joints(target, limits)
+            sent_at = time.time()
             self.send_joints(target)
-            last_send = time.time()
-            wait = [k for k in target if k != "gripper"]
-            if not wait:  # gripper-only move
-                time.sleep(gripper_settle_s)
-                return
-
-            def _dist() -> float:
-                cur = self.get_joints()
-                return max(
-                    (abs(cur.get(k, target[k]) - target[k]) for k in wait), default=0.0
-                )
-
-            deadline = time.time() + timeout_s
-            interval = 1.0 / poll_hz
-            near_deg = tolerance_deg * 2.0
-            limit_dwell_s = 1.0  # a far stall this long is a limit, not a hitch
-            ref_dist, ref_time, started = _dist(), time.time(), False
-            while time.time() < deadline:
-                if stop_check and stop_check():
-                    try:  # halt here, don't finish the move
-                        self.send_joints(self.get_joints())
-                    except Exception:
-                        pass
-                    return
-                time.sleep(interval)
-                now = time.time()
-                dist = _dist()
-                if dist <= tolerance_deg:  # arrived
-                    return
-                if ref_dist - dist > progress_eps_deg:
-                    started = True  # still closing in - keep waiting
-                    ref_dist, ref_time = dist, now
-                elif now - ref_time >= settle_dwell_s:
-                    stalled_s = now - ref_time
-                    near = dist <= near_deg
-                    if started and (near or stalled_s >= limit_dwell_s):
-                        return
-                    # resend_s=None sends the goal once. Rewriting it restarts
-                    # the servo profile, so a stop-triggered park passes None.
-                    # A stall that is still far from the goal is not resent either.
-                    if (
-                        not started
-                        and resend_s is not None
-                        and now - last_send >= resend_s
-                    ):
-                        self.send_joints(target)
-                        last_send = now
-                    if not (started and not near):
-                        ref_dist, ref_time = dist, now
+            how, state = self._await_motion(list(target), sent_at, stop_check)
+            joints = state["joints"]
+            body = [k for k in target if k != "gripper"]
+            if how == "stopped":
+                self.send_joints(joints)  # halt here, don't finish the move
+            elif body and max(abs(joints.get(k, target[k]) - target[k]) for k in body) > tolerance_deg:
+                how = "blocked"
+            else:
+                how = "arrived"
+            worst = max(body or list(target), key=lambda k: abs(joints.get(k, target[k]) - target[k]))
+            overload = [k for k, v in state.get("overload", {}).items() if v]
+            logger.log(
+                logging.WARNING if how == "blocked" else logging.INFO,
+                "move_to %s in %.2f s (servo profile %.2f s): %.1f deg left on %s%s",
+                how, time.time() - sent_at, float(state.get("eta_s", 0.0)),
+                abs(joints.get(worst, target[worst]) - target[worst]), worst,
+                "" if how == "arrived" else (
+                    f" | at {joints_text(joints)} | goal {joints_text(target)}"
+                    f" | overload {', '.join(overload) or 'none'}"
+                ),
+            )
+            return how
         finally:
             self._send_limits = previous
 
-    def go_to_rest(
-        self, duration_s: float = 3.0, stop_check=None, resend_s: float | None = 0.5,
-    ) -> None:
-        """Bring the whole arm to :data:`REST_POSE`.
-
-        ``resend_s=None`` is one write: a stop-triggered park must not restart
-        the servo profile by sending the same goal again.
-        """
-        self.go_to(
-            REST_POSE, duration_s=duration_s, stop_check=stop_check, resend_s=resend_s,
+    def _await_motion(self, joints: list, sent_at: float, stop_check) -> tuple[str, dict]:
+        """``("settled" | "stopped", state)`` once the servos in ``joints`` finish the goal
+        sent at ``sent_at``. ``state`` carries ``joints``, ``moving``, ``overload`` and
+        ``eta_s``. Each transport waits on its own bus owner; there is no default."""
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot report when a move finishes: drive the arm through "
+            "the arm server node (robot.use_ros2: true), which owns the bus and reports it"
         )
+
+    def go_to_rest(self, duration_s: float = 3.0, stop_check=None) -> None:
+        """Bring the whole arm to :data:`REST_POSE`."""
+        self.go_to(REST_POSE, duration_s=duration_s, stop_check=stop_check)
 
     def close(self) -> None:  # noqa: B027 - optional override
         pass
@@ -341,18 +405,29 @@ class DryRunArm(ArmClient):
 
     is_live = False  # simulated - mimic keeps the base JOINT_LIMITS
 
+    last_eta_s = 0.0  # commands take effect at once
+
     def __init__(self, verbose: bool = False):
         self._joints = dict(REST_POSE)
         self._verbose = verbose
+        self.goal = dict(REST_POSE)
 
     def send_joints(self, joints: dict) -> None:
         self._joints.update(clamp_joints(joints, self._send_limits))
+        self.goal = dict(self._joints)
         if self._verbose:
             pretty = " ".join(f"{k}={v:6.1f}" for k, v in self._joints.items())
             print(f"\r[dry-run] {pretty}", end="", flush=True)
 
     def get_joints(self) -> dict:
         return dict(self._joints)
+
+    def read_motion_state(self) -> dict:
+        """No servos: nothing is ever still moving, nothing ever overloads."""
+        return {"moving": dict.fromkeys(MOTOR_NAMES, False), "overload": dict.fromkeys(MOTOR_NAMES, False)}
+
+    def _await_motion(self, joints: list, sent_at: float, stop_check) -> tuple[str, dict]:
+        return "settled", {"joints": dict(self._joints), **self.read_motion_state(), "eta_s": 0.0}
 
 
 # Transient Feetech errors ("There is no status packet!") show up when several
@@ -362,9 +437,13 @@ BUS_RETRIES = 3
 BUS_RETRY_DELAY_S = 0.004
 
 # Direct-goal mode (max_relative_target is null): one Goal_Position write, and
-# the servo profiles the move. Raw STS3215 units: speed 1000 is about 88 deg/s.
-DIRECT_MODE_SPEED_RAW = 1000
-DIRECT_MODE_ACCEL_RAW = 50
+# the servo profiles the move at the Goal_Velocity and Acceleration that
+# common.servo_profile plans for it. Both registers are SRAM (addresses 46 and
+# 41), so a write per move does not wear the servo's EEPROM.
+_SPEED_REGISTERS = ("Goal_Velocity",)
+_ACCEL_REGISTERS = ("Acceleration",)
+# The server node's control loop rate (robot.control_fps), read by the server and its clients.
+DEFAULT_CONTROL_HZ = 60.0
 
 
 class LeRobotArm(ArmClient):
@@ -389,53 +468,27 @@ class LeRobotArm(ArmClient):
             config.disable_torque_on_disconnect = False
         self._robot = SO101Follower(config)
         self._robot.connect()
-        self._effort_register = False  # False = not probed yet
-        self._coordinated_joints: list[str] = []
         logger.info("SO101Follower connected on %s (id=%s)", port, robot_id)
+        self._init_transport(max_relative_target)
 
+    def _init_transport(self, max_relative_target) -> None:
+        """State shared by this transport and the twin's (``SimArmClient``)."""
+        self._effort_register = False  # False = not probed yet
+        self._lockstep = False
+        self.goal: dict = {}
+        self.last_eta_s = 0.0
         # Direct-goal mode (config: max_relative_target: null): LeRobot's
         # per-tick slew clamp is OFF, a command is ONE absolute Goal_Position
         # write, and the servo's onboard controller produces the motion.
         self._direct_goal = max_relative_target is None
         if self._direct_goal:
-            self.set_motion_profile(
-                speed=DIRECT_MODE_SPEED_RAW, acceleration=DIRECT_MODE_ACCEL_RAW,
-            )
+            from common.servo_profile import shared_profiler
+
+            self._profiler = shared_profiler()
+            static = self._profiler.static
+            self._sync_write_guarded(_SPEED_REGISTERS, {m: static[m][0] for m in MOTOR_NAMES}, "speed")
+            self._sync_write_guarded(_ACCEL_REGISTERS, {m: static[m][1] for m in MOTOR_NAMES}, "acceleration")
         self.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
-
-    def set_motion_profile(self, speed=None, acceleration=None) -> None:
-        """Best-effort servo speed/accel setup for direct-goal mode."""
-        bus = getattr(self._robot, "bus", None)
-        if bus is None:
-            return
-
-        def _write(candidates, value, what):
-            for name in candidates:
-                try:
-                    bus.sync_write(
-                        name, {m: int(value) for m in MOTOR_NAMES}, normalize=False
-                    )
-                    logger.info("servo %s set to %d (register '%s')", what, value, name)
-                    return
-                except Exception:
-                    continue
-            logger.warning(
-                "could not set servo %s - using the firmware "
-                "default; moves may be faster/abrupter",
-                what,
-            )
-
-        if acceleration is not None:
-            _write(
-                ("Maximum_Acceleration", "Acceleration"), acceleration, "acceleration"
-            )
-        if speed is not None:
-            _write(
-                ("Goal_Velocity", "Maximum_Speed_Limit", "Goal_Speed"), speed, "speed"
-            )
-
-    def _set_motion_profile(self, speed=None, acceleration=None) -> None:
-        self.set_motion_profile(speed=speed, acceleration=acceleration)
 
     def _bus_retry(self, op, what: str):
         """Run a bus transaction, retrying briefly on a dropped status packet."""
@@ -470,54 +523,52 @@ class LeRobotArm(ArmClient):
         return False
 
     def set_joint_speeds(self, speeds: dict | None = None) -> None:
-        """Per-joint onboard speed. ``None`` restores the direct-mode profile
-        on the joints ``set_coordinated_speeds`` last scaled."""
+        """Per-joint onboard speed. ``None`` ends lockstep: each joint again runs
+        at its own planned profile from the next goal on."""
         if speeds is None:
-            joints = self._coordinated_joints
-            if joints:
-                self._sync_write_guarded(
-                    ("Goal_Velocity", "Maximum_Speed_Limit", "Goal_Speed"),
-                    {m: DIRECT_MODE_SPEED_RAW for m in joints},
-                    "speed",
-                )
-                self._sync_write_guarded(
-                    ("Maximum_Acceleration", "Acceleration"),
-                    {m: DIRECT_MODE_ACCEL_RAW for m in joints},
-                    "acceleration",
-                )
-            self._coordinated_joints = []
+            self._lockstep = False
             return
-        self._sync_write_guarded(
-            ("Goal_Velocity", "Maximum_Speed_Limit", "Goal_Speed"), speeds, "speed",
-        )
+        self._sync_write_guarded(_SPEED_REGISTERS, speeds, "speed")
 
     def set_coordinated_speeds(self, travels: dict) -> None:
-        """Scale speed and acceleration by travel so the joints finish together."""
-        max_t = max(travels.values(), default=0.0)
-        if max_t <= 0:
-            return
-        speeds = {
-            m: max(int(DIRECT_MODE_SPEED_RAW * t / max_t), 50) for m, t in travels.items()
-        }
-        accels = {
-            m: max(int(DIRECT_MODE_ACCEL_RAW * t / max_t), 1) for m, t in travels.items()
-        }
-        self._sync_write_guarded(
-            ("Goal_Velocity", "Maximum_Speed_Limit", "Goal_Speed"), speeds, "speed",
-        )
-        self._sync_write_guarded(
-            ("Maximum_Acceleration", "Acceleration"), accels, "acceleration",
-        )
-        self._coordinated_joints = list(travels)
+        """Run the next goals in lockstep: every joint finishes with the slowest one."""
+        self._lockstep = bool(travels)
+
+    def _plan_start(self) -> dict:
+        """Where the servos' next profile starts: their measured position."""
+        return self.get_joints()
 
     def send_joints(self, joints: dict) -> None:
         joints = clamp_joints(joints, self._send_limits)
+        if self._direct_goal:
+            # From where the servos are now: another caller may have moved them since our last read.
+            plan = self._profiler.plan(self._plan_start(), joints, lockstep=self._lockstep)
+            self._sync_write_guarded(_SPEED_REGISTERS, plan.speed_raw, "speed")
+            self._sync_write_guarded(_ACCEL_REGISTERS, plan.accel_raw, "acceleration")
+            self.last_eta_s = plan.eta_s
         action = {f"{k}.pos": v for k, v in joints.items()}
         self._bus_retry(lambda: self._robot.send_action(action), "send_action")
+        self.goal = {**self.goal, **joints}
 
     def get_joints(self) -> dict:
         obs = self._bus_retry(self._robot.get_observation, "get_observation")
         return {m: float(obs[f"{m}.pos"]) for m in MOTOR_NAMES if f"{m}.pos" in obs}
+
+    def read_motion_state(self) -> dict:
+        """Each servo's ``Moving`` flag and the overload bit of its ``Status``.
+
+        Not yet checked on the real arm: whether the STS3215 sets ``Moving``
+        from the ``Goal_Position`` write until its profile ends (as the twin
+        does) or from its measured speed. If it is the speed, a wait must also
+        see the flag rise before it accepts it falling.
+        """
+        bus = self._robot.bus
+        moving = self._bus_retry(lambda: bus.sync_read("Moving", normalize=False), "read Moving")
+        status = self._bus_retry(lambda: bus.sync_read("Status", normalize=False), "read Status")
+        return {
+            "moving": {m: bool(int(v)) for m, v in moving.items()},
+            "overload": {m: bool(int(v) & OVERLOAD_BIT) for m, v in status.items()},
+        }
 
     def get_gripper_load(self):
         bus = getattr(self._robot, "bus", None)
@@ -561,12 +612,10 @@ class LeRobotArm(ArmClient):
 
     def close(self) -> None:
         try:
-            if getattr(self, "_direct_goal", False):
-                # One write; the servo profiles its own way to rest (re-writing
-                # the goal restarts that profile). Torque stays on through
-                # disconnect, so the arm holds the pose instead of going limp.
+            # Torque stays on through disconnect, so the servos' own profile
+            # carries a direct goal to rest and the arm holds it instead of going limp.
+            if self._direct_goal:
                 self.send_joints(REST_POSE)
-                time.sleep(1.0)
             else:
                 self.go_to_rest()
         finally:

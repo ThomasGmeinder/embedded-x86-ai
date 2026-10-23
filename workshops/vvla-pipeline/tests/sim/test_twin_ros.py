@@ -27,7 +27,14 @@ import numpy as np
 import pytest
 
 from rigs import HOLD_WATCH_S
-from twin_ros_rig import BODY_JOINTS, Probe, TwinRig, default_scene_snapshot, join_test_domain
+from twin_ros_rig import (
+    BODY_JOINTS,
+    Probe,
+    TwinRig,
+    assert_domain_free,
+    default_scene_snapshot,
+    join_test_domain,
+)
 
 pytestmark = [pytest.mark.sim, pytest.mark.hw, pytest.mark.slow, pytest.mark.timeout(300)]
 pytest.importorskip("rclpy")
@@ -46,12 +53,11 @@ def rig(workshop_cfg, eyes, probe):
     detector = eyes("workshop")
     if detector is None:
         pytest.skip("--sim-eyes seg reads the in-process twin's segmentation; this twin is over ROS")
-    state = workshop_cfg["robot"]["state_topic"]
-    assert probe.wait_publishers(state, 0, timeout=15), "a twin already runs on the test domain"
+    assert_domain_free("a twin already runs on the test domain")
     r = TwinRig(workshop_cfg, detector, scene=default_scene_snapshot(workshop_cfg))
     yield r
     r.close()
-    assert probe.wait_publishers(state, 0, timeout=20), "the twin node outlived its test"
+    assert_domain_free("the twin node outlived its test", exit_s=20.0)
 
 
 def _sample(probe, joint: str, seconds: float, hz: float = 20.0) -> np.ndarray:

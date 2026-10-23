@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -185,7 +186,8 @@ class StampedCameraPublisher:
 
 
 class ScenePublisher:
-    """``/sim/scene``: where each prop is and whether both fingers hold it."""
+    """``/sim/scene``: where each prop is, whether both fingers hold it, and
+    ``settled``: every prop at rest (``SimWorld.props_settled``)."""
 
     def __init__(self, world, topic: str = SCENE_TOPIC, hz: float = 20.0):
         from rclpy.node import Node
@@ -209,7 +211,8 @@ class ScenePublisher:
                 }
                 for name in world.objects
             }
-        return {"stamp": stamp, "bodies": bodies}
+            settled = world.props_settled()
+        return {"stamp": stamp, "bodies": bodies, "settled": settled}
 
     def _tick(self) -> None:
         self._pub.publish(self._String(data=json.dumps(self.snapshot())))
@@ -344,7 +347,11 @@ def build_nodes(
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     ap = argparse.ArgumentParser(description="SO-101 digital twin ROS 2 node")
     ap.add_argument("--config", required=True, help="pipeline.yaml or workshop.yaml")
     ap.add_argument("--stack", choices=["auto", "pipeline", "workshop"], default="auto")
@@ -365,6 +372,13 @@ def main() -> None:
         ap.error("--scene needs --notebook-twin")
     if args.notebook_twin:
         _die_with_parent()
+
+    from so101_sim.domain_lock import DomainTaken, acquire
+
+    try:
+        domain_lock = acquire(int(os.environ.get("ROS_DOMAIN_ID", "0")))  # held until this process exits
+    except DomainTaken as e:
+        raise SystemExit(str(e)) from None
 
     try:
         import rclpy
@@ -416,6 +430,7 @@ def main() -> None:
             rclpy.shutdown()
         except Exception:
             pass
+        domain_lock.close()
 
 
 if __name__ == "__main__":

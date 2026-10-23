@@ -91,21 +91,44 @@ class ServoBank:
         self.goal[idx] = q
         self.v_ref[idx] = 0.0
 
+    @staticmethod
+    def _profile_step(q, v, goal, vmax, amax, dt: float):
+        """One ``dt`` of the trapezoidal profile: the setpoint ``q`` and its speed ``v`` move toward ``goal``."""
+        e = goal - q
+        ae = np.abs(e)
+        v_des = np.sign(e) * np.minimum(vmax, np.sqrt(2.0 * amax * ae))
+        step = amax * dt
+        v_new = v + np.clip(v_des - v, -step, step)
+        q_new = q + 0.5 * (v + v_new) * dt
+        arrived = (e * (goal - q_new) <= 0.0) | (ae < 1e-6)
+        return np.where(arrived, goal, q_new), np.where(arrived, 0.0, v_new)
+
+    @staticmethod
+    def _moving(q, v, goal) -> np.ndarray:
+        """The STS3215 ``Moving`` flag: the setpoint still travels, or has not yet started toward the goal."""
+        return (np.abs(v) > 1e-4) | (goal != q)
+
     def update(self, dt: float) -> np.ndarray:
         """Advance every profile by ``dt``; returns the actuator ``ctrl`` vector."""
-        e = self.goal - self.q_ref
-        ae = np.abs(e)
-        s = np.sign(e)
-        v_des = s * np.minimum(self._vmax, np.sqrt(2.0 * self._amax * ae))
-        step = self._amax * dt
-        v_new = self.v_ref + np.clip(v_des - self.v_ref, -step, step)
-        q_new = self.q_ref + 0.5 * (self.v_ref + v_new) * dt
-        arrived = (e * (self.goal - q_new) <= 0.0) | (ae < 1e-6)
-        q_new = np.where(arrived, self.goal, q_new)
-        v_new = np.where(arrived, 0.0, v_new)
-        self.q_ref = q_new
-        self.v_ref = v_new
-        return q_new + self._ff * v_new
+        self.q_ref, self.v_ref = self._profile_step(self.q_ref, self.v_ref, self.goal, self._vmax, self._amax, dt)
+        return self.q_ref + self._ff * self.v_ref
+
+    def moving(self) -> np.ndarray:
+        return self._moving(self.q_ref, self.v_ref, self.goal)
+
+    def steps_to_finish(self, idx, dt: float) -> int:
+        """Physics steps until the profiles of servos ``idx`` end, from where their setpoints are now.
+
+        A dry run of :meth:`update` on copies, so a goal written mid-profile counts the
+        braking from the speed the setpoint still has. The profile always reaches its goal.
+        """
+        q, v = self.q_ref[idx].copy(), self.v_ref[idx].copy()
+        goal, vmax, amax = self.goal[idx], self._vmax[idx], self._amax[idx]
+        n = 0
+        while self._moving(q, v, goal).any():
+            q, v = self._profile_step(q, v, goal, vmax, amax, dt)
+            n += 1
+        return n
 
 
 class CurrentModel:

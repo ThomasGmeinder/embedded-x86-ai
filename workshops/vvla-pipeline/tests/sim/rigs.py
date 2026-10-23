@@ -190,6 +190,12 @@ class Trace:
         return best
 
 
+def raise_crashes(crashes: list[str]) -> None:
+    """A behavior that raised fails the scenario, whatever it said before it raised."""
+    if crashes:
+        raise AssertionError("a behavior crashed: " + "; ".join(crashes))
+
+
 def hold_problem(rig, body: str, z0: float, watch_s: float = HOLD_WATCH_S,
                  slip_m: float = SLIP_TOL_M, lift_slip_m: float = LIFT_SLIP_TOL_M,
                  until: float | None = None) -> str | None:
@@ -350,6 +356,9 @@ class _Rig:
 
     def event_times(self, name: str, **match) -> list[float]:
         return [t for t, e, d in self.events if e == name and all(d.get(k) == v for k, v in match.items())]
+
+    def _raise_crashes(self) -> None:
+        raise_crashes([str(d.get("error")) for _t, e, d in self.events if e == "behavior_crash"])
 
     def said_any(self, phrase: str) -> bool:
         return any(phrase.lower() in m.lower() for m in self.said)
@@ -564,8 +573,10 @@ class PipelineRig(_Rig):
         finally:
             self.ctx.stop_event.set()
             shutdown.set()
+            d.stop()
             loop.join(15.0)
             self.ctx.stop_event.clear()
+        self._raise_crashes()
         return self
 
 
@@ -644,4 +655,5 @@ class WorkshopRig(_Rig):
             self.ctx.stop_event.set()
             tx.join(10.0)
             self.ctx.stop_event.clear()
+        self._raise_crashes()
         return self
