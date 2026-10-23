@@ -295,8 +295,13 @@ class NotebookKernel:
             # Either way the next scenario needs its own kernel. The probe above already
             # recorded whether this scenario's twin was still alive.
             self.needs_new_kernel = True
-        elif error is None:
-            await self._settle()
+        else:
+            # Settle a failed scenario too: the next case on this kernel checks voice.trace.
+            try:
+                await self._settle()
+            except Exception:
+                if error is None:
+                    raise
         if error is not None:
             raise error
         return namespace
