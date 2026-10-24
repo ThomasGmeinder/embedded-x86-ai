@@ -14,6 +14,7 @@ notebook imports read those settings at the top level of ``ctx.cfg``.
 from __future__ import annotations
 
 import logging
+import threading
 from types import SimpleNamespace
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ class Ctx:
         *,
         say=None,
         stop_check=None,
+        stop_event=None,
         shared_state=None,
         detector=None,
         arm_camera=None,
@@ -57,6 +59,9 @@ class Ctx:
         self.pose = pose
         self.shared_state = {} if shared_state is None else shared_state
         self._say = say
+        # A dwell waits on the event, so a stop ends it at once. With only
+        # stop_check (main's API), dwells run their full length.
+        self.stop_event = stop_event if stop_event is not None else threading.Event()
         self._stop = stop_check or (lambda: False)
 
     def say(self, message: str) -> None:
@@ -66,7 +71,7 @@ class Ctx:
             logger.info("%s", message)
 
     def stop_check(self) -> bool:
-        return bool(self._stop())
+        return self.stop_event.is_set() or bool(self._stop())
 
 
 def command(object_name: str = ""):

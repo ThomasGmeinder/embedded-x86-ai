@@ -25,8 +25,9 @@ from scripted import Hand, Person
 pytestmark = pytest.mark.sim
 
 BODY = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
-# Present_Current counts held for 0.3 s: a squeeze at hold_torque_limit holds
-# ~94; the free jaw closing holds 50-70 and only spikes higher.
+# Present_Current counts held for 0.3 s of physics with the jaw still
+# (Trace.held_current): a squeeze at hold_torque_limit holds ~94; a jaw resting
+# open or at the closed floor holds little.
 _SQUEEZE_CURRENT = 80.0
 
 

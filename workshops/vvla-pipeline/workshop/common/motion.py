@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import math
 import sys
+import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -311,6 +312,17 @@ class ArmClient(ABC):
             "the arm server node (robot.use_ros2: true), which owns the bus and reports it"
         )
 
+    def state_time(self) -> float:
+        """The arm owner's clock (seconds) at its newest state."""
+        raise NotImplementedError(f"{type(self).__name__} has no owner reporting the arm's state")
+
+    def wait_state(self, t: float, stop_check=None) -> float | None:
+        """Block until the arm's owner reports a state at or after ``t`` on its
+        clock (:meth:`state_time`). Returns that state's time, or None once
+        ``stop_check`` fires. Loops that sample the arm pace themselves on it,
+        so they never run ahead of the states they judge."""
+        raise NotImplementedError(f"{type(self).__name__} has no owner reporting the arm's state")
+
     def go_to_rest(self, duration_s: float = 3.0, stop_check=None) -> None:
         """Bring the whole arm to :data:`REST_POSE`."""
         self.go_to(REST_POSE, duration_s=duration_s, stop_check=stop_check)
@@ -330,6 +342,7 @@ class DryRunArm(ArmClient):
         self._joints = dict(REST_POSE)
         self._verbose = verbose
         self.goal = dict(REST_POSE)
+        self._clock = 0.0  # commands take effect at once, so any time is already reached
 
     def send_joints(self, joints: dict) -> None:
         self._joints.update(clamp_joints(joints, self._send_limits))
@@ -347,6 +360,15 @@ class DryRunArm(ArmClient):
 
     def _await_motion(self, joints: list, sent_at: float, stop_check) -> tuple[str, dict]:
         return "settled", {"joints": dict(self._joints), **self.read_motion_state(), "eta_s": 0.0}
+
+    def state_time(self) -> float:
+        return self._clock
+
+    def wait_state(self, t: float, stop_check=None) -> float | None:
+        if stop_check is not None and stop_check():
+            return None
+        self._clock = max(self._clock, t)
+        return self._clock
 
 
 # Transient Feetech errors ("There is no status packet!") show up when several
@@ -526,6 +548,143 @@ class LeRobotArm(ArmClient):
                 self.go_to_rest()
         finally:
             self._robot.disconnect()
+
+
+# How often the bus owner reads the gripper's current (an extra transaction).
+_EFFORT_EVERY_N_TICKS = 3
+# A goal is written on the owner's next tick and its servos report on the ones
+# after; this bound only catches an owner that has stopped reporting.
+OWNER_REPLY_S = 2.0
+
+
+class BusOwnerArm(ArmClient):
+    """The bus arm owned by this process (``robot.use_ros2: false``), as the
+    server node owns it on the rig: one thread writes each new goal and reads
+    the servos every control tick, and moves wait on what it reads - their
+    ``Moving`` and overload flags."""
+
+    def __init__(self, bus_arm: ArmClient, control_fps: float = DEFAULT_CONTROL_HZ):
+        self._bus = bus_arm
+        self.is_live = bus_arm.is_live
+        self._direct_goal = getattr(bus_arm, "_direct_goal", False)
+        self._interval = 1.0 / float(control_fps)
+        self._cond = threading.Condition()
+        self._goal: dict | None = None  # the next goal to write
+        self._torque: int | None = None  # the next gripper Torque_Limit to write
+        self._state: dict | None = None
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="bus-owner")
+        self._thread.start()
+        with self._cond:
+            if not self._cond.wait_for(lambda: self._state is not None, OWNER_REPLY_S):
+                self._running = False
+                raise MotionTimeout(f"the bus owner read no state within {OWNER_REPLY_S:.1f} s")
+
+    def _loop(self) -> None:
+        load, cmd_time, eta_s, tick, errors = None, 0.0, 0.0, 0, 0
+        while self._running:
+            started = time.perf_counter()
+            with self._cond:
+                goal, self._goal = self._goal, None
+                torque, self._torque = self._torque, None
+            try:
+                if torque is not None:
+                    self._bus.set_gripper_torque_limit(torque)
+                    self.gripper_torque_limit = torque
+                if goal is not None:
+                    self._bus.send_joints(goal)
+                    cmd_time, eta_s = time.time(), float(getattr(self._bus, "last_eta_s", 0.0))
+                joints = self._bus.get_joints()
+                motion = self._bus.read_motion_state()
+                tick += 1
+                if tick % _EFFORT_EVERY_N_TICKS == 0:
+                    load = self._bus.get_gripper_load()
+                with self._cond:
+                    self._state = {
+                        "t": time.monotonic(), "cmd_time": cmd_time, "eta_s": eta_s, "joints": joints,
+                        "load": load, **motion,
+                    }
+                    self._cond.notify_all()
+                errors = 0
+            except Exception as e:  # a transient bus error must not end the loop
+                errors += 1
+                if errors % 30 == 1:
+                    logger.warning("bus tick failed (x%d), continuing: %s", errors, e)
+            time.sleep(max(self._interval - (time.perf_counter() - started), 0.0))
+
+    def send_joints(self, joints: dict) -> None:
+        joints = clamp_joints(joints, self._send_limits)
+        with self._cond:
+            self._goal = {**(self._goal or {}), **joints}
+
+    def get_joints(self) -> dict:
+        with self._cond:
+            return dict(self._state["joints"])
+
+    def get_gripper_load(self):
+        with self._cond:
+            return self._state["load"]
+
+    def read_motion_state(self) -> dict:
+        with self._cond:
+            return {"moving": dict(self._state["moving"]), "overload": dict(self._state["overload"])}
+
+    def set_gripper_torque_limit(self, value: int) -> None:
+        with self._cond:
+            self._torque = int(min(max(int(value), 0), 1000))
+
+    def _await_motion(self, joints: list, sent_at: float, stop_check) -> tuple[str, dict]:
+        """The owner's first report that it wrote the goal sent at ``sent_at``,
+        then its report that the servos in ``joints`` finished it."""
+
+        def report() -> dict:
+            return {**self._state, "joints": dict(self._state["joints"])}
+
+        with self._cond:
+            written = self._cond.wait_for(
+                lambda: self._state["cmd_time"] >= sent_at or bool(stop_check and stop_check()), OWNER_REPLY_S,
+            )
+            if not written:
+                raise MotionTimeout(f"the bus owner did not write the goal within {OWNER_REPLY_S:.1f} s")
+            budget = float(self._state["eta_s"]) + OWNER_REPLY_S
+            done = self._cond.wait_for(
+                lambda: bool(stop_check and stop_check()) or settled(self._state, joints), budget,
+            )
+            if stop_check and stop_check():
+                return "stopped", report()
+            if not done:
+                raise MotionTimeout(f"servos {joints} still moving {budget:.2f} s after the goal: {self._state}")
+            return "settled", report()
+
+    def state_time(self) -> float:
+        with self._cond:
+            return self._state["t"]
+
+    def wait_state(self, t: float, stop_check=None) -> float | None:
+        budget = max(t - time.monotonic(), 0.0) + OWNER_REPLY_S
+        with self._cond:
+            ok = self._cond.wait_for(lambda: self._state["t"] >= t or bool(stop_check and stop_check()), budget)
+            if stop_check and stop_check():
+                return None
+            if not ok:
+                raise MotionTimeout(f"the bus owner read no state within {budget:.2f} s")
+            return self._state["t"]
+
+    def grip_report(self):
+        return self._bus.grip_report()
+
+    def close(self) -> None:
+        self._running = False
+        self._thread.join()
+        self._bus.close()
+
+
+def bus_owner(arm: ArmClient, cfg: dict) -> ArmClient:
+    """``arm`` with an owner in this process: a real bus arm gets one
+    (:class:`BusOwnerArm`); the twin's physics and the dry-run arm are their own."""
+    if type(arm) is not LeRobotArm:
+        return arm
+    return BusOwnerArm(arm, float((cfg.get("robot") or {}).get("control_fps", DEFAULT_CONTROL_HZ)))
 
 
 def sim_world(cfg: dict):

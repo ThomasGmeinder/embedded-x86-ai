@@ -146,9 +146,9 @@ def _build_arm(cfg, args):
             )
     else:
         try:
-            from common.motion import make_arm_backend
+            from common.motion import bus_owner, make_arm_backend
 
-            arm = make_arm_backend(cfg)
+            arm = bus_owner(make_arm_backend(cfg), cfg)
             if args.digital_twin:
                 print("arm: MuJoCo digital twin (in-process)")
             else:

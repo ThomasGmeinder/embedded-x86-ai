@@ -65,6 +65,7 @@ from common.motion import (  # noqa: E402
     ArmClient,
     DryRunArm,
     LeRobotArm,
+    bus_owner,
     clamp_joints,
     restore_twin,
     sim_world,
@@ -112,7 +113,7 @@ def make_arm(cfg: dict) -> ArmClient:
         from vla_pipeline.robot.robot_node import Ros2ArmClient
 
         return Ros2ArmClient(cfg)
-    return make_bus_arm(cfg)
+    return bus_owner(make_bus_arm(cfg), cfg)
 
 
 # =============================================================================

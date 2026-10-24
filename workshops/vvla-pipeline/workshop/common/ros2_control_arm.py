@@ -184,6 +184,7 @@ class ControllerArm(ArmClient):
         self._state: dict | None = None  # calibrated units
         self._jaw_speed = 0.0  # rad/s
         self._effort_nm: float | None = None
+        self._state_t = 0.0  # when the newest state arrived (monotonic)
         self._controllers: dict[str, str] = {}  # name -> state label, from the controller manager
         self._streaming = False
         self._stream: dict | None = None  # the last streamed body setpoint
@@ -233,6 +234,7 @@ class ControllerArm(ArmClient):
         with self._cond:
             self._state = {**(self._state or {}), **positions}
             self._jaw_speed, self._effort_nm = jaw_speed, effort_nm
+            self._state_t = time.monotonic()
             self._cond.notify_all()
 
     def _on_activity(self, msg) -> None:
@@ -254,6 +256,20 @@ class ControllerArm(ArmClient):
             if not ok:
                 raise MotionTimeout(f"no {what} within {budget_s:.2f} s")
             return pred()
+
+    def state_time(self) -> float:
+        """When the newest ``/joint_states`` message arrived (monotonic seconds)."""
+        with self._cond:
+            return self._state_t
+
+    def wait_state(self, t: float, stop_check=None) -> float | None:
+        """The first ``/joint_states`` message to arrive at or after ``t``; a
+        state stream that stops raises :class:`MotionTimeout`."""
+        budget = max(t - time.monotonic(), 0.0) + REPLY_S
+        if not self._wait(lambda: self._state_t >= t, budget, "joint state", stop_check):
+            return None
+        with self._cond:
+            return self._state_t
 
     def get_joints(self) -> dict:
         with self._cond:
@@ -344,6 +360,8 @@ class ControllerArm(ArmClient):
                 how = self._run(goal, eta_s, stop_check)
             else:
                 how = self._settle_jaw(start["gripper"], target["gripper"], eta_s, tolerance_deg, stop_check)
+            # The controller judged the end on a state newer than ours: callers read the arm next.
+            self.wait_state(time.monotonic())
             joints = self.get_joints()
             worst = max(body or list(target), key=lambda k: abs(joints.get(k, target[k]) - target[k]))
             logger.log(

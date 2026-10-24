@@ -121,6 +121,7 @@ def _h_fetch_block(ctx: PipelineContext, cmd: ParsedCommand) -> bool:
         ctx.mount_camera,
         stop_check=ctx.stop_check,
         feedback=ctx.say,
+        stop_event=ctx.stop_event,
     )
 
 
@@ -179,6 +180,7 @@ def _h_grip(ctx: PipelineContext, cmd: ParsedCommand) -> None:
         stop_check=ctx.stop_check,
         arm_camera=ctx.arm_camera,
         feedback=ctx.say,
+        stop_event=ctx.stop_event,
     )
 
 

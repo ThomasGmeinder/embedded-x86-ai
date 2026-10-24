@@ -26,6 +26,7 @@ def run_fetch_block(
     mount_camera,
     stop_check=None,
     feedback=None,
+    stop_event=None,
 ) -> bool:
     """Grasp the block at its taught pose and hand it over."""
     ctx = Ctx(
@@ -33,6 +34,7 @@ def run_fetch_block(
         arm,
         say=feedback,
         stop_check=stop_check,
+        stop_event=stop_event,
         camera=mount_camera,
         pose=pose,
     )

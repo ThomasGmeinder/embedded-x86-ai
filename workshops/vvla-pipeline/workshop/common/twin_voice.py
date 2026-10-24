@@ -30,7 +30,10 @@ from common.imaging import resolve_class
 from common.intents import CommandRegistry, Intent, ParsedCommand, is_noise, is_stop
 
 RESET_LINE = "Reset. Arm parked, objects back on the table."
-MIC_OPEN_S = 5.0  # how long the microphone may take to open before the console falls back to typing
+# How long the microphone may take to open before the console falls back to
+# typing: it opened 0.18 s after the first start and 0.006 s after later ones
+# (common.speech logs it); a missing device reports its error at once.
+MIC_OPEN_S = 1.0
 
 # True: run() also shows each command's record as JSON output, which the
 # notebook tests read from the kernel (tests/sim/notebook_harness.py sets it).

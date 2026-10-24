@@ -56,6 +56,8 @@ PRESENT_POSE = {
     "gripper": 80.0,
 }
 
+# The grasp samples the arm once per TICK_S of its owner's clock
+# (ArmClient.wait_state); the grip config counts these ticks.
 TICK_S = 0.05
 
 # ----------------------------------------------------------------------------
@@ -84,7 +86,9 @@ def close_with_feedback(arm, g: dict, stop_check=None, start_from: float | None 
     """Close the gripper until contact. Returns ``(gripped, hold_position)``.
 
     Contact is sustained current above ``load_threshold`` (when the arm reports
-    it) or a stall: the jaws stopped short of the command. After the
+    it) while the jaws have stopped closing, or a stall: the jaws stopped short
+    of the command. Each step of the close shows as a current spike while the
+    jaws still move freely, so current alone is not contact. After the
     command reaches the closed floor, sampling continues for ``stall_grace_s``
     so a thin object (a pen) is still caught.
 
@@ -115,25 +119,31 @@ def close_with_feedback(arm, g: dict, stop_check=None, start_from: float | None 
     )
     stall_count = load_count = 0
     gripped = False
-    grace_deadline = None
+    grace_end = None
     prev = float(arm.get_joints().get("gripper", commanded))
+    t = arm.state_time()
     while True:
-        if stop_check and stop_check():
-            break
         if commanded > floor:
             commanded = max(commanded - step, floor)
             arm.send_joints({"gripper": commanded})
             if commanded == floor:
-                grace_deadline = time.time() + grace_s
-        elif grace_deadline is not None and time.time() >= grace_deadline:
+                grace_end = t + grace_s
+        elif grace_end is not None and t >= grace_end:
             break  # fully closed and the grace window is over: nothing between the jaws
-        time.sleep(TICK_S)
+        t = arm.wait_state(t + TICK_S, stop_check)
+        if t is None:
+            break
+
+        measured = float(arm.get_joints().get("gripper", commanded))
+        # A servo trails a moving goal, so lagging alone isn't contact: the jaws must also have stopped.
+        stopped_moving = prev - measured < eps
+        prev = measured
 
         if use_load:
             load = arm.get_gripper_load()
             if load is None:  # current readback died mid-grasp: fall back to the stall
                 use_load = False
-            elif load >= load_threshold:
+            elif load >= load_threshold and stopped_moving:
                 load_count += 1
                 if load_count >= load_ticks_needed:
                     gripped = True
@@ -141,10 +151,6 @@ def close_with_feedback(arm, g: dict, stop_check=None, start_from: float | None 
             else:
                 load_count = 0
 
-        measured = float(arm.get_joints().get("gripper", commanded))
-        # A servo trails a moving goal, so lagging alone isn't contact: the jaws must also have stopped.
-        stopped_moving = prev - measured < eps
-        prev = measured
         if measured - commanded > eps and stopped_moving:
             stall_count += 1
             if stall_count >= need_ticks:
@@ -174,14 +180,17 @@ def _reseat(arm, g: dict, stop_check=None) -> float:
     Contact can register while one jaw still pushes the object; the trailing
     goal lets both fingers seat. Returns the last goal."""
     past = float(g.get("hold_past_contact", 6.0))
-    deadline = time.time() + float(g.get("reseat_s", 0.6))
+    t = arm.state_time()
+    end = t + float(g.get("reseat_s", 0.6))
     while True:
         jaw = float(arm.get_joints()["gripper"])
         hold = max(jaw - past, GRIPPER_CLOSED_FLOOR)
         arm.send_joints({"gripper": hold})
-        if time.time() >= deadline or (stop_check and stop_check()):
+        if t >= end:
             break
-        time.sleep(TICK_S)
+        t = arm.wait_state(t + TICK_S, stop_check)
+        if t is None:
+            break
     _settle_jaw(arm, g, hold, stop_check)
     return hold
 
@@ -197,11 +206,14 @@ def _settle_jaw(arm, g: dict, hold: float, stop_check=None, timeout_s: float = 1
     eps = float(g["stall_eps_deg"])
     still_needed = int(g["stall_ticks"])
     target = max(hold, GRIPPER_CLOSED_FLOOR)
-    deadline = time.time() + timeout_s
+    t = arm.state_time()
+    end = t + timeout_s
     prev = float(arm.get_joints()["gripper"])
     still = 0
-    while time.time() < deadline and not (stop_check and stop_check()):
-        time.sleep(TICK_S)
+    while t < end:
+        t = arm.wait_state(t + TICK_S, stop_check)
+        if t is None:
+            return
         jaw = float(arm.get_joints()["gripper"])
         if jaw - target <= eps:  # closed onto the goal: nothing between the jaws
             return
@@ -242,11 +254,10 @@ def run_grip(ctx, cmd=None, wait_s: float = 4.0) -> bool:
         reference = ref if ok else None
 
     for remaining in range(int(wait_s), 0, -1):
-        if ctx.stop_check():
+        logger.info("[grip] closing in %d...", remaining)
+        if ctx.stop_event.wait(1.0):
             ctx.arm.go_to_rest()
             return False
-        logger.info("[grip] closing in %d...", remaining)
-        time.sleep(1.0)
 
     if reference is not None:
         ok, now = cam.read()
@@ -292,22 +303,22 @@ def person_pan_target(pose, frame: np.ndarray) -> float | None:
 
 
 def find_person_pan(ctx, seek_s: float = 4.0) -> tuple[float, bool]:
-    """Track the person for ``seek_s`` and aim the pan joint at them."""
+    """Track the person for ``seek_s``, one new frame at a time, and aim the
+    pan joint at them. A camera that delivers no fresh frame ends the search."""
     pan, found = 0.0, False
     if ctx.pose is None or ctx.camera is None:
         logger.info("[handoff] no mount camera - handing over straight ahead")
         return pan, found
-    deadline = time.time() + seek_s
-    while time.time() < deadline and not ctx.stop_check():
-        ok, frame = ctx.camera.read()
-        if not ok:
-            time.sleep(TICK_S)
-            continue
+    deadline = time.monotonic() + seek_s
+    while time.monotonic() < deadline and not ctx.stop_check():
+        ok, frame = _read_settled(ctx.camera, time.time())
+        if not ok or frame is None:
+            logger.info("[handoff] the mount camera delivered no fresh frame")
+            break
         target = person_pan_target(ctx.pose, frame)
         if target is not None:
             pan, found = target, True
             ctx.arm.send_joints({"shoulder_pan": pan})
-        time.sleep(TICK_S)
     logger.info("[handoff] person %s (pan=%.1f)", "found" if found else "NOT found", pan)
     return pan, found
 
@@ -333,11 +344,14 @@ def hand_over(ctx, section: dict, lift_pose: dict, still_holding=lambda: True) -
     if not still_holding():
         return False
     logger.info("[handoff] release - take it!")
-    time.sleep(min(float(section["release_timeout_s"]), 6.0) * 0.5)
+    # The person reaches for it: a stop now keeps it in the closed jaws.
+    if ctx.stop_event.wait(min(float(section["release_timeout_s"]), 6.0) * 0.5):
+        return False
     ctx.arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
-    ctx.arm.go_to({"gripper": JOINT_LIMITS["gripper"][1]}, duration_s=1.0)
-    time.sleep(1.0)
-    park_open(ctx.arm)
+    ctx.arm.go_to({"gripper": JOINT_LIMITS["gripper"][1]}, duration_s=1.0, stop_check=ctx.stop_check)
+    if ctx.stop_event.wait(1.0):  # the person takes it from the open jaws
+        return False
+    park_open(ctx.arm, ctx.stop_check)
     return True
 
 
@@ -352,9 +366,6 @@ def park_open(arm, stop_check=None) -> None:
 # ----------------------------------------------------------------------------
 
 
-# The lift runs this long at the close limit, so the block hangs from the
-# fingers before the grip eases to the hold limit.
-_BREAKAWAY_S = 0.3
 
 
 def run_fetch_block(ctx, cmd=None) -> bool:
@@ -382,13 +393,17 @@ def run_fetch_block(ctx, cmd=None) -> bool:
         ctx.arm.go_to_rest()
         return False
     logger.info("[fetch] lift")
-    ctx.arm.send_joints({**lift_pose, "gripper": hold})
-    time.sleep(_BREAKAWAY_S)
-    ease_grip(ctx.arm, g)
-    ctx.arm.go_to({**lift_pose, "gripper": hold}, duration_s=2.5, stop_check=ctx.stop_check)
-    if ctx.stop_check():
+    from so101_sim.kinematics import joint_line
+
+    # The first step runs at the close limit, so the block hangs from the
+    # fingers before the grip eases to the hold limit.
+    steps = joint_line({**ctx.arm.get_joints(), "gripper": hold}, {**lift_pose, "gripper": hold})
+    if not _follow(ctx.arm, steps[:1], ctx.stop_check, None, 2.5 / len(steps)):
         return False
-    time.sleep(0.3)
+    ease_grip(ctx.arm, g)
+    if not _follow(ctx.arm, steps[1:], ctx.stop_check, None, 2.5 * (len(steps) - 1) / len(steps)):
+        return False
+    _settle_jaw(ctx.arm, g, hold, ctx.stop_check)
     if not holding(ctx.arm, g, hold):
         ctx.say("I dropped the block.")
         park_open(ctx.arm)
@@ -440,7 +455,7 @@ def _log_grip(arm, label: str, hold: float, plan=None) -> None:
     logger.info("%s: %s", label, "; ".join(parts))
 
 
-def _offer(arm, hold, stop_check, limits, say, resolved, still_holding, ease=lambda: None) -> str:
+def _offer(arm, g, hold, stop_check, limits, say, resolved, still_holding, ease=lambda: None) -> str:
     """Lift above the other props and hold the object out. The jaws stay closed.
 
     Two joint-space legs from the pose that is holding the object, keeping
@@ -496,7 +511,7 @@ def _offer(arm, hold, stop_check, limits, say, resolved, still_holding, ease=lam
         # From the measured jaw, the first steps would let go of the squeeze.
         if not follow(joint_line({**seed, "gripper": hold}, {**pose, "gripper": hold}), duration_s):
             return "stopped"
-        time.sleep(0.3)
+        _settle_jaw(arm, g, hold, stop_check)
         _log_grip(arm, f"offer check {leg}", hold)
         if not still_holding():
             return "dropped"
@@ -989,7 +1004,7 @@ def run_pick_place(ctx, cmd) -> bool:
     # The grasp limits allow the wrist to 90°, which the high carry needs
     # for every object. The tighter workshop cap drops the hand back down.
     status = _offer(
-        ctx.arm, hold, ctx.stop_check, GRASP_LIMITS, ctx.say, resolved,
+        ctx.arm, g, hold, ctx.stop_check, GRASP_LIMITS, ctx.say, resolved,
         lambda: holding(ctx.arm, g, hold), lambda: ease_grip(ctx.arm, g),
     )
     ease_grip(ctx.arm, g)

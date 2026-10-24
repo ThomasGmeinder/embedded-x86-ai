@@ -52,9 +52,10 @@ def twin_domain():
 
 
 def _spawn(command: str, cwd, log_path):
-    """``command`` on pipes, not a pty: a pty fork in this multi-threaded process may deadlock."""
+    """``command`` on pipes, not a pty (a pty fork in this multi-threaded process
+    may deadlock), in a session of its own, so :func:`_close` can stop all of it."""
     child = popen_spawn.PopenSpawn(
-        ["bash", "-c", command], cwd=str(cwd), env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        ["setsid", "bash", "-c", command], cwd=str(cwd), env={**os.environ, "PYTHONUNBUFFERED": "1"},
         encoding="utf-8", codec_errors="replace", timeout=None,
     )
     child.logfile_read = open(log_path, "w")
@@ -62,10 +63,19 @@ def _spawn(command: str, cwd, log_path):
 
 
 def _close(child) -> int | None:
-    """Let ``child`` finish (SIGINT if it still runs) and return its exit status."""
+    """Let ``child`` finish and return its exit status. One that still runs gets
+    SIGINT on its process group, as Ctrl-C sends it; one that outlasts that is
+    killed, and fails the test."""
     if child.proc.poll() is None:
-        child.kill(signal.SIGINT)
-    child.expect(pexpect.EOF, timeout=BEHAVIOR_S)
+        os.killpg(child.pid, signal.SIGINT)
+        try:
+            child.expect(pexpect.EOF, timeout=BEHAVIOR_S)
+        except pexpect.TIMEOUT:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+            raise AssertionError(f"{child.proc.args} did not exit within {BEHAVIOR_S:.0f} s of SIGINT") from None
+    else:
+        child.expect(pexpect.EOF, timeout=BEHAVIOR_S)
     return child.wait()
 
 

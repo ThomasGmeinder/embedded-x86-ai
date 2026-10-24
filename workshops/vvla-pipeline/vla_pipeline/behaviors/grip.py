@@ -41,6 +41,7 @@ def run_grip(
     wait_s: float = 4.0,
     arm_camera=None,
     feedback=None,
+    stop_event=None,
 ) -> bool:
     """Take an object from the user. Delegates to :func:`common.manipulation.run_grip`."""
     ctx = Ctx(
@@ -48,6 +49,7 @@ def run_grip(
         arm,
         say=feedback,
         stop_check=stop_check,
+        stop_event=stop_event,
         shared_state=shared_state,
         arm_camera=arm_camera,
     )

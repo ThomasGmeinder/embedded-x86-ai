@@ -274,13 +274,15 @@ if [[ "$WITH_LLM" -eq 1 ]]; then
     say "llama-server already running at http://${LLAMA_HOST}:${LLAMA_PORT} - using it"
   elif [[ -x "$LLAMA_BIN" && -f "$LLAMA_GGUF" ]]; then
     mkdir -p "${WORKSHOP_DIR}/logs"
+    LLAMA_LOG="${WORKSHOP_DIR}/logs/llama-server.log"
+    LLAMA_LOG_FROM=$(( $( [[ -f "$LLAMA_LOG" ]] && wc -l < "$LLAMA_LOG" || echo 0 ) + 1 ))
     say "Starting llama-server on the iGPU (port ${LLAMA_PORT})"
-    say "  log: ${WORKSHOP_DIR}/logs/llama-server.log"
+    say "  log: ${LLAMA_LOG}"
     HSA_OVERRIDE_GFX_VERSION="${HSA_OVERRIDE_GFX_VERSION:-11.5.0}" \
       "$LLAMA_BIN" --model "$LLAMA_GGUF" \
       --host "$LLAMA_HOST" --port "$LLAMA_PORT" \
       --n-gpu-layers 99 --ctx-size 2048 --parallel 1 --no-warmup \
-      >>"${WORKSHOP_DIR}/logs/llama-server.log" 2>&1 &
+      >>"$LLAMA_LOG" 2>&1 &
     LLAMA_PID=$!
     say "  llama-server PID ${LLAMA_PID} (auto-stops when you quit Jupyter;"
     say "  first load takes 10-30 s while the model streams into iGPU memory)"
@@ -296,15 +298,20 @@ fi
 
 # --test: the notebooks, in this environment. Twin and NPU tests are ../run_sim_tests.sh.
 if [[ "$TEST_MODE" -eq 1 ]]; then
-  say "Waiting for llama-server at http://${LLAMA_HOST}:${LLAMA_PORT}"
-  for _ in $(seq 1 90); do
-    llama_alive && break
-    if [[ -n "$LLAMA_PID" ]] && ! kill -0 "$LLAMA_PID" 2>/dev/null; then
-      die "llama-server exited - see ${WORKSHOP_DIR}/logs/llama-server.log"
-    fi
-    sleep 1
-  done
-  llama_alive || die "llama-server did not answer within 90 s - see ${WORKSHOP_DIR}/logs/llama-server.log"
+  if [[ -n "$LLAMA_PID" ]]; then
+    # The server logs "listening on http://..." once its model is loaded. tail
+    # follows the log from where this server's lines start and ends when the
+    # server exits, which grep then sees as the end of its input.
+    say "Waiting for llama-server to log that it is listening (${LLAMA_LOG})"
+    exec {llama_fd}< <(tail -n "+${LLAMA_LOG_FROM}" -F --pid="$LLAMA_PID" "$LLAMA_LOG")
+    LLAMA_TAIL_PID=$!
+    LLAMA_READY=0
+    timeout 90 grep -m1 -q "listening on http://" <&"$llama_fd" || LLAMA_READY=$?
+    kill "$LLAMA_TAIL_PID" 2>/dev/null || true
+    exec {llama_fd}<&-
+    [[ "$LLAMA_READY" -eq 0 ]] || die "llama-server did not report listening within 90 s - see ${LLAMA_LOG}"
+  fi
+  llama_alive || die "llama-server does not answer at http://${LLAMA_HOST}:${LLAMA_PORT} - see ${WORKSHOP_DIR}/logs/llama-server.log"
   for entry in "pytest:pytest" "pytest_timeout:pytest-timeout" "nbclient:nbclient"; do
     "$PY" -c "import ${entry%%:*}" 2>/dev/null || pip_install "${entry#*:}"
   done

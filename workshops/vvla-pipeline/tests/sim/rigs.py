@@ -41,7 +41,10 @@ _GRIPPER = MOTORS.index("gripper")
 SLIP_TOL_M = 0.002  # how far it may move in the gripper frame once it is off the table
 LIFT_SLIP_TOL_M = 0.004  # how far while the fingers take its weight (the pads give a little)
 CARRY_TOL_M = 0.01  # object rise vs hand rise; the wrist tilts a little on the way up
-_LIFT_SETTLE_S = 0.3  # the object takes its weight on the fingers just after lift-off
+# The fingers carry the object by lift-off (5 mm up): picked up, the ball, the
+# bottle and the toothbrush stayed within SLIP_TOL_M in the gripper from then on.
+# One 50 Hz trace sample of headroom.
+_LIFT_SETTLE_S = 0.02
 _GOAL_TOL = 0.5  # gripper goal units; a carry keeps one goal from the lift to the end
 
 
@@ -132,14 +135,18 @@ class Trace:
             return float("inf")
         return next((s.t for s in self.samples if s.sim_t >= start + seconds), float("inf"))
 
-    def held_current(self, hold_s: float = 0.3) -> float:
-        """Highest gripper current held for ``hold_s`` of physics: a squeeze
-        keeps it up, the jaw's own moves only spike it."""
+    def held_current(self, hold_s: float = 0.3, still_deg: float = 0.5) -> float:
+        """Highest gripper current held for ``hold_s`` of physics while the jaw
+        stood within ``still_deg``: a squeeze. Each step of a close spikes the
+        current while the jaw still moves, so those windows do not count."""
         best = 0.0
         for i, s in enumerate(self.samples):
-            win = [x.current for x in self.samples[i:] if x.sim_t <= s.sim_t + hold_s]
-            if self.samples[-1].sim_t - s.sim_t >= hold_s:
-                best = max(best, min(win))
+            if self.samples[-1].sim_t - s.sim_t < hold_s:
+                break
+            win = [x for x in self.samples[i:] if x.sim_t <= s.sim_t + hold_s]
+            jaws = [x.joints["gripper"] for x in win]
+            if max(jaws) - min(jaws) <= still_deg:
+                best = max(best, min(x.current for x in win))
         return best
 
     def heights(self, body: str) -> np.ndarray:

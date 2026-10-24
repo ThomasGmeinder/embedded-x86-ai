@@ -79,5 +79,21 @@ class SimArmClient(LeRobotArm):
                 raise MotionTimeout(f"servos {joints} still moving {budget:.3f} s of sim time after the goal: {state}")
             seen = w.next_step(seen)
 
+    def state_time(self) -> float:
+        """The twin's sim time."""
+        return float(self.world.data.time)
+
+    def wait_state(self, t: float, stop_check=None) -> float | None:
+        """The first physics pass at or after sim time ``t``."""
+        w = self.world
+        seen = w.passes
+        while float(w.data.time) < t:
+            if stop_check is not None and stop_check():
+                return None
+            seen = w.next_step(seen)
+        if stop_check is not None and stop_check():
+            return None
+        return float(w.data.time)
+
     def grip_report(self) -> str:
         return self.world.grip_report()
