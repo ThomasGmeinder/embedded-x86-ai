@@ -5,10 +5,11 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The pipeline dispatcher's stop fast path and the LLM parse.
+"""The stop fast path and the LLM parse: the pipeline's dispatcher and the
+workshop's ``handle_transcript``.
 
-The stand-in LLM hears "stop" through ``Dispatcher.on_transcript`` while it
-is still parsing, as the always-hot listener delivers it on the rig.
+The stand-in LLM hears "stop" while it is still parsing, as the always-hot
+listener delivers it on the rig.
 """
 
 from __future__ import annotations
@@ -61,4 +62,44 @@ def test_a_stop_said_before_the_command_does_not_cancel_it():
 
     assert ran == [Intent.WAVE]
     assert "cancelled" not in events
+    assert not ctx.stop_event.is_set()
+
+
+def _workshop():
+    from common.intents import CommandRegistry, Intent
+    from integration.dispatch import WorkshopContext
+
+    ran = []
+    registry = CommandRegistry()
+    registry.add(Intent.WAVE, lambda _ctx, cmd: ran.append(cmd.intent))
+    ctx = WorkshopContext(cfg={}, arm=None, registry=registry)
+    ctx.say = lambda _message: None
+    return ctx, ran
+
+
+def test_the_workshop_drops_a_command_whose_parse_a_stop_overlapped():
+    from common.intents import Intent, ParsedCommand
+    from integration.dispatch import handle_transcript
+
+    ctx, ran = _workshop()
+
+    def parse(text):
+        handle_transcript(ctx, "stop", parse)
+        return ParsedCommand(Intent.WAVE, transcript=text)
+
+    handle_transcript(ctx, "wave at me", parse)
+
+    assert ran == [], "the command the stop overlapped ran anyway"
+    assert ctx.stop_event.is_set(), "the stop event was cleared"
+
+
+def test_a_stop_said_before_a_workshop_command_does_not_cancel_it():
+    from common.intents import Intent, ParsedCommand
+    from integration.dispatch import handle_transcript
+
+    ctx, ran = _workshop()
+    handle_transcript(ctx, "stop", None)
+    handle_transcript(ctx, "wave at me", lambda text: ParsedCommand(Intent.WAVE, transcript=text))
+
+    assert ran == [Intent.WAVE]
     assert not ctx.stop_event.is_set()

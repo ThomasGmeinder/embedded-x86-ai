@@ -91,14 +91,25 @@ def test_home_from_anywhere(pipeline_rig):
     _assert_at(rig, _rest())
 
 
-def test_dance_visits_moves_and_parks(pipeline_rig):
-    from vla_pipeline.robot.arm_interface import JOINT_LIMITS
+def test_dance_visits_moves_and_parks(pipeline_rig, caplog):
+    """The arm reaches each keyframe of the move the dance starts with (it
+    shuffles its moves, and the deadline may cut the later ones), stays
+    inside the limits, and parks. Arrival is judged on the body joints, as
+    move_to judges it: the jaws' readback need not reach a gripper goal."""
+    import re
+
+    from common.motion import DANCE_MOVES
+    from vla_pipeline.robot.arm_interface import JOINT_LIMITS, clamp_joints
 
     rig = pipeline_rig
     rig.run([(0.0, "let's dance")])
     assert rig.event_times("behavior_end", intent="dance", ok=True)
-    spans = {k: np.ptp(rig.trace.series(k)[1]) for k in BODY}
-    assert sum(v > 20.0 for v in spans.values()) >= 2, f"dance barely moved: {spans}"
+    moves = re.findall(r"\[dance\] move: (\w+)", caplog.text)
+    assert moves, "the dance started no move"
+    for keyframe in DANCE_MOVES[moves[0]]:
+        goal = {k: v for k, v in clamp_joints(keyframe).items() if k in BODY}
+        reached = any(all(abs(s.joints[k] - v) <= 3.0 for k, v in goal.items()) for s in rig.trace.samples)
+        assert reached, f"{moves[0]} never reached its keyframe {goal}"
     _assert_within_limits(rig, JOINT_LIMITS)
     _assert_at(rig, _rest())
 

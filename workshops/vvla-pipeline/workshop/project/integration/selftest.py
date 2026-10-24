@@ -18,8 +18,9 @@ What it checks, per component-3 TODO:
   handlers (and STOP deliberately is NOT - it's an interrupt, not a behavior).
 - **3.2 handle_transcript** - the safety gauntlet in order: the stop fast
   path (sets the stop event, bypasses the parser), the noise gate (drops
-  Whisper's silence hallucinations before the LLM), normal dispatch, and the
-  stop-event hygiene that keeps a stale stop from killing the next behavior.
+  Whisper's silence hallucinations before the LLM), normal dispatch, the
+  stop-event hygiene that keeps a stale stop from killing the next behavior,
+  and a stop said while the LLM parses keeping that command from running.
 - **3.3 mimic_tick** - one camera frame → pose + hands → mapper → a full,
   clamped arm command; it follows the NEAREST person (largest box) and
   drives the gripper from the pinch.
@@ -244,7 +245,7 @@ def check_dispatch(rep: Reporter, cfg: dict) -> None:
         "3.2",
         "stop fast path sets the event and skips the parser",
         stop_fast_path,
-        hint="is_stop(text) FIRST → ctx.stop_event.set(); return STOP",
+        hint="is_stop(text) FIRST → ctx.request_stop(); return STOP",
     )
 
     def noise_gate():
@@ -291,7 +292,36 @@ def check_dispatch(rep: Reporter, cfg: dict) -> None:
         "3.2",
         "normal command dispatches with a clean stop event",
         dispatch_and_clear,
-        hint="clear ctx.stop_event before AND after running the handler",
+        hint="ctx.begin(heard) before the handler (it clears a stale stop), "
+        "ctx.stop_event.clear() after it",
+    )
+
+    def stop_during_parse():
+        """Verify a stop said while the LLM parses keeps the parsed command from running."""
+        dispatched.clear()
+        parsed.clear()
+        ctx.stop_event.clear()
+
+        def parse_then_hear_stop(text: str) -> ParsedCommand:
+            """The LLM parses; meanwhile the always-hot listener hears 'stop'."""
+            cmd = parse(text)
+            handle_transcript(ctx, "stop", parse)
+            return cmd
+
+        handle_transcript(ctx, "show me a dance", parse_then_hear_stop)
+        assert not dispatched, (
+            f"dispatch record {dispatched} - a stop said while the LLM parsed must "
+            "keep that command from running: read ctx.stops_heard() before "
+            "parse(), and run the handler only if ctx.begin(heard) returns True"
+        )
+        assert ctx.stop_event.is_set(), "the stop must stay in effect"
+
+    rep.run(
+        "3.2",
+        "a stop said while the LLM parses cancels that command",
+        stop_during_parse,
+        hint="heard = ctx.stops_heard(); cmd = parse(text); ...; "
+        "if not ctx.begin(heard): return cmd",
     )
 
     def unknown_reported():

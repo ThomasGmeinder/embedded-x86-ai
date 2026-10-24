@@ -51,10 +51,32 @@ class WorkshopContext:
     stop_event: threading.Event = field(default_factory=threading.Event)
     headless: bool = False
     max_frames: int = 0  # 0 = unlimited (harness uses a small N)
+    _stops: int = field(default=0, repr=False)  # stops requested so far
+    _stop_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def stop_check(self) -> bool:
         """True while an emergency stop is in effect."""
         return self.stop_event.is_set()
+
+    def request_stop(self) -> None:
+        """Stop the running behavior, and any command whose parse is still running."""
+        with self._stop_lock:
+            self._stops += 1
+            self.stop_event.set()
+
+    def stops_heard(self) -> int:
+        """How many stops so far. Read it before the parse and hand it to :meth:`begin`."""
+        with self._stop_lock:
+            return self._stops
+
+    def begin(self, stops_before: int) -> bool:
+        """Clear the stop event for a new behavior, unless a stop came in since
+        ``stops_before``: then return False, and the behavior must not run."""
+        with self._stop_lock:
+            if self._stops != stops_before:
+                return False
+            self.stop_event.clear()
+            return True
 
     def say(self, message: str) -> None:
         """Print (and log) one line of robot speech."""
@@ -90,30 +112,33 @@ def build_registry() -> CommandRegistry:
 
 
 def handle_transcript(ctx: WorkshopContext, text: str, parse) -> ParsedCommand:
-    """Route one raw transcript through the full gauntlet. Returns what ran.
+    """Route one raw transcript through the full gauntlet. Returns the parsed command.
 
     The order is a safety property - implement it exactly:
 
     1. **Stop fast path**: :func:`~common.intents.is_stop` on the RAW text →
-       ``ctx.stop_event.set()``, say so, return ``ParsedCommand(STOP)``.
+       ``ctx.request_stop()``, say so, return ``ParsedCommand(STOP)``.
        Never send a stop through the LLM.
     2. **Noise gate**: :func:`~common.intents.is_noise` → say nothing, do
        nothing, return ``ParsedCommand(UNKNOWN)``.
-    3. **Parse**: ``cmd = parse(text)``.
+    3. **Parse**: ``heard = ctx.stops_heard()``, then ``cmd = parse(text)``.
     4. **Dispatch**: UNKNOWN → tell the user you didn't catch a command.
-       No handler registered → say that. Otherwise CLEAR the stop event,
-       run ``handler(ctx, cmd)``, and clear it again afterwards (a stale
-       stop must never kill the *next* behavior).
+       No handler registered → say that. Otherwise ``ctx.begin(heard)``
+       clears the stop event, so a stale stop never kills the *next*
+       behavior - unless a stop came in while the LLM parsed: then it
+       returns False, and the command must not run. Run ``handler(ctx, cmd)``
+       and clear the stop event again afterwards.
     """
     # >>> TODO 3.2: handle_transcript - notebooks/03_integration/01_behavior.ipynb
     if is_stop(text):
         ctx.say("Stopping.")
-        ctx.stop_event.set()
+        ctx.request_stop()
         return ParsedCommand(Intent.STOP, transcript=text)
     if is_noise(text):
         logger.info("Ignoring %r (noise gate).", text)
         return ParsedCommand(Intent.UNKNOWN, transcript=text)
 
+    heard = ctx.stops_heard()
     cmd = parse(text)
     if cmd.intent in (Intent.UNKNOWN, Intent.STOP):
         if cmd.intent is Intent.UNKNOWN:
@@ -124,7 +149,9 @@ def handle_transcript(ctx: WorkshopContext, text: str, parse) -> ParsedCommand:
         ctx.say(f"No behavior registered for '{cmd.intent.value}'.")
         return cmd
 
-    ctx.stop_event.clear()
+    if not ctx.begin(heard):
+        logger.info("Stop heard while %r was parsed - %s not run.", text, cmd.intent.value)
+        return cmd
     logger.info("=== %s %s ===", cmd.intent.value, cmd.params or "")
     try:
         handler(ctx, cmd)

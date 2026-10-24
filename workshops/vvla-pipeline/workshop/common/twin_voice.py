@@ -177,7 +177,7 @@ class VoiceCommands:
         self.console.heard(text)
         if is_stop(text):
             self.console.stopped()
-            self._handle(self.ctx, text, self.parse)  # sets ctx.stop_event: the running behavior ends
+            self._handle(self.ctx, text, self.parse)  # ctx.request_stop(): the running behavior ends
             return
         with self._work:
             self._waiting.append(text)
@@ -259,7 +259,7 @@ class VoiceCommands:
     def reset_scene(self, _=None) -> None:
         """Stop the behavior, park the arm with the jaws open, and put the objects back."""
         self.holding.set()
-        self.ctx.stop_event.set()
+        self.ctx.request_stop()  # a command still being parsed does not start either
         self.drain()
         with self._work:  # the running behavior gets 3 s to stop
             self._work.wait_for(lambda: not self._running, 3.0)

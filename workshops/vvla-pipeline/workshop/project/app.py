@@ -500,15 +500,16 @@ def main() -> int:
 
         Behaviors run on the MAIN thread (cv2 previews want that), so while
         one is running the dispatch loop below is blocked - a typed 'stop'
-        must therefore interrupt from HERE, by setting the shared stop event
-        every behavior's stop_check polls. Everything else is queued for
+        must therefore interrupt from HERE, with ctx.request_stop(): it sets
+        the stop event every behavior's stop_check polls, and a command whose
+        parse is still running does not start. Everything else is queued for
         dispatch once the current behavior yields.
         """
         while True:
             try:
                 line = input()
             except EOFError:
-                ctx.stop_event.set()  # end any running behavior
+                ctx.request_stop()  # end any running behavior
                 commands.put("__quit__")
                 return
             line = line.strip()
@@ -516,10 +517,10 @@ def main() -> int:
                 continue
             if is_stop(line):  # safety stop: interrupt NOW
                 ctx.say("Stopping.")
-                ctx.stop_event.set()
+                ctx.request_stop()
                 continue
             if line.lower() in ("quit", "exit"):
-                ctx.stop_event.set()  # stop the behavior, then exit
+                ctx.request_stop()  # stop the behavior, then exit
                 commands.put("__quit__")
                 return
             commands.put(line)
