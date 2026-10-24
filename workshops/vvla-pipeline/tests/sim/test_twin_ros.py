@@ -11,7 +11,8 @@ The context is the section 5 console's (``TwinRig``): ``ros.arm_client.Ros2ArmCl
 on the controllers, the arm camera behind ``FanoutCamera``, the YOLO eyes,
 and the keyword parser through ``handle_transcript``. The checks mirror the
 in-process ``test_workshop_scenarios.py``. Every reading of the twin comes
-from ``/sim/scene`` and the arm server's ``/so101/hardware/*`` topics.
+from the twin's props (their TF frames and ``/diagnostics``) and the arm
+server's ``/so101/hardware/*`` topics.
 
 Tier 2 (ROS 2): ``./run_sim_tests.sh``.
 """

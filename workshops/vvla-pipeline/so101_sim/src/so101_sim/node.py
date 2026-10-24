@@ -33,8 +33,10 @@ default launch:
   standing-grasp wrist reaches the twin;
 * the arm camera stamped with the time its scene was captured, not the time
   it was published;
-* ``/sim/scene`` (``std_msgs/String`` JSON: each prop's xyz, quat, grasped,
-  and the gripper's torque limit and overload state).
+* the props (:class:`PropPublisher`): each prop's pose as a TF frame
+  (``world`` to ``<prop>``), ``/sim/props_settled`` (``std_msgs/Bool``: every
+  prop at rest), and on ``/diagnostics`` which props both fingers hold and the
+  gripper's torque limit and overload state.
 """
 
 from __future__ import annotations
@@ -46,12 +48,17 @@ import os
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 logger = logging.getLogger(__name__)
 
 VIEW_TOPIC = "/sim/view/image_raw"
-SCENE_TOPIC = "/sim/scene"
 RESET_SERVICE = "/sim/reset_scene"
+WORLD_FRAME = "world"  # the twin's world: the props' TF parent
+PROPS_SETTLED_TOPIC = "/sim/props_settled"
+DIAGNOSTICS_TOPIC = "/diagnostics"
+PROPS_STATUS = "so101_sim: props"  # settled, and <prop>.grasped for each prop
+GRIPPER_STATUS = "so101_sim: gripper"  # torque_limit, overload_torque, tripped
 
 
 def _sensor_qos():
@@ -188,46 +195,82 @@ class StampedCameraPublisher:
         self.node.destroy_node()
 
 
-class ScenePublisher:
-    """``/sim/scene``: where each prop is, whether both fingers hold it,
-    ``settled``: every prop at rest (``SimWorld.props_settled``), and
-    ``gripper``: its ``Torque_Limit``, ``Overload_Torque`` and whether its
-    overload protection tripped."""
+class PropPublisher:
+    """The props for a console, one stamp per tick: each prop's pose as a TF
+    frame (``world`` to ``<prop>``); ``/sim/props_settled``, every prop at rest
+    (``SimWorld.props_settled``); and on ``/diagnostics``, the same flag, which
+    props both fingers hold, and the gripper's ``Torque_Limit``,
+    ``Overload_Torque`` and overload trip (level ERROR once it tripped). The
+    stamp is the twin's wall clock, as its camera frames' are."""
 
-    def __init__(self, world, topic: str = SCENE_TOPIC, hz: float = 20.0):
+    def __init__(self, world, hz: float = 20.0):
+        from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+        from geometry_msgs.msg import TransformStamped
         from rclpy.node import Node
-        from std_msgs.msg import String
+        from std_msgs.msg import Bool
+        from tf2_ros import TransformBroadcaster
 
-        self._String = String
+        self._msgs = SimpleNamespace(
+            DiagnosticArray=DiagnosticArray, DiagnosticStatus=DiagnosticStatus, KeyValue=KeyValue,
+            TransformStamped=TransformStamped, Bool=Bool,
+        )
         self._world = world
-        self.node = Node("so101_sim_scene")
-        self._pub = self.node.create_publisher(String, topic, _sensor_qos())
+        self.node = Node("so101_sim_props")
+        self._tf = TransformBroadcaster(self.node)
+        self._settled_pub = self.node.create_publisher(Bool, PROPS_SETTLED_TOPIC, 10)
+        self._diagnostics_pub = self.node.create_publisher(DiagnosticArray, DIAGNOSTICS_TOPIC, 10)
         self.node.create_timer(1.0 / hz, self._tick)
 
-    def snapshot(self) -> dict:
+    def _tick(self) -> None:
         from so101_sim import MOTOR_NAMES
 
-        world = self._world
+        m, world = self._msgs, self._world
         with world.lock:
-            stamp = time.time()
-            bodies = {
-                name: {
-                    "xyz": [float(v) for v in world.data.body(name).xpos],
-                    "quat": [float(v) for v in world.data.body(name).xquat],
-                    "grasped": bool(world.is_grasped(name)),
-                }
+            stamp = _stamp_msg(time.time())
+            poses = {
+                name: ([float(v) for v in world.data.body(name).xpos], [float(v) for v in world.data.body(name).xquat])
                 for name in world.objects
             }
-            settled = world.props_settled()
-            gripper = {
-                "torque_limit": int(world.bus.read("Torque_Limit", "gripper", normalize=False)),
-                "overload_torque": int(world.bus.read("Overload_Torque", "gripper", normalize=False)),
-                "tripped": bool(world.protection.tripped[MOTOR_NAMES.index("gripper")]),
-            }
-        return {"stamp": stamp, "bodies": bodies, "settled": settled, "gripper": gripper}
+            grasped = {name: bool(world.is_grasped(name)) for name in world.objects}
+            settled = bool(world.props_settled())
+            torque_limit = int(world.bus.read("Torque_Limit", "gripper", normalize=False))
+            overload_torque = int(world.bus.read("Overload_Torque", "gripper", normalize=False))
+            tripped = bool(world.protection.tripped[MOTOR_NAMES.index("gripper")])
+        frames = []
+        for name, (xyz, (qw, qx, qy, qz)) in poses.items():
+            tf = m.TransformStamped()
+            tf.header.stamp, tf.header.frame_id, tf.child_frame_id = stamp, WORLD_FRAME, name
+            tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = xyz
+            tf.transform.rotation.w, tf.transform.rotation.x = qw, qx
+            tf.transform.rotation.y, tf.transform.rotation.z = qy, qz
+            frames.append(tf)
+        self._tf.sendTransform(frames)
+        self._settled_pub.publish(m.Bool(data=settled))
 
-    def _tick(self) -> None:
-        self._pub.publish(self._String(data=json.dumps(self.snapshot())))
+        def flag(value: bool) -> str:
+            return "true" if value else "false"
+
+        diagnostics = m.DiagnosticArray()
+        diagnostics.header.stamp = stamp
+        diagnostics.status = [
+            m.DiagnosticStatus(
+                level=m.DiagnosticStatus.OK, name=PROPS_STATUS, hardware_id="so101_sim",
+                message="props at rest" if settled else "props moving",
+                values=[m.KeyValue(key="settled", value=flag(settled))]
+                + [m.KeyValue(key=f"{name}.grasped", value=flag(held)) for name, held in grasped.items()],
+            ),
+            m.DiagnosticStatus(
+                level=m.DiagnosticStatus.ERROR if tripped else m.DiagnosticStatus.OK,
+                name=GRIPPER_STATUS, hardware_id="so101_sim",
+                message="overload protection tripped" if tripped else "ok",
+                values=[
+                    m.KeyValue(key="torque_limit", value=str(torque_limit)),
+                    m.KeyValue(key="overload_torque", value=str(overload_torque)),
+                    m.KeyValue(key="tripped", value=flag(tripped)),
+                ],
+            ),
+        ]
+        self._diagnostics_pub.publish(diagnostics)
 
     def destroy(self) -> None:
         self.node.destroy_node()
@@ -331,9 +374,9 @@ def build_nodes(
     nodes.append(control.node)
     closers.append(control.destroy)
     if notebook_twin:
-        scene = ScenePublisher(world)
-        nodes.append(scene.node)
-        closers.append(scene.destroy)
+        props = PropPublisher(world)
+        nodes.append(props.node)
+        closers.append(props.destroy)
     return world, nodes, closers
 
 
@@ -355,7 +398,7 @@ def main() -> None:
     ap.add_argument("--viewer", action="store_true", help="open the MuJoCo viewer window")
     ap.add_argument("--notebook-twin", action="store_true",
                     help="the 02_digital_twin.ipynb console twin (workshop stack): grasp "
-                    f"envelope, capture-stamped arm camera, {SCENE_TOPIC}")
+                    "envelope, capture-stamped arm camera, the props' TF frames and status")
     ap.add_argument("--scene", default=None,
                     help="with --notebook-twin: JSON from SimWorld.snapshot_scene to start from")
     args, ros_args = ap.parse_known_args()

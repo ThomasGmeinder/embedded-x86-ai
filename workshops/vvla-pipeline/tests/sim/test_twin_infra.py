@@ -92,7 +92,7 @@ def test_default_launch_is_unchanged(workshop_cfg, probe, no_twin):
     from common.motion import GRASP_LIMITS
     from common.ros2_control_arm import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
     from ros.arm_client import Ros2ArmClient
-    from so101_sim.node import RESET_SERVICE
+    from so101_sim.node import PROPS_SETTLED_TOPIC, RESET_SERVICE
 
     from std_msgs.msg import Bool
 
@@ -110,7 +110,7 @@ def test_default_launch_is_unchanged(workshop_cfg, probe, no_twin):
         _first_state_or_exit(probe, proc)
         assert proc.poll() is None, Path(log.name).read_text()
         probe.first_message("/cameras/arm/healthy", Bool)
-        assert "/sim/scene" not in probe.topics()
+        assert PROPS_SETTLED_TOPIC not in probe.topics()
         arm = Ros2ArmClient(workshop_cfg)
         try:
             assert RESET_SERVICE in probe.services()
@@ -161,6 +161,33 @@ def test_frames_are_stamped_after_the_arm_settles(twin):
         fan.close()
 
 
+def test_the_props_are_tf_frames_with_a_typed_status(twin, probe):
+    """Standard ROS messages: a prop's pose through tf2, the settled flag as
+    std_msgs/Bool, the gripper's state on /diagnostics."""
+    import rclpy.time
+    from rclpy.duration import Duration
+    from std_msgs.msg import Bool
+    from tf2_ros import Buffer, TransformListener
+
+    from common.motion import GRIPPER_TORQUE_LIMIT
+    from common.ros2_control_arm import REPLY_S
+    from common.ros_helpers import Spinner
+    from so101_sim.node import PROPS_SETTLED_TOPIC, WORLD_FRAME
+
+    scene = twin.scene.latest(after=time.time(), settled=True, timeout=None)
+    spin = Spinner("tf_probe")
+    try:
+        buffer = Buffer()
+        TransformListener(buffer, spin.node, spin_thread=False)
+        tf = buffer.lookup_transform(WORLD_FRAME, "sports_ball", rclpy.time.Time(), timeout=Duration(seconds=REPLY_S))
+        t = tf.transform.translation
+        assert [t.x, t.y, t.z] == pytest.approx(scene["bodies"]["sports_ball"]["xyz"], abs=0.005)
+    finally:
+        spin.close()
+    probe.first_message(PROPS_SETTLED_TOPIC, Bool)
+    assert scene["gripper"]["torque_limit"] == GRIPPER_TORQUE_LIMIT and not scene["gripper"]["tripped"], scene
+
+
 def test_a_goal_sent_as_soon_as_the_session_is_ready_is_taken(twin):
     """The session is ready once the controllers are; a goal sent at once arrives."""
     assert twin.arm.move_to({"shoulder_pan": 15.0}) == "arrived"
@@ -203,6 +230,7 @@ def test_the_twin_domain_is_private(workshop_cfg, no_twin):
     """A joint-state publisher on another domain is invisible to the twin, and the
     twin to it: once the twin and its clients are up, that domain lists none of its topics."""
     from common.twin_ros import TwinSession
+    from so101_sim.node import PROPS_SETTLED_TOPIC
 
     env = {**os.environ, "ROS_DOMAIN_ID": str(TEST_DOMAIN_ID + 1)}
     other = subprocess.Popen(
@@ -229,7 +257,7 @@ def test_the_twin_domain_is_private(workshop_cfg, no_twin):
         if other.poll() is None:
             other.kill()
     seen = next(line for line in out.splitlines() if line.startswith("SEEN")).split()[1:]
-    assert "/sim/scene" not in seen and "/cameras/arm/image_raw" not in seen, seen
+    assert PROPS_SETTLED_TOPIC not in seen and "/cameras/arm/image_raw" not in seen, seen
 
 
 def test_a_second_twin_on_the_domain_is_refused(workshop_cfg, twin):

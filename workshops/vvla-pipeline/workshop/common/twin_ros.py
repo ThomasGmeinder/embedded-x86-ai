@@ -20,8 +20,8 @@ and never see them.
 
 The twin node adds what a console needs on top of the real topics (see
 :mod:`so101_sim.node`): arm-camera frames stamped with the time their scene
-was captured, ``/sim/scene`` (where each prop is, and whether both fingers
-hold it) and ``/sim/reset_scene``.
+was captured, the props (their TF frames, and on ``/diagnostics`` whether both
+fingers hold them) and ``/sim/reset_scene``.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from pathlib import Path
 from common.ros2_control_arm import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
 from common.ros_helpers import Spinner, from_image_msg
 from ros.arm_client import Ros2ArmClient
-from so101_sim.node import SCENE_TOPIC, VIEW_TOPIC
+from so101_sim.node import DIAGNOSTICS_TOPIC, GRIPPER_STATUS, PROPS_STATUS, VIEW_TOPIC, WORLD_FRAME
 
 logger = logging.getLogger(__name__)
 
@@ -150,23 +150,76 @@ class TwinCamera:
 
 
 class TwinScene:
-    """The latest ``/sim/scene``: each prop's ``xyz``, ``quat`` and ``grasped``,
-    ``settled`` (every prop at rest), and ``gripper`` (``torque_limit``,
-    ``overload_torque``, ``tripped``)."""
+    """The twin's props as it publishes them (``so101_sim.node.PropPublisher``):
+    each prop's ``xyz`` and ``quat`` (w, x, y, z) from its TF frame, ``grasped``
+    and ``settled`` and the ``gripper`` (``torque_limit``, ``overload_torque``,
+    ``tripped``) from ``/diagnostics``. A scene is one stamp: the diagnostics
+    and the props' frames of one tick."""
 
-    def __init__(self, topic: str = SCENE_TOPIC):
-        from std_msgs.msg import String
+    _KEEP = 20  # stamps of prop frames kept while their diagnostics are on the way
+
+    def __init__(self):
+        from diagnostic_msgs.msg import DiagnosticArray
+        from tf2_msgs.msg import TFMessage
 
         self._cond = threading.Condition()
         self._latest: dict | None = None
+        self._frames: dict[float, dict] = {}  # stamp -> {prop: (xyz, quat)}
+        self._status: dict[float, dict] = {}  # stamp -> {status name: {key: value}}
         self._spin = Spinner("twin_scene")
-        self._spin.node.create_subscription(String, topic, self._on_scene, _sensor_qos())
+        self._spin.node.create_subscription(TFMessage, "/tf", self._on_tf, 100)
+        self._spin.node.create_subscription(DiagnosticArray, DIAGNOSTICS_TOPIC, self._on_diagnostics, 10)
 
-    def _on_scene(self, msg) -> None:
-        data = json.loads(msg.data)
+    @staticmethod
+    def _stamp(header) -> float:
+        return header.stamp.sec + 1e-9 * header.stamp.nanosec
+
+    def _on_tf(self, msg) -> None:
         with self._cond:
-            self._latest = data
+            for tf in msg.transforms:
+                if tf.header.frame_id != WORLD_FRAME:
+                    continue
+                t, r = tf.transform.translation, tf.transform.rotation
+                frames = self._frames.setdefault(self._stamp(tf.header), {})
+                frames[tf.child_frame_id] = ([t.x, t.y, t.z], [r.w, r.x, r.y, r.z])
+            while len(self._frames) > self._KEEP:
+                del self._frames[min(self._frames)]
+            self._complete()
+
+    def _on_diagnostics(self, msg) -> None:
+        status = {s.name: {kv.key: kv.value for kv in s.values} for s in msg.status}
+        if PROPS_STATUS not in status:
+            return
+        with self._cond:
+            self._status[self._stamp(msg.header)] = status
+            self._complete()
+
+    def _complete(self) -> None:
+        """Every stamp whose diagnostics and prop frames have all arrived becomes the latest scene."""
+        for stamp in sorted(self._status):
+            props, gripper = self._status[stamp][PROPS_STATUS], self._status[stamp].get(GRIPPER_STATUS, {})
+            names = [key[: -len(".grasped")] for key in props if key.endswith(".grasped")]
+            frames = self._frames.get(stamp, {})
+            if not all(name in frames for name in names):
+                continue
+            self._latest = {
+                "stamp": stamp,
+                "bodies": {
+                    name: {"xyz": frames[name][0], "quat": frames[name][1], "grasped": props[f"{name}.grasped"] == "true"}
+                    for name in names
+                },
+                "settled": props["settled"] == "true",
+                "gripper": {
+                    "torque_limit": int(gripper["torque_limit"]),
+                    "overload_torque": int(gripper["overload_torque"]),
+                    "tripped": gripper["tripped"] == "true",
+                },
+            }
             self._cond.notify_all()
+        if self._latest is not None:
+            for kept in (self._frames, self._status):
+                for stamp in [s for s in kept if s <= self._latest["stamp"]]:
+                    del kept[stamp]
 
     def latest(
         self, after: float | None = None, timeout: float | None = 2.0, settled: bool = False,
