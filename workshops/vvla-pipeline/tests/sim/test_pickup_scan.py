@@ -262,7 +262,7 @@ def test_a_slipped_grasp_grasps_from_the_fresh_fix(module, monkeypatch, second_x
             find = staticmethod(_find)
 
         class _Ctx:
-            cfg = {"pick_place": _pp(), "grip": {}}
+            cfg = {"robot": {"backend": "sim"}, "pick_place": _pp(), "grip": {}}
             arm = held_arm
             arm_camera = held_camera
             camera = held_camera

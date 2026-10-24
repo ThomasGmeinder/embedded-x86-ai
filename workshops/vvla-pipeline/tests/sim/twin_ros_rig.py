@@ -16,6 +16,7 @@ tier-2 module in a pytest session shares it.
 
 from __future__ import annotations
 
+import copy
 import csv
 import os
 import select
@@ -52,26 +53,26 @@ def process_gone(pid: int) -> bool:
     return state == "Z"
 
 
-def wait_exit(pid: int, timeout: float) -> bool:
+def wait_exit(pid: int) -> bool:
     """True once ``pid`` has exited: the kernel's exit event on a pidfd."""
     try:
         fd = os.pidfd_open(pid)
     except ProcessLookupError:
         return True
     try:
-        readable, _, _ = select.select([fd], [], [], timeout)
+        readable, _, _ = select.select([fd], [], [])
     finally:
         os.close(fd)
     return bool(readable) or process_gone(pid)
 
 
-def assert_domain_free(message: str, exit_s: float = 0.0) -> None:
-    """No twin holds the test domain's lock; a holder gets ``exit_s`` to exit."""
+def assert_domain_free(message: str, wait: bool = False) -> None:
+    """No twin holds the test domain's lock; with ``wait``, a holder's exit is awaited first."""
     from so101_sim.domain_lock import owner
 
     pid = owner(TEST_DOMAIN_ID)
-    if pid and exit_s > 0:
-        wait_exit(pid, exit_s)
+    if pid and wait:
+        wait_exit(pid)
         pid = owner(TEST_DOMAIN_ID)
     assert pid is None, f"{message} (pid {pid})"
 
@@ -172,25 +173,20 @@ class Probe:
                 shown = recv_t
         return "\n".join(lines)
 
-    def joints(self, after: float | None = None, timeout: float = 2.0) -> dict | None:
-        """The newest joint state, or the first received after ``after``."""
-        deadline = time.time() + timeout
+    def joints(self, after: float | None = None) -> dict:
+        """The newest joint state, or the first received after ``after`` (the twin publishes every control tick)."""
         with self._cond:
-            while self._joints is None or (after is not None and self._joints_t <= after):
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    return None
-                self._cond.wait(timeout=remaining)
+            self._cond.wait_for(lambda: self._joints is not None and (after is None or self._joints_t > after))
             return dict(self._joints)
 
-    def first_message(self, topic: str, msg_type, timeout: float) -> bool:
-        """True once a message arrives on ``topic``, within ``timeout``."""
+    def first_message(self, topic: str, msg_type) -> None:
+        """Block until a message arrives on ``topic``."""
         from common.twin_ros import _sensor_qos
 
         got = threading.Event()
         sub = self.node.create_subscription(msg_type, topic, lambda _m: got.set(), _sensor_qos())
         try:
-            return got.wait(timeout)
+            got.wait()
         finally:
             self.node.destroy_subscription(sub)
 
@@ -253,7 +249,7 @@ def keyword_parse(text: str):
 class TwinRig:
     """The section 5 console's context, on a :class:`~common.twin_ros.TwinSession`.
 
-    The arm camera and the operator camera are wrapped in ``FanoutCamera``
+    The arm camera and the mount camera are wrapped in ``FanoutCamera``
     as the console wraps them, and the operator is the notebook's scripted
     stand-in (``ScriptedPose`` / ``ScriptedHands`` / ``SyntheticCamera``).
     """
@@ -265,20 +261,21 @@ class TwinRig:
         from common.twin_ros import TwinSession
         from integration.dispatch import WorkshopContext, build_registry
 
-        self.cfg = cfg
-        self.twin = TwinSession(cfg, scene=scene)
+        self.cfg = copy.deepcopy(cfg)
+        self.cfg["robot"]["backend"] = "sim"
+        self.twin = TwinSession(self.cfg, scene=scene)
         self.said: list[str] = []
         self.armcam = FanoutCamera(self.twin.armcam)
-        self.operator = FanoutCamera(SyntheticCamera())
+        self.mount = FanoutCamera(SyntheticCamera())
         self.ctx = WorkshopContext(
-            cfg=cfg,
+            cfg=self.cfg,
             arm=self.twin.arm,
             pose=ScriptedPose(),
             hands=ScriptedHands(),
-            camera=self.operator,
+            camera=self.mount,
             detector=detector,
             arm_camera=self.armcam,
-            mapper=mapper_from_config(cfg),
+            mapper=mapper_from_config(self.cfg),
             registry=build_registry(),
             headless=True,
         )
@@ -311,15 +308,11 @@ class TwinRig:
         worker.start()
         return worker
 
-    def run(self, text: str, timeout: float) -> None:
+    def run(self, text: str) -> None:
+        """Run ``text`` to the end of its behavior; each move inside it is bounded by its own servo profile."""
         from rigs import raise_crashes
 
-        worker = self.start(text)
-        worker.join(timeout)
-        if worker.is_alive():
-            self.ctx.stop_event.set()
-            worker.join(10.0)
-            raise TimeoutError(f"{text!r} did not finish within {timeout:.0f} s; robot said {self.said}")
+        self.start(text).join()
         raise_crashes(self._crashes)
 
     def stop(self) -> None:
@@ -332,7 +325,7 @@ class TwinRig:
         from rigs import raise_crashes
 
         self.ctx.stop_event.set()
-        for cam in (self.armcam, self.operator):
+        for cam in (self.armcam, self.mount):
             try:
                 cam.close()
             except Exception:

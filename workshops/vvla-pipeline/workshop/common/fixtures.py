@@ -109,6 +109,14 @@ class SyntheticCamera:
 # Scripted pose / hands (stand-ins for the NPU + MediaPipe models)
 # ----------------------------------------------------------------------------
 
+# One orbit of the scripted wrist, and one open-close cycle of the scripted pinch.
+SCRIPT_PERIOD_S = 2.0 * math.pi
+
+
+def _script_phase(t0: float) -> float:
+    """Radians into the scripted cycle since ``t0`` (``time.monotonic``)."""
+    return 2.0 * math.pi * (time.monotonic() - t0) / SCRIPT_PERIOD_S
+
 
 class ScriptedPose:
     """Drop-in for ``models.vision.PoseEstimator`` with a scripted person.
@@ -128,7 +136,7 @@ class ScriptedPose:
 
     def infer(self, frame_bgr):
         h, w = frame_bgr.shape[:2]
-        t = time.monotonic() - self._t0
+        t = _script_phase(self._t0)
         cx, cy = w * 0.5, h * 0.45
 
         # start fully invisible; only joints we place become visible
@@ -185,7 +193,7 @@ class ScriptedHands:
     def process(self, frame_bgr):
         from models.hands import HandObservation
 
-        t = time.monotonic() - self._t0  # seconds; one pinch cycle is 2π
+        t = _script_phase(self._t0)
         pinch = 0.75 + 0.65 * math.sin(t)  # oscillates open/closed
         obs = HandObservation(
             pinch=max(pinch, 0.0),
@@ -317,17 +325,10 @@ class MockLlamaServer:
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
 
     def __enter__(self):
+        # The constructor bound and listens on the socket, so a request made now
+        # waits in its backlog until serve_forever accepts it.
         self._thread.start()
-        deadline = time.time() + 3.0
-        while time.time() < deadline:
-            try:
-                import urllib.request
-
-                urllib.request.urlopen(self.base_url + "/health", timeout=0.3)
-                return self
-            except Exception:
-                time.sleep(0.02)
-        raise RuntimeError("mock llama-server failed to start")
+        return self
 
     def __exit__(self, *exc):
         self._httpd.shutdown()

@@ -17,7 +17,7 @@ so frames arrive while the caller does other work, and a latest-frame cache.
 
 Notebook: ``notebooks/02_ros2/01_cameras.ipynb``
 Run it for real (with a camera node publishing in another terminal):
-    python -m ros.camera_client --role operator
+    python -m ros.camera_client --role mount
 """
 
 from __future__ import annotations
@@ -186,7 +186,7 @@ def main() -> None:
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
     parser = argparse.ArgumentParser(description="Camera client - live preview")
-    parser.add_argument("--role", choices=["operator", "arm"], default="operator")
+    parser.add_argument("--role", choices=["mount", "arm"], default="mount")
     parser.add_argument("--config", default=None)
     args = parser.parse_args()
 

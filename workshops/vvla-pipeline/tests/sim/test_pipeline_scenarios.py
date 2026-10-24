@@ -16,12 +16,10 @@ physics: joint traces, gripper current, and whether objects are held.
 
 from __future__ import annotations
 
-import time
-
 import numpy as np
 import pytest
 
-from rigs import HOLD_WATCH_S, assert_ordered_high_scan, carry_problem, hold_problem
+from rigs import assert_ordered_high_scan, carry_problem, hold_problem
 from scripted import Hand, Person
 
 pytestmark = pytest.mark.sim
@@ -56,7 +54,7 @@ def _assert_within_limits(rig, limits: dict, slack: float = 2.0):
 # ---------------------------------------------------------------------------
 def test_wave(pipeline_rig, mock_llm):
     rig = pipeline_rig
-    rig.run([(0.3, "wave at me")], timeout=25)
+    rig.run([(0.0, "wave at me")])
 
     # the LLM client sent a grammar-constrained, deterministic request
     p = mock_llm.last_payload
@@ -75,7 +73,7 @@ def test_release_opens_the_jaws(pipeline_rig):
     rig = pipeline_rig
     rig.ctx.shared_state["grip_lock"] = True
     rig.ctx.shared_state["grip_lock_pos"] = 40.0
-    rig.run([(0.3, "drop it"), (2.5, "open"), (5.0, "release")], timeout=20)
+    rig.run([(0.0, "drop it"), (2.5, "open"), (5.0, "release")])
 
     assert len(rig.event_times("behavior_end", intent="release", ok=True)) == 3
     assert rig.said_any("Released")
@@ -88,7 +86,7 @@ def test_home_from_anywhere(pipeline_rig):
     rig = pipeline_rig
     rig.world.reset({"shoulder_pan": 40.0, "shoulder_lift": -40.0, "elbow_flex": 50.0, "wrist_flex": 20.0,
                      "wrist_roll": 0.0})
-    rig.run([(0.3, "go home")], timeout=15)
+    rig.run([(0.0, "go home")])
     assert rig.event_times("behavior_end", intent="home", ok=True)
     _assert_at(rig, _rest())
 
@@ -97,7 +95,7 @@ def test_dance_visits_moves_and_parks(pipeline_rig):
     from vla_pipeline.robot.arm_interface import JOINT_LIMITS
 
     rig = pipeline_rig
-    rig.run([(0.3, "let's dance")], timeout=30)
+    rig.run([(0.0, "let's dance")])
     assert rig.event_times("behavior_end", intent="dance", ok=True)
     spans = {k: np.ptp(rig.trace.series(k)[1]) for k in BODY}
     assert sum(v > 20.0 for v in spans.values()) >= 2, f"dance barely moved: {spans}"
@@ -111,7 +109,7 @@ def test_dance_visits_moves_and_parks(pipeline_rig):
 def test_stop_mid_wave(pipeline_rig):
     """'stop' halts the move within a control tick; the wave never resumes, the arm parks."""
     rig = pipeline_rig
-    rig.run([(0.3, "wave"), (1.6, "stop")], timeout=25)
+    rig.run([(0.0, "wave"), (1.6, "stop")])
     t_stop = rig.transcripts.sent_at("stop")
     assert rig.event_times("stop"), "stop fast path not taken"
     assert len(rig.event_times("parsed")) == 1, "stop must not reach the LLM"
@@ -134,7 +132,7 @@ def test_stop_mid_wave(pipeline_rig):
 def test_noise_and_grace_window_cause_no_motion(pipeline_rig, mock_llm):
     rig = pipeline_rig
     start = rig.joints()
-    rig.run([(0.2, "wave"), (1.3, "thank you."), (1.6, "you"), (1.9, "...")], timeout=10,
+    rig.run([(0.2, "wave"), (1.3, "thank you."), (1.6, "you"), (1.9, "...")],
             startup_grace_s=1.0)
     reasons = [d["reason"] for _t, e, d in rig.events if e == "ignored"]
     assert reasons == ["grace", "noise", "noise", "noise"], reasons
@@ -154,8 +152,8 @@ def _present():
 def test_grip_object_handed_over(pipeline_rig):
     rig = pipeline_rig
     # the "user" puts the toothbrush between the jaws after the arm presents
-    rig.when_near(_present(), lambda: rig.stage("toothbrush", _present()), delay=1.0)
-    rig.run([(0.3, "hold this for me")], timeout=25, settle=1.5)
+    rig.when_near(_present(), lambda: rig.stage("toothbrush", _present()))
+    rig.run([(0.0, "hold this for me")]).watch_hold()
 
     assert rig.ctx.shared_state.get("grip_lock"), f"grip not reported; robot said {rig.said}"
     assert rig.world.is_grasped("toothbrush"), (
@@ -169,7 +167,7 @@ def test_grip_object_handed_over(pipeline_rig):
 
 def test_grip_empty_jaws_reports_nothing(pipeline_rig):
     rig = pipeline_rig
-    rig.run([(0.3, "hold this")], timeout=25)
+    rig.run([(0.0, "hold this")])
     held = rig.trace.held_current()
     assert held < _SQUEEZE_CURRENT, f"the jaws held {held:.0f} counts: something was squeezed"
     assert not rig.ctx.shared_state.get("grip_lock"), "reported a grip with empty jaws"
@@ -230,7 +228,7 @@ def test_pick_up_the_ball(pipeline_rig, caplog, spot):
         z0 = rig.world.body_pos("sports_ball")[2]
     else:
         z0 = rig.put("sports_ball", [*spot, 0.015])[2]
-    rig.run([(0.3, "pick up the ball")], timeout=60, settle=HOLD_WATCH_S)
+    rig.run([(0.0, "pick up the ball")]).watch_hold()
 
     assert "IK reach: sports ball" in caplog.text and "-> solved" in caplog.text, "IK reach not used"
     assert_ordered_high_scan(
@@ -249,7 +247,7 @@ def test_pick_up_toothbrush_aligns_wrist(pipeline_rig, caplog):
     rig.pose.keys = [(0.0, [PERSON_LEFT])]
     rig.default_scene()  # the notebook console's scene: all four props
     z0 = rig.world.body_pos("toothbrush")[2]
-    rig.run([(0.3, "pick up the toothbrush")], timeout=90, settle=HOLD_WATCH_S)
+    rig.run([(0.0, "pick up the toothbrush")]).watch_hold()
 
     assert_ordered_high_scan(caplog, rig.cfg["behaviors"]["pick_place"]["scan_pans"])
     assert caplog.text.count("IK locate:") == 1
@@ -266,7 +264,7 @@ def test_pick_up_bottle_without_knocking_it_over(pipeline_rig, caplog):
     rig.pose.keys = [(0.0, [PERSON_LEFT])]
     rig.default_scene()
     z0 = rig.world.body_pos("bottle")[2]
-    rig.run([(0.3, "pick up the bottle")], timeout=90, settle=HOLD_WATCH_S)
+    rig.run([(0.0, "pick up the bottle")]).watch_hold()
 
     assert "IK reach: bottle" in caplog.text and "-> solved" in caplog.text, "IK reach not used"
     assert_ordered_high_scan(caplog, rig.cfg["behaviors"]["pick_place"]["scan_pans"])
@@ -284,7 +282,7 @@ def test_bottle_that_slips_out_mid_carry_is_reported_dropped(pipeline_rig):
     rig.default_scene()
     z0 = rig.world.body_pos("bottle")[2]
     rig.when_lifted("bottle", z0, lambda: rig.slicken("bottle"))
-    rig.run([(0.3, "pick up the bottle")], timeout=90, settle=2.0)
+    rig.run([(0.0, "pick up the bottle")])
 
     assert rig.event_times("slicken"), "the bottle was never lifted"
     assert hold_problem(rig, "bottle", z0, watch_s=0.0) is not None, "the slip check missed the drop"
@@ -302,7 +300,7 @@ def test_pick_ball_out_of_fixed_reach_says_so(pipeline_rig):
     # in view of the arm camera but past the taught descend pose: anywhere short
     # of it the missed grab pushes the ball under the parked jaws
     z0 = rig.put("sports_ball", [0.34, 0.0, 0.015])[2]
-    rig.run([(0.3, "pick up the ball")], timeout=60, settle=2.0)
+    rig.run([(0.0, "pick up the ball")])
 
     assert rig.said_any("couldn't get a grip on the sports ball"), rig.said
     assert not rig.said_any("Got the"), rig.said
@@ -311,10 +309,57 @@ def test_pick_ball_out_of_fixed_reach_says_so(pipeline_rig):
     _assert_at(rig, _rest())
 
 
+def _twin_camera_calibration() -> dict:
+    """The twin's own wrist camera, in the format ``scripts/calibrate_arm_camera.py`` prints."""
+    from so101_sim.kinematics import matrix_to_rpy, shared_kinematics
+    from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR
+
+    kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
+    K = kin.default_intrinsics(640, 480)
+    R, t = kin.default_mount
+    return {
+        "intrinsics": {"fx": float(K[0, 0]), "fy": float(K[1, 1]), "cx": float(K[0, 2]), "cy": float(K[1, 2]),
+                       "dist": [0.0] * 5, "width": 640, "height": 480},
+        "extrinsics": {"pos": [float(v) for v in t], "rpy": matrix_to_rpy(R)},
+    }
+
+
+def test_pick_on_an_uncalibrated_real_arm_asks_for_calibration(pipeline_rig):
+    """The twin's camera model is not the real camera's: uncalibrated, the pick refuses before it moves."""
+    rig = pipeline_rig
+    rig.cfg["robot"]["backend"] = "real"
+    rig.default_scene()
+    start = rig.joints()
+    rig.run([(0.0, "pick up the ball")])
+
+    assert rig.said_any("isn't calibrated: run scripts/calibrate_arm_camera.py"), rig.said
+    assert rig.event_times("behavior_end", intent="pick_place", ok=False)
+    assert rig.detector.calls == 0, "the arm looked for the ball"
+    assert not rig.disturbed(), f"the arm moved objects (m): {rig.disturbed()}"
+    _assert_at(rig, start, tol=1.0, joints=BODY + ("gripper",))
+
+
+@pytest.mark.slow
+def test_pick_on_a_calibrated_real_arm_uses_its_calibration(pipeline_rig, caplog):
+    """A printed calibration (here the twin's own camera) is what the pick locates with."""
+    rig = pipeline_rig
+    rig.cfg["robot"]["backend"] = "real"
+    rig.cfg["cameras"]["arm"].update(_twin_camera_calibration())
+    rig.pose.keys = [(0.0, [PERSON_LEFT])]
+    rig.default_scene()
+    z0 = rig.world.body_pos("sports_ball")[2]
+    rig.run([(0.0, "pick up the ball")]).watch_hold()
+
+    assert not rig.said_any("isn't calibrated"), rig.said
+    assert "IK reach: sports ball" in caplog.text and "-> solved" in caplog.text, "IK reach not used"
+    _assert_held_out(rig, "sports_ball", "sports ball", z0)
+    assert rig.event_times("behavior_end", intent="pick_place", ok=True)
+
+
 def test_pick_unknown_object_fails_safely(pipeline_rig):
     rig = pipeline_rig
     rig.stage("toothbrush", _descend_pose(rig.cfg))
-    rig.run([(0.3, "pick up the pen")], timeout=25)
+    rig.run([(0.0, "pick up the pen")])
     assert rig.said_any("don't know what a pen looks like"), rig.said
     assert not any(s.grasped.get("toothbrush") for s in rig.trace.samples)
     assert not rig.disturbed(), f"the arm moved objects (m): {rig.disturbed()}"
@@ -330,12 +375,11 @@ def test_fetch_block_hands_to_person(pipeline_rig):
     # pedestal-staged prop off. The ball provides a stable grasp for this
     # legacy open-loop handoff; detection-driven object tests run separately.
     rig.arm.go_to({**fb["block_pose"], "gripper": 70.0}, duration_s=2.5)
-    time.sleep(0.8)
     rig.stage("sports_ball", fb["block_pose"])
     z0 = rig.world.body_pos("sports_ball")[2]
     # lift_pose is lower than this pedestal: take it away once the jaws have the ball
     rig.when(lambda: rig.world.is_grasped("sports_ball"), lambda: rig.world.park_stand("stand_a"))
-    rig.run([(0.3, "bring me the block")], timeout=60)
+    rig.run([(0.0, "bring me the block")])
 
     assert rig.event_times("behavior_end", intent="fetch_block", ok=True), rig.said
     assert rig.trace.heights("sports_ball").max() - z0 > 0.03, "prop never lifted"
@@ -350,7 +394,7 @@ def test_fetch_block_hands_to_person(pipeline_rig):
 def test_fetch_block_without_block_says_so(pipeline_rig):
     """The ball sits on the table, not at block_pose: the jaws close on air."""
     rig = pipeline_rig
-    rig.run([(0.3, "bring me the block")], timeout=40)
+    rig.run([(0.0, "bring me the block")])
 
     assert rig.said_any("couldn't get a grip"), rig.said
     assert not any(s.grasped.get("sports_ball") for s in rig.trace.samples)
@@ -388,7 +432,7 @@ def test_mimic_sweep_pinch_roll(pipeline_rig):
         (11.5, Hand(pinch=0.05, roll=-60.0)),  # ...then the other
         (13.0, Hand(pinch=0.05, roll=-60.0)),
     ]
-    rig.run([(0.3, "copy my movements"), (13.0, "stop")], timeout=30)
+    rig.run([(0.0, "copy my movements"), (13.0, "stop")])
 
     tr = rig.trace
     _, pan_a = tr.series("shoulder_pan", 1.5, 2.0, goal=True)
@@ -422,7 +466,7 @@ def test_mimic_hands_a_held_grip_to_the_pinch(pipeline_rig):
         (3.5, Hand(pinch=0.05)), (6.5, Hand(pinch=0.05)),
         (7.0, Hand(pinch=1.3)), (10.0, Hand(pinch=1.3)),
     ]
-    rig.run([(0.3, "copy my movements"), (10.0, "stop")], timeout=30)
+    rig.run([(0.0, "copy my movements"), (10.0, "stop")])
     assert rig.said_any("Your pinch drives the gripper"), rig.said
     assert not rig.ctx.shared_state.get("grip_lock"), "mimic left the grip locked"
     _, opened = rig.trace.series("gripper", 2.0, 3.0)
@@ -442,14 +486,14 @@ def test_mimic_keeps_a_held_ball_until_the_pinch_is_seen(pipeline_rig):
     rig = pipeline_rig
     rig.pose.keys = [(0.0, [PERSON_LEFT])]
     rig.default_scene()
-    rig.run([(0.3, "pick up the ball")], timeout=60, settle=HOLD_WATCH_S)
+    rig.run([(0.0, "pick up the ball")]).watch_hold()
     assert rig.world.is_grasped("sports_ball"), f"the pickup failed: {rig.said}"
 
     pinched = Hand(pinch=0.05)
     rig.pose.keys = [(0.0, [Person(wrist=(0.5, 0.45))]), (10.0, [Person(wrist=(0.5, 0.45))])]
     rig.hands.keys = [(0.0, None), (1.0, None), (1.01, pinched), (10.0, pinched)]
     first = len(rig.trace.samples)  # the trace runs on across runs; the clock restarts
-    rig.run([(0.3, "copy my movements"), (6.0, "stop")], timeout=60)
+    rig.run([(0.0, "copy my movements"), (6.0, "stop")])
 
     assert rig.said_any("Your pinch drives the gripper"), rig.said
     goals = [s.goal["gripper"] for s in rig.trace.samples[first:]]
@@ -471,7 +515,7 @@ def test_mimic_hand_lost_then_person_lost(pipeline_rig):
         (8.0, []),
     ]
     rig.hands.keys = [(0.0, Hand(pinch=1.3)), (1.5, Hand(pinch=1.3)), (1.6, None)]
-    rig.run([(0.3, "mirror my arm"), (8.0, "stop")], timeout=20)
+    rig.run([(0.0, "mirror my arm"), (8.0, "stop")])
 
     tr = rig.trace
     _, a = tr.series("shoulder_pan", 1.6, 2.0, goal=True)
@@ -487,7 +531,7 @@ def test_mimic_follows_nearest_person(pipeline_rig):
     near_left = Person(cx=0.35, scale=1.1, wrist=(0.2, 0.45))
     rig.pose.keys = [(0.0, [far_right, near_left])]
     rig.hands.keys = [(0.0, None)]
-    rig.run([(0.3, "follow me"), (3.5, "stop")], timeout=15)
+    rig.run([(0.0, "follow me"), (3.5, "stop")])
     _, pan = rig.trace.series("shoulder_pan", 2.5, 3.4, goal=True)
     # mirrored mapping: a wrist on the LEFT of the image pans the arm positive
     assert pan.mean() > 20.0, f"followed the wrong person (pan {pan.mean():.1f})"

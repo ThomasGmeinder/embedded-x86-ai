@@ -5,13 +5,22 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""SO-101 arm access layer.
+"""SO-101 arm access layer: one ``ArmClient`` API, three transports.
 
-Behaviors talk to an :class:`ArmClient`. The transport is :class:`LeRobotArm`
-(the Feetech bus) or :class:`DryRunArm`. The digital twin's
-:class:`~vla_pipeline.robot.sim_arm.SimArmClient` is that same transport with
-a :class:`so101_sim.SimFollower` in place of the serial bus. ``Ros2ArmClient``
-publishes joint commands to the ROS 2 node that owns the bus.
+Behaviors never touch hardware directly - they talk to an :class:`ArmClient`:
+
+- :class:`DirectArm`   - owns the Feetech serial bus via LeRobot's
+  ``SO101Follower`` (same path as ``amd_accel_native_node``). Used for
+  component tests and ``robot.use_ros2: false``. The workshop calls the
+  same class :class:`common.motion.LeRobotArm`.
+- :class:`DryRunArm`   - no hardware; integrates commands so behaviors can be
+  tested end-to-end on any machine.
+- ``Ros2ArmClient`` (in :mod:`vla_pipeline.robot.robot_node`) - publishes
+  joint commands to the ROS 2 node that owns the bus.
+
+The digital twin's :class:`~vla_pipeline.robot.sim_arm.SimArmClient` is
+:class:`DirectArm` with a :class:`so101_sim.SimFollower` in place of the
+serial bus.
 
 Joint convention (degrees, LeRobot SO-101 calibration space):
 ``shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper``.
@@ -62,6 +71,8 @@ from common.motion import (  # noqa: E402
 )
 from so101_sim import MOTOR_NAMES  # noqa: E402
 
+DirectArm = LeRobotArm
+
 __all__ = [
     "DEFAULT_CONTROL_HZ",
     "GRASP_LIMITS",
@@ -71,6 +82,7 @@ __all__ = [
     "MOTOR_NAMES",
     "REST_POSE",
     "ArmClient",
+    "DirectArm",
     "DryRunArm",
     "LeRobotArm",
     "clamp_joints",
@@ -88,7 +100,7 @@ def make_bus_arm(cfg: dict) -> ArmClient:
         from vla_pipeline.robot.sim_arm import SimArmClient
 
         return SimArmClient(cfg)
-    return LeRobotArm(r["motor_port"], r["robot_id"], r.get("max_relative_target", 8.0))
+    return DirectArm(r["motor_port"], r["robot_id"], r.get("max_relative_target", 8.0))
 
 
 def make_arm(cfg: dict) -> ArmClient:
@@ -311,7 +323,7 @@ def main() -> None:
         calibrate_arm(load_config(args.config), force=args.force)
         return
 
-    arm: ArmClient = DryRunArm() if args.dry_run else LeRobotArm(args.port, args.id)
+    arm: ArmClient = DryRunArm() if args.dry_run else DirectArm(args.port, args.id)
     try:
         print("Current joints:", {k: round(v, 1) for k, v in arm.get_joints().items()})
         print("Gripper effort feedback:", arm.get_gripper_load())

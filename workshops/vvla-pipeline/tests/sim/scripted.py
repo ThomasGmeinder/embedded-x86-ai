@@ -12,7 +12,7 @@ the behaviors, dispatcher and transports under test run unchanged:
 
 ``TimelinePose``        YOLO-pose ``infer`` / ``primary_person`` (keyframed people)
 ``TimelineHands``       MediaPipe ``HandTracker.process`` (keyframed pinch/roll/size)
-``ScriptedOperatorCamera`` the operator camera: paced frames showing the scripted
+``ScriptedMountCamera`` the mount camera: paced frames showing the scripted
                         person, plus the "signals" pane for the test video
 ``SimDetector``         YOLO ``ObjectDetector`` from the twin's segmentation
 ``ScriptedTranscripts`` Whisper: timed utterances into the dispatcher
@@ -231,7 +231,7 @@ class TimelineHands:
 
 
 # ---------------------------------------------------------------------------
-# operator camera + signals pane
+# mount camera + signals pane
 # ---------------------------------------------------------------------------
 class SignalBoard:
     """What the video's signals pane shows besides the person (thread-safe-ish)."""
@@ -252,13 +252,15 @@ class SignalBoard:
             self.intent = f"ignored ({data.get('reason')})"
 
 
-class ScriptedOperatorCamera:
-    """The operator camera: frames of the scripted person at ``fps`` (blocking read)."""
+class ScriptedMountCamera:
+    """The mount camera: frames of the scripted person every ``1/fps`` of the
+    twin's sim time (a blocking read wakes on its physics passes)."""
 
-    role = "operator"
+    role = "mount"
 
-    def __init__(self, pose: TimelinePose, hands: TimelineHands | None = None,
+    def __init__(self, world, pose: TimelinePose, hands: TimelineHands | None = None,
                  board: SignalBoard | None = None, width: int = 640, height: int = 480, fps: float = 30.0):
+        self.world = world
         self.pose, self.hands, self.board = pose, hands, board
         self.width, self.height, self.fps = width, height, fps
         self._next = 0.0
@@ -274,12 +276,16 @@ class ScriptedOperatorCamera:
         return img
 
     def read(self):
+        w = self.world
+        seen = w.passes
+        while self._open and float(w.data.time) < self._next:
+            try:
+                seen = w.next_step(seen)
+            except RuntimeError:  # the physics stopped: no new frame time will come
+                return False, None
         if not self._open:
             return False, None
-        now = time.monotonic()
-        if now < self._next:
-            time.sleep(self._next - now)
-        self._next = max(self._next + 1.0 / self.fps, time.monotonic())
+        self._next = float(w.data.time) + 1.0 / self.fps
         self.frames += 1
         return True, self._render()
 
@@ -369,7 +375,8 @@ class CountingDetector:
 # transcripts
 # ---------------------------------------------------------------------------
 class ScriptedTranscripts:
-    """Deliver ``[(t, text), ...]`` to ``deliver(text)`` at scenario time ``t``.
+    """Deliver ``[(t, text), ...]`` to ``deliver(text)`` at scenario time ``t``,
+    checked on each of the twin's physics passes.
 
     ``concurrent=True`` runs each delivery on its own thread - for stacks
     whose transcript handler runs the behavior synchronously (the workshop's
@@ -377,7 +384,8 @@ class ScriptedTranscripts:
     always-hot listener does on the rig.
     """
 
-    def __init__(self, clock: Clock, script, deliver, concurrent: bool = False):
+    def __init__(self, world, clock: Clock, script, deliver, concurrent: bool = False):
+        self.world = world
         self.clock = clock
         self.script = sorted(script, key=lambda s: s[0])
         self.deliver = deliver
@@ -393,10 +401,10 @@ class ScriptedTranscripts:
 
     def _run(self) -> None:
         try:
+            seen = self.world.passes
             for t, text in self.script:
-                delay = t - self.clock()
-                if delay > 0:
-                    time.sleep(delay)
+                while self.clock() < t:
+                    seen = self.world.next_step(seen)
                 self.sent.append((self.clock(), text))
                 if self.concurrent:
                     th = threading.Thread(target=self.deliver, args=(text,), daemon=True)

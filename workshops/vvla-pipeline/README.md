@@ -13,7 +13,7 @@ The robot has senses: **Whisper is its ears**, **YOLO is its eyes**, **Llama is 
 flowchart TB
     subgraph SENSE["Perception &amp; speech"]
         MIC([Microphone]):::io
-        OPERATORCAM([Operator camera<br/>faces human]):::io
+        MOUNTCAM([Mount camera<br/>faces human]):::io
         ARMCAM([Arm camera<br/>end effector]):::io
 
         VAD["VAD listener thread<br/>1.2 s end-of-speech<br/>(always hot)"]:::cpu
@@ -50,8 +50,8 @@ flowchart TB
     STOPCHK -- "no" --> LLAMA --> REG
     STOPCHK -- "yes" --> STOPEVENT
 
-    OPERATORCAM --> POSE
-    OPERATORCAM --> HANDS
+    MOUNTCAM --> POSE
+    MOUNTCAM --> HANDS
     ARMCAM --> DETECT
     ARMCAM --> GRIP
 
@@ -188,19 +188,19 @@ The ROS 2 transport (`robot.use_ros2: true`, `cameras.*.use_ros2: true`) splits 
 ```mermaid
 flowchart LR
     subgraph DEVICES["Hardware"]
-        MC([Operator camera<br/>V4L2]):::hw
+        MC([Mount camera<br/>V4L2]):::hw
         AC([Arm camera<br/>V4L2]):::hw
         BUS([SO-101 Feetech bus<br/>/dev/ttyACM0]):::hw
     end
 
     subgraph NODES["ROS 2 nodes (background processes)"]
-        CMN["camera_operator_node"]:::node
+        CMN["camera_mount_node"]:::node
         CAN["camera_arm_node"]:::node
         SRV["so101_server_node<br/>(sole bus owner)"]:::node
     end
 
     subgraph ORCH["vla_pipeline.main (orchestrator process)"]
-        CCM["camera_client_operator"]:::client
+        CCM["camera_client_mount"]:::client
         CCA["camera_client_arm"]:::client
         ARMCL["so101_arm_client"]:::client
         BEH["behaviors<br/>(mimic · pick · grip · …)"]:::beh
@@ -210,8 +210,8 @@ flowchart LR
     AC --> CAN
     BUS <--> SRV
 
-    CMN -->|"/cameras/operator/image_raw (Image)"| CCM
-    CMN -.->|"/cameras/operator/healthy (Bool)"| CCM
+    CMN -->|"/cameras/mount/image_raw (Image)"| CCM
+    CMN -.->|"/cameras/mount/healthy (Bool)"| CCM
     CAN -->|"/cameras/arm/image_raw (Image)"| CCA
     CAN -.->|"/cameras/arm/healthy (Bool)"| CCA
 
@@ -232,10 +232,10 @@ flowchart LR
 
 | Node | Process / how it starts | Role | Owns |
 |---|---|---|---|
-| `camera_operator_node` | `python -m vla_pipeline.vision.camera_node --role operator` (launch/run_pipeline) | Captures the human-facing camera and publishes frames + health | the operator V4L2 device |
+| `camera_mount_node` | `python -m vla_pipeline.vision.camera_node --role mount` (launch/run_pipeline) | Captures the human-facing camera and publishes frames + health | the mount V4L2 device |
 | `camera_arm_node` | `python -m vla_pipeline.vision.camera_node --role arm` | Captures the end-effector camera and publishes frames + health | the arm V4L2 device |
 | `so101_server_node` | `python -m vla_pipeline.robot.robot_node --server` | **Sole owner of the Feetech bus**; applies joint commands at `control_fps`, streams joint state + gripper effort, parks the arm at rest on shutdown | the SO-101 serial bus |
-| `camera_client_operator` | created inside `vla_pipeline.main` (`Ros2Camera`) | Subscribes to the operator image topic, hands the latest frame to behaviors | — |
+| `camera_client_mount` | created inside `vla_pipeline.main` (`Ros2Camera`) | Subscribes to the mount image topic, hands the latest frame to behaviors | — |
 | `camera_client_arm` | created inside `vla_pipeline.main` (`Ros2Camera`) | Subscribes to the arm image topic for detection / jaw verification | — |
 | `so101_arm_client` | created inside `vla_pipeline.main` (`Ros2ArmClient`) | The `ArmClient` implementation behaviors call; publishes commands, reads back joint state + effort | — |
 
@@ -245,19 +245,19 @@ The three client nodes spin on their own background executors inside the single 
 
 | Topic | Type | Publisher → Subscriber | Notes |
 |---|---|---|---|
-| `/cameras/operator/image_raw` | `sensor_msgs/Image` (bgr8) | `camera_operator_node` → `camera_client_operator` | pose / gesture-mimic / person finding |
-| `/cameras/operator/healthy` | `std_msgs/Bool` | `camera_operator_node` → (any) | `false` while the device is offline/reopening |
+| `/cameras/mount/image_raw` | `sensor_msgs/Image` (bgr8) | `camera_mount_node` → `camera_client_mount` | pose / gesture-mimic / person finding |
+| `/cameras/mount/healthy` | `std_msgs/Bool` | `camera_mount_node` → (any) | `false` while the device is offline/reopening |
 | `/cameras/arm/image_raw` | `sensor_msgs/Image` (bgr8) | `camera_arm_node` → `camera_client_arm` | object detection + grip jaw verification |
 | `/cameras/arm/healthy` | `std_msgs/Bool` | `camera_arm_node` → (any) | health flag for the arm camera |
 | `/so101/joint_command` | `sensor_msgs/JointState` (deg) | `so101_arm_client` → `so101_server_node` | absolute joint targets; partial dicts allowed |
 | `/so101/joint_state` | `sensor_msgs/JointState` | `so101_server_node` → `so101_arm_client` | positions for all joints; **`effort[gripper]` = servo current** (NaN if the bus can't read it) |
 
-All topics use best-effort, keep-last depth-1 QoS — the latest frame/state always wins and vision never backs up behind a slow consumer. Every camera parameter (device, resolution, fps, rotation, topic) is a ROS parameter with defaults from `cameras:` in `config/pipeline.yaml`; point `cameras.arm.device` at the end-effector camera (a `/dev/v4l/by-id/...` path is more stable than an index) and set `rotate` to match its mounting. If a camera is unplugged the node stays up, publishes `healthy: false`, retries every `reopen_interval_s`, and behaviors degrade gracefully (pick-and-place falls back to the operator camera; fetch hands off straight ahead).
+All topics use best-effort, keep-last depth-1 QoS — the latest frame/state always wins and vision never backs up behind a slow consumer. Every camera parameter (device, resolution, fps, rotation, topic) is a ROS parameter with defaults from `cameras:` in `config/pipeline.yaml`; point `cameras.arm.device` at the end-effector camera (a `/dev/v4l/by-id/...` path is more stable than an index) and set `rotate` to match its mounting. If a camera is unplugged the node stays up, publishes `healthy: false`, retries every `reopen_interval_s`, and behaviors degrade gracefully (pick-and-place falls back to the mount camera; fetch hands off straight ahead).
 
 Quick inspection:
 
 ```bash
-ros2 node list                       # camera_operator_node, camera_arm_node, so101_server_node, ...
+ros2 node list                       # camera_mount_node, camera_arm_node, so101_server_node, ...
 ros2 topic hz /cameras/arm/image_raw # confirm the arm camera is publishing
 ros2 topic echo /so101/joint_state   # watch positions + gripper effort
 ```
@@ -279,7 +279,7 @@ vvla-pipeline/
 │   ├── vaiep_config.json         # VitisAI compiler config for YOLO (BF16, VAIML)
 │   └── vitisai_config_whisper_{encoder,decoder}.json
 ├── launch/
-│   └── strix_vla.launch.py       # cameras (operator+arm) + SO-101 server node
+│   └── strix_vla.launch.py       # cameras (mount+arm) + SO-101 server node
 ├── scripts/
 │   ├── calibrate_arm_camera.py   # arm camera intrinsics + mount on the gripper (pick_place IK)
 │   ├── compile_npu_models.{py,sh} # compile the YOLO ONNX for the NPU (SDK venv)
@@ -307,8 +307,8 @@ vvla-pipeline/
     │   ├── yolo_detect_npu.py    # ObjectDetector + spoken-name synonyms
     │   └── mediapipe_hands.py    # HandTracker: normalized thumb–index pinch
     ├── robot/
-    │   ├── arm_interface.py      # ArmClient, LeRobotArm, DryRunArm (from workshop/common/motion.py), calibration
-    │   ├── sim_arm.py            # SimArmClient: LeRobotArm on the digital twin
+    │   ├── arm_interface.py      # ArmClient, DirectArm (common/motion.py's LeRobotArm), DryRunArm, calibration
+    │   ├── sim_arm.py            # SimArmClient: DirectArm on the digital twin
     │   ├── robot_node.py         # So101ServerNode (effort in JointState) + Ros2ArmClient
     │   └── test_ros2_arm_motion.py  # ROS 2 per-joint full-range motion test
     ├── behaviors/
@@ -559,7 +559,7 @@ The voice activity detector (VAD) in `vla_pipeline/audio/vad_listener.py` listen
 
 **Locate:** objects rest on the table, so one camera is enough. Forward kinematics of the SO-101 model (`so101_sim/src/so101_sim/kinematics.py`) at the current joint angles gives the wrist camera's pose; rays through the YOLO box meet the table plane, then a class-specific footprint is fitted: sphere for a sports ball, upright bottle, or flat footprint for a book/toothbrush. For the elongated toothbrush, YOLO supplies the crop but not an angle: PCA on the pixels inside that crop finds its long image axis and camera rays carry it onto the table. **IK reach:** one five-joint constrained SQP solve uses MuJoCo's analytic point and angular Jacobians to put the point between the open jaws on the object, keep the closing axis horizontal, and (for a toothbrush) make the jaws close across its long axis. Beside a ball or other lying object, the hand then moves sideways at grasp height until the fixed finger is `fixed_jaw_gap_m` (5 mm) away, so the moving jaw only pushes the object that far instead of across half the jaw opening. Joint limits and a per-step trust region are hard constraints; geometric SO-101 elbow solutions seed the optimizer, while MuJoCo FK remains the source of truth. The jaws then open above the object and descend in joint space. Each step stays within 5 mm of the planned vertical and above the table; when a joint line leaves that band, the same bound is met with Cartesian steps. Reach is ~14–30 cm from the base. A box cut by the image edge is skipped and the next stored frame is located. An object that cannot be solved is out of reach, and the arm says so. The taught `approach_pose` + `descend_lift` are used only with `reach: fixed` or when the arm camera is offline.
 
-**Real arm calibration.** Until calibrated, the camera model is the twin's `wrist_cam` (intrinsics and pose on the gripper), which only matches a camera mounted exactly like the twin's — 1° of mount error moves the fix ~5 mm at 30 cm. With the pipeline stopped:
+**Real arm calibration.** A real arm (`robot.backend: real`) does not pick until its camera is calibrated: with `cameras.arm.intrinsics` or `cameras.arm.extrinsics` unset, the robot says "The arm camera isn't calibrated: run scripts/calibrate_arm_camera.py" and the behavior ends as failed before the arm moves. The twin's `wrist_cam` model (intrinsics and pose on the gripper) is exact on the twin only; it matches a real camera only if it is mounted exactly like the twin's, and 1° of mount error moves the fix ~5 mm at 30 cm. With the pipeline stopped:
 
 ```bash
 python scripts/calibrate_arm_camera.py intrinsics --board 9x6 --square-mm 24   # printed checkerboard, 12+ views
@@ -567,9 +567,9 @@ python scripts/calibrate_arm_camera.py mount --board 9x6 --square-mm 24        #
 python scripts/calibrate_arm_camera.py check --object sports_ball --at 0.28 0.06  # twin body at a measured spot
 ```
 
-Each prints the YAML for `cameras.arm.intrinsics` / `cameras.arm.mount` (the same keys exist in the workshop's `config/workshop.yaml`). `check --sim` runs on the twin.
+Each prints the YAML for `cameras.arm.intrinsics` / `cameras.arm.extrinsics` (the same keys exist in the workshop's `config/workshop.yaml`). `check --sim` runs on the twin.
 
-Failure handling speaks, and a behavior that gives up ends as failed (not "done"): unknown word ("I don't know what that looks like"), nothing found, ambiguous matches, failed/slipped grasp (retry then give up), dropped after the lift, missing cameras (arm cam down → operator camera with a warning, fixed reach only). The arm walks the configured `scan_pans` from `scan_pose` and stops at the first settled frame with a usable box, keeping that frame with the joints that took it. A miss or a box cut by the image edge does not stop the walk. If the walk stores nothing, it moves to `scan_near_pose` and walks `scan_near_pans`; this pulled-back, downward view exposes the near-base table normally hidden behind the jaws. Ball, bottle, book, and toothbrush share that rule. The default toothbrush is visible on the high sweep, so that run never enters the near pose, and a transfer away from a pose follows the joint line. One successful locate and one grasp solve follow the ranked frames. The physical camera mount never changes. The twin scene uses four textured props that are actual COCO-80 classes: sports ball, book, bottle, and toothbrush. COCO still has no `cube` or `pen` class; those names fail safely unless YOLO is fine-tuned and `SYNONYMS` is extended. One-time setup: `python scripts/export_yolo26s_detect.py`.
+Failure handling speaks, and a behavior that gives up ends as failed (not "done"): unknown word ("I don't know what that looks like"), nothing found, ambiguous matches, failed/slipped grasp (retry then give up), dropped after the lift, missing cameras (arm cam down → mount camera with a warning, fixed reach only), a real arm whose camera is not calibrated (asks for `scripts/calibrate_arm_camera.py`). The arm walks the configured `scan_pans` from `scan_pose` and stops at the first settled frame with a usable box, keeping that frame with the joints that took it. A miss or a box cut by the image edge does not stop the walk. If the walk stores nothing, it moves to `scan_near_pose` and walks `scan_near_pans`; this pulled-back, downward view exposes the near-base table normally hidden behind the jaws. Ball, bottle, book, and toothbrush share that rule. The default toothbrush is visible on the high sweep, so that run never enters the near pose, and a transfer away from a pose follows the joint line. One successful locate and one grasp solve follow the ranked frames. The physical camera mount never changes. The twin scene uses four textured props that are actual COCO-80 classes: sports ball, book, bottle, and toothbrush. COCO still has no `cube` or `pen` class; those names fail safely unless YOLO is fine-tuned and `SYNONYMS` is extended. One-time setup: `python scripts/export_yolo26s_detect.py`.
 
 **Current twin manipulation limits.** Detection and the ball's first pick work,
 and the bottle is solved around its standing footprint. The book is too large
@@ -602,7 +602,7 @@ Most components are standalone modules with their own `__main__` self-test. Pick
 | YOLO pose | webcam | `python -m vla_pipeline.vision.yolo_pose_npu --device npu` |
 | YOLO detect | webcam | `python -m vla_pipeline.vision.yolo_detect_npu --find ball --role arm` |
 | MediaPipe hands | webcam | `python -m vla_pipeline.vision.mediapipe_hands` |
-| Camera client | webcam | `python -m vla_pipeline.vision.camera --role operator` |
+| Camera client | webcam | `python -m vla_pipeline.vision.camera --role mount` |
 | Camera node | ROS 2 + webcam | `python -m vla_pipeline.vision.camera_node --role arm` |
 | Arm interface | no (`--dry-run`) / arm | `python -m vla_pipeline.robot.arm_interface --dry-run` |
 | Arm calibration | arm | `python -m vla_pipeline.robot.arm_interface --calibrate` |
@@ -654,6 +654,8 @@ Spoken commands, and how each one is checked. A cell is blank when that stack do
 | Pick up the bottle | `pick up the bottle` | Default scene. The log shows `IK reach: bottle` and `-> solved`, the high scan runs in order, and there is one locate and one solve. The same held-out checks, for the bottle. `pick_place` ends ok. | The same IK, scan, and held-out checks. | The same `/sim/scene` checks as the ball, for the bottle. |
 | Bottle slips during the carry | `pick up the bottle` | Friction is removed once the bottle has risen. The arm says "I dropped the bottle" and does not say "Got the". The bottle is not grasped. `pick_place` ends not ok. | The same speech and grasp checks. | |
 | Ball the fixed poses cannot reach | `pick up the ball`, with `reach: fixed` | Ball at (0.34, 0). The arm says "couldn't get a grip on the sports ball" and does not say "Got the". The ball rises less than 3 cm. `pick_place` ends not ok. Parks at rest. | Ball at (0.19, 0). The same speech, and the ball rises less than 3 cm. | |
+| Pick on a real arm without a camera calibration | `pick up the ball`, with `robot.backend: real` | The arm says "The arm camera isn't calibrated: run scripts/calibrate_arm_camera.py". `pick_place` ends not ok. The detector is never called, no prop moves, and every joint stays within 1°. | The same speech, detector, prop, and joint checks. | |
+| Pick on a calibrated real arm | `pick up the ball`, with `robot.backend: real` and the twin's own camera written as `cameras.arm.intrinsics` and `extrinsics` | Default scene. The arm does not ask for a calibration. The same IK and held-out checks as the ball. `pick_place` ends ok. | | |
 | Unknown object | `pick up the pen` | The arm says "don't know what a pen looks like". A staged toothbrush is never grasped, and no prop is moved. Parks at rest. | | |
 | Bring the block | `bring me the block` | Ball staged at `block_pose`: `fetch_block` ends ok, the ball rises more than 3 cm and stays held until the gripper goal passes 90°, then it is released. Parks at rest. Ball left on the table: the arm says "couldn't get a grip", the ball is never grasped, and the arm parks. | | |
 | Copy a sweep, a pinch, and a roll | `copy my movements`, then `stop` | The pan follows the wrist across the frame: the two ends are more than 25° apart, and the goal tracks the sweep with an absolute correlation above 0.9. A pinch closes the gripper to the closed floor. Wrist roll goes both ways by more than 15°. Joints stay inside the mimic limits. Parks at rest. | | A scripted person and pinch: some body joint moves more than 2°, the grip lock is cleared, and the gripper moves more than 5°. `stop` from another thread ends the behavior, and the joints then drift less than 1°. |
@@ -672,7 +674,8 @@ The same command also runs these checks. None of them speak a command.
 | Grasp geometry | Pipeline and workshop, for the ball and the bottle: the planned centre is within 5 mm of the object, the jaws stay clear on the way in, and the descent stays within 5 mm of vertical and 8 mm of the object. The bottle's two face gaps match within 4 mm. The ball's fixed finger is within 2 mm of `fixed_jaw_gap_m`. For a straight and a turned toothbrush, the descent clears it and the fixed finger then sits beside it. The close holds the object, eases to the hold limit before overload protection trips, and `holding()` tells a held object from empty jaws. |
 | Pickup scan | On the workshop manipulation code: a settled frame is stored with the joints that took it. A clipped larger box loses to a usable smaller one. An ungraspable sighting, and one empty frame, do not end the sweep. The near sweep runs only when the high sweep stored nothing. The ball's descent stays within 5 mm of vertical. A slipped grasp is solved again from a fresh fix. |
 | Speech front end | Synthetic blocks, with no microphone. A short command after silence is kept. A second short command 90 ms later is kept. A 120 ms click is dropped and its length is recorded. `MicListener` reports "too short to hear", "Whisper heard no words", and a block the device had to drop. |
-| Kinematics | An arm-camera box is turned into a table position and compared with where the twin put the object. A box cut by the image edge gives no fix. IK round-trips, stays on the vertical through the descent, closes across a lying object's axis, and refuses an out-of-reach target. The grasp path is deterministic. The hand-eye solve recovers a known camera mount, and the default camera model projects like the twin. |
+| Kinematics | An arm-camera box is turned into a table position and compared with where the twin put the object. A box cut by the image edge gives no fix. IK round-trips, stays on the vertical through the descent, closes across a lying object's axis, and refuses an out-of-reach target. The grasp path is deterministic. The hand-eye solve recovers a known camera mount, and the default camera model projects like the twin. The camera counts as calibrated only when both the intrinsics and the pose on the gripper are set, which is exactly when the twin's model stops standing in. |
+| Arm names | The pipeline's `DirectArm` is the workshop's `LeRobotArm`. The real backend builds it from `robot.motor_port`, `robot_id` and `max_relative_target`. |
 | Servo model | Present current matches the 7.4 V STS3215 datasheet points. `Torque_Limit` changes the live cap. Writing `Max_Torque_Limit` does not. An overloaded grip is cut after the protection time and restored by the next goal. Reset reloads the gripper limit and clears a trip. Every dance keyframe holds for longer than the protection time without a trip. A hold under the threshold never trips. |
 | Reset | `SimWorld.reset` matches `mj_resetData` plus the arm pose it was given. The notebook button, the in-process pipeline console, and the `run_pipeline.sh` reset service leave one disturbed twin in the same state. |
 | Twin building blocks | A rendered frame carries the time its scene was captured. A scene snapshot round-trips. The console's camera fan-out judges a stamped frame by its capture time, and an unstamped frame by its arrival time. |
@@ -689,14 +692,14 @@ All tunables live in `config/pipeline.yaml`:
 - **whisper** — model variant, device, VitisAI configs, cache keys
 - **llm** — `llama-server` port (default 8081), GPU layers, ctx size, GBNF path, `hsa_override_gfx_version`
 - **yolo_pose / yolo_detect / mediapipe** — confidence thresholds, cache keys, hand-roll cue threshold
-- **cameras** — per-role (`operator` / `arm`) device, resolution, fps, rotation, `use_ros2`, topic; legacy single `camera:` kept for one-cam dev machines
+- **cameras** — per-role (`mount` / `arm`) device, resolution, fps, rotation, `use_ros2`, topic; legacy single `camera:` kept for one-cam dev machines
 - **robot** — `use_ros2`, `motor_port`, `robot_id`, topics, control FPS, `max_relative_target`
 - **behaviors** — `gesture_mimic` camera-to-joint gains, mirror, depth and grip calibration, One Euro smoothing; fetch/pick keyframes and servo gains; grip stall/grace/load/jaw-ROI; dance BPM; wave cycles
 - **resource_monitor** — sample rate, CSV output
 
 ## Architecture notes
 
-- **Transport-agnostic behaviors.** Behaviors only ever talk to the `ArmClient` ABC and the `CameraClient` ABC. The same behavior code runs over ROS 2 topics (`Ros2ArmClient` → `So101ServerNode`, which exclusively owns the Feetech bus), direct serial (`LeRobotArm` → LeRobot `SO101Follower`), the digital twin (`SimArmClient`), or `DryRunArm` for development; cameras likewise over ROS 2 topics or direct V4L2.
+- **Transport-agnostic behaviors.** Behaviors only ever talk to the `ArmClient` ABC and the `CameraClient` ABC. The same behavior code runs over ROS 2 topics (`Ros2ArmClient` → `So101ServerNode`, which exclusively owns the Feetech bus), direct serial (`DirectArm` → LeRobot `SO101Follower`), the digital twin (`SimArmClient`), or `DryRunArm` for development; cameras likewise over ROS 2 topics or direct V4L2.
 - **Grammar-constrained intent.** llama.cpp's GBNF support means the LLM physically cannot emit anything but one of the command JSONs (`gesture_mimic`, `fetch_block`, `pick_place`, `dance`, `grip`, `release`, `wave`, `home`, `stop`, `unknown`) with an `object` slot.
 - **Registry dispatch.** The orchestrator never hardcodes behaviors; handlers register on a `CommandRegistry`, so adding a command never touches `main.py`'s dispatch loop.
 - **Grip-lock.** `grip` and `pick_place` record the held position in shared state, so a second "hold this" is refused while the arm holds something. `release` ("release", "open", "drop it") clears the lock and opens the jaws where they are. `gesture_mimic` clears it too and hands the gripper to your pinch.
@@ -710,7 +713,7 @@ All tunables live in `config/pipeline.yaml`:
 - **`HW context creation unsuccessful` / `sub buffer size and offset` when loading a model on the NPU** — YOLO-pose was opened while YOLO-detect was already open in the same process. Open YOLO-pose first and keep that session (`size_npu`). See **Compute placement → NPU load order**.
 - **NPU model falls back to CPU unexpectedly** — check the startup logs; a model set to `npu` that can't get a session logs a warning and runs on CPU rather than crashing.
 - **`EOFError` / "No calibration … not a TTY" from the server node** — the arm has no calibration file and the server is backgrounded (no terminal to run interactive calibration). Run `python -m vla_pipeline.robot.arm_interface --calibrate` once in the foreground; `run_pipeline.sh` now does this automatically before launch.
-- **Camera preview shows "no frames — camera offline"** — with `use_ros2: true` the preview *subscribes* to a topic, so it needs the camera node publishing. Start the nodes (`./run_pipeline.sh` or `python -m vla_pipeline.vision.camera_node --role operator`), or test the raw device directly by setting that role's `use_ros2: false`. Confirm the device captures at all with `v4l2-ctl -d <by-id path> --list-formats-ext`.
+- **Camera preview shows "no frames — camera offline"** — with `use_ros2: true` the preview *subscribes* to a topic, so it needs the camera node publishing. Start the nodes (`./run_pipeline.sh` or `python -m vla_pipeline.vision.camera_node --role mount`), or test the raw device directly by setting that role's `use_ros2: false`. Confirm the device captures at all with `v4l2-ctl -d <by-id path> --list-formats-ext`.
 - **Two identical USB cameras swap on reboot** — use the stable `/dev/v4l/by-id/...-video-index0` symlink (the `-index0` node is the capture node) for `cameras.*.device` instead of a numeric index.
 - **llama-server fails to start** — check `third_party/llama.cpp/build/bin/llama-server` exists; rebuild with `./bootstrap.sh --skip-apt --skip-models`. On failure the last 20 lines of `logs/llama-server.log` are printed.
 - **llama-server segfaults with `cudaMalloc failed: out of memory`** — the KV cache overflowed the iGPU VRAM carve-out. Keep `llm.ctx_size` capped (2048) and `llm.parallel: 1`; never run the server with an uncapped context on Strix Halo. If still tight, lower `n_gpu_layers`, or raise the UMA/VRAM split in BIOS.

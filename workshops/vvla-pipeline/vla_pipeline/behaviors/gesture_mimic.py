@@ -102,7 +102,7 @@ def run_gesture_mimic(
     arm: ArmClient,
     pose: PoseEstimator,
     hands: HandTracker,
-    camera,  # CameraClient (operator role)
+    camera,  # CameraClient (mount role)
     stop_check=None,
     show_preview: bool = True,
 ) -> None:
@@ -113,7 +113,7 @@ def run_gesture_mimic(
 
     logger.info(
         "Gesture mimic running (direct camera-frame mapping) - show your "
-        "hand to the operator camera. Move it around the frame; reach in/out "
+        "hand to the mount camera. Move it around the frame; reach in/out "
         "for forward/back; tilt to roll; pinch to grip."
     )
     try:
@@ -122,7 +122,7 @@ def run_gesture_mimic(
                 break
             ok, frame = camera.read()
             if not ok:
-                logger.warning("Operator camera frame unavailable - holding pose.")
+                logger.warning("Mount camera frame unavailable - holding pose.")
                 time.sleep(0.05)
                 continue
             h, w = frame.shape[:2]
@@ -245,7 +245,7 @@ def calibrate_depth(
     """Measure the neutral hand size at a comfortable mid-distance and print the
     ``hand_size_neutral`` value to paste into ``config/pipeline.yaml``."""
     print(
-        "\nHold your open hand toward the operator camera at a comfortable "
+        "\nHold your open hand toward the mount camera at a comfortable "
         "mid-distance (the pose you want to be 'neither forward nor back')."
     )
     input("Press Enter when in position... ")
@@ -353,7 +353,7 @@ def main() -> None:
     from vla_pipeline.vision.camera import make_camera
 
     hands = HandTracker(cfg)
-    camera = make_camera(cfg, "operator")
+    camera = make_camera(cfg, "mount")
     if args.calibrate_depth or args.calibrate_grip:
         try:
             if args.calibrate_depth:

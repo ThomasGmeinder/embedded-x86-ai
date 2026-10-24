@@ -53,20 +53,20 @@ PATHS = [
 # watched until it draws three frames (notebook_harness.DEFAULT_ACTIONS).
 SCRIPTS = {
     "03_igpu_llama": {
-        "07f51d10d595": [("type", "Why do robots like grammars?"), ("wait_for", "llama: ", 90.0)],
+        "07f51d10d595": [("type", "Why do robots like grammars?"), ("wait_for", "llama: ")],
     },
     "02_robot": {
         "cell-10": [("click", "rest pose")],
     },
     "03_intent_node": {
         "578bb604bee3": [
-            ("type", "stop"), ("wait_for", "stop fast path", 15.0),
-            ("type", "pick up the ball"), ("wait_for", "[LLM parse]", 90.0),
+            ("type", "stop"), ("wait_for", "stop fast path"),
+            ("type", "pick up the ball"), ("wait_for", "[LLM parse]"),
         ],
     },
     "01_behavior": {
-        "cell-14": [("type", "wave at me"), ("wait_for", "[toy_wave] waving!", 30.0)],
-        "cell-16": [("click", "dance"), ("wait_for", "parked:", 90.0)],
+        "cell-14": [("type", "wave at me"), ("wait_for", "[toy_wave] waving!")],
+        "cell-16": [("click", "dance"), ("wait_for", "parked:")],
     },
 }
 

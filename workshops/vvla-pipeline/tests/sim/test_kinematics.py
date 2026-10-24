@@ -16,7 +16,6 @@ result is compared with where the object really is.
 from __future__ import annotations
 
 import math
-import time
 
 import numpy as np
 import pytest
@@ -82,6 +81,8 @@ def _look(twin, obj, pos, pose):
     from so101_sim.camera import SimCamera
     from so101_sim.detect import SegDetector
 
+    from rigs import wait_settled
+
     world = twin.world
     world.reset(pose)
     for o in world.objects:
@@ -90,7 +91,7 @@ def _look(twin, obj, pos, pose):
     world.place(obj, pos)
     cam = SimCamera(world, "arm", renderer=twin.renderer, segmentation=True)
     try:
-        time.sleep(0.3)  # let the object settle on the table
+        wait_settled(world)
         ok, frame = cam.read(fresh=True)
         assert ok
         dets = [d for d in SegDetector(cam).detect(frame) if d[3] == obj]
@@ -270,6 +271,21 @@ def test_mount_config_round_trip(kin):
     R, t = kin.mount({"pos": t0.tolist(), "rpy": matrix_to_rpy(R0)})
     assert np.allclose(R, R0, atol=1e-9) and np.allclose(t, t0)
     assert kin.mount({"pos": None, "rpy": None}) is kin.default_mount
+
+
+def test_the_twin_camera_stands_in_until_both_calibrations_are_set(kin):
+    from so101_sim.kinematics import camera_calibrated
+
+    intrinsics = {"fx": 500.0, "fy": 500.0, "cx": 320.0, "cy": 240.0, "width": 640, "height": 480}
+    extrinsics = {"pos": [0.0, -0.05, 0.03], "rpy": [180.0, 0.0, 0.0]}
+    assert camera_calibrated(intrinsics, extrinsics)
+    for unset in (None, {}, {"fx": None}):
+        assert not camera_calibrated(unset, extrinsics)
+        K, _ = kin.intrinsics(unset, 640, 480)
+        assert np.array_equal(K, kin.default_intrinsics(640, 480))
+    for unset in (None, {"pos": [0.0, 0.0, 0.0], "rpy": None}, {"pos": None, "rpy": [0.0, 0.0, 0.0]}):
+        assert not camera_calibrated(intrinsics, unset)
+        assert kin.mount(unset) is kin.default_mount
 
 
 def test_default_camera_model_projects_like_the_twin(twins, pipeline_cfg, kin):

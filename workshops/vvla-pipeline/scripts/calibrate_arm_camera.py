@@ -9,9 +9,9 @@
 """Calibrate the SO-101 wrist camera so pick_place can locate objects (``reach: ik``).
 
 pick_place turns the YOLO box of an object into a position on the table with
-the camera's intrinsics and its mount on the gripper. Until both are
-calibrated it uses the digital twin's camera model, which only matches a
-real arm whose camera sits exactly like the twin's. Run on the hardware with
+the camera's intrinsics and its mount on the gripper. On a real arm it
+refuses until both are calibrated: the digital twin's camera model only
+matches a camera that sits exactly like the twin's. Run on the hardware with
 the pipeline stopped (the script opens the arm and the camera directly):
 
 1. ``intrinsics`` - hold a printed checkerboard in front of the arm camera
@@ -20,7 +20,7 @@ the pipeline stopped (the script opens the arm and the camera directly):
    (and workshop/*/config/workshop.yaml).
 2. ``mount`` - tape the checkerboard flat on the table. Jog the arm (keys
    below) to ~8 poses that see the whole board from different angles,
-   SPACE at each, ENTER solves. Paste the printed ``mount``.
+   SPACE at each, ENTER solves. Paste the printed ``extrinsics``.
 3. ``check`` - put the sports ball at a spot you measured in the arm's base frame
    (x forward from the base, y to the left, metres) and compare.
 
@@ -187,14 +187,14 @@ def _solve_and_print(kin, views, objp, K, dist) -> int:
           "(under ~5 mm is good - otherwise add views from more varied angles)")
     print(f"vs the twin's camera model: {np.linalg.norm(t - t0) * 1000:.1f} mm, {angle:.1f} deg\n")
     print("cameras:\n  arm:")
-    print(f"    mount: {{pos: {_yaml_list(t, '{:.4f}')}, rpy: {_yaml_list(matrix_to_rpy(R), '{:.2f}')}}}")
+    print(f"    extrinsics: {{pos: {_yaml_list(t, '{:.4f}')}, rpy: {_yaml_list(matrix_to_rpy(R), '{:.2f}')}}}")
     return 0
 
 
 def cmd_mount(args) -> int:
     import cv2
 
-    from so101_sim.kinematics import shared_kinematics
+    from so101_sim.kinematics import intrinsics_calibrated, shared_kinematics
 
     cfg = _config(args)
     size, objp = _board(args.board, args.square_mm)
@@ -208,7 +208,7 @@ def cmd_mount(args) -> int:
     from vla_pipeline.vision.camera import make_camera
 
     cam_cfg = cfg["cameras"]["arm"]
-    if not (cam_cfg.get("intrinsics") or {}).get("fx"):
+    if not intrinsics_calibrated(cam_cfg.get("intrinsics")):
         print("cameras.arm.intrinsics is not set - run `intrinsics` first (using the twin's model for now)")
     arm, cam = make_arm(cfg), make_camera(cfg, "arm")
     views, step = [], 3.0
@@ -263,7 +263,7 @@ def cmd_mount(args) -> int:
 # check
 # ---------------------------------------------------------------------------
 def cmd_check(args) -> int:
-    from so101_sim.kinematics import ROUND_CLASSES, shared_kinematics
+    from so101_sim.kinematics import ROUND_CLASSES, camera_calibrated, shared_kinematics
     from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR, make_arm
     from vla_pipeline.vision.camera import make_camera
     from vla_pipeline.vision.yolo_detect_npu import ObjectDetector
@@ -296,9 +296,12 @@ def cmd_check(args) -> int:
         h, w = frame.shape[:2]
         K, dist = kin.intrinsics(cam_cfg.get("intrinsics"), w, h)
         table_z = float(pp.get("table_z", -0.005))
-        loc = kin.locate_on_table(dets[0].box, joints, K, dist, cam_cfg.get("mount"), table_z, (w, h),
+        loc = kin.locate_on_table(dets[0].box, joints, K, dist, cam_cfg.get("extrinsics"), table_z, (w, h),
                                   shape="sphere" if resolved in ROUND_CLASSES else "upright")
-        source = "calibrated" if (cam_cfg.get("intrinsics") or {}).get("fx") else "twin camera model"
+        source = (
+            "calibrated" if camera_calibrated(cam_cfg.get("intrinsics"), cam_cfg.get("extrinsics"))
+            else "twin camera model"
+        )
         if loc is None:
             print(f"{resolved} box {np.round(dets[0].box).tolist()} touches the image border - try --pan")
             return 1
@@ -331,7 +334,7 @@ def main() -> int:
     p.add_argument("--save", help="directory to keep the captured views")
     p.set_defaults(fn=cmd_intrinsics)
 
-    p = sub.add_parser("mount", help="board on the table + arm poses -> cameras.arm.mount")
+    p = sub.add_parser("mount", help="board on the table + arm poses -> cameras.arm.extrinsics")
     p.add_argument("--board", default="9x6", help="inner corners, cols x rows")
     p.add_argument("--square-mm", type=float, default=24.0)
     p.add_argument("--save", help="captured views JSON (default calibration_mount_views.json)")

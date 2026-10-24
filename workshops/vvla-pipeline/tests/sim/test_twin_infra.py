@@ -17,6 +17,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -59,7 +60,7 @@ def no_twin():
     """No twin on the test domain before the test, and none left after it."""
     assert_domain_free("a twin already runs on the test domain")
     yield
-    assert_domain_free("a twin node outlived its test", exit_s=20.0)
+    assert_domain_free("a twin node outlived its test", wait=True)
 
 
 @pytest.fixture
@@ -72,13 +73,21 @@ def twin(workshop_cfg, no_twin):
 
 
 def _stop(proc: subprocess.Popen) -> None:
+    """SIGINT, which rclpy turns into a clean shutdown, then the process's exit."""
     if proc.poll() is None:
         proc.send_signal(signal.SIGINT)
-        try:
-            proc.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
+        proc.wait()
+
+
+def _first_state_or_exit(probe, proc: subprocess.Popen) -> None:
+    """Block until a joint state arrives or ``proc`` exits, whichever is first."""
+    up = threading.Event()
+    unsubscribe = probe.subscribe(up.set)
+    threading.Thread(target=lambda: (proc.wait(), up.set()), daemon=True).start()
+    try:
+        up.wait()
+    finally:
+        unsubscribe()
 
 
 def test_default_launch_is_unchanged(workshop_cfg, probe, state_topic, no_twin):
@@ -90,15 +99,15 @@ def test_default_launch_is_unchanged(workshop_cfg, probe, state_topic, no_twin):
     from std_msgs.msg import Bool
 
     log = tempfile.NamedTemporaryFile(prefix="twin_default_", suffix=".log", delete=False)
-    launched = time.time()
     proc = subprocess.Popen(
         [sys.executable, "-m", "so101_sim.node", "--config", str(DEFAULT_CONFIG),
          "--stack", "workshop", "--sim-cameras", "arm"],
         stdout=log, stderr=subprocess.STDOUT, env=os.environ.copy(),
     )
     try:
-        assert probe.joints(after=launched, timeout=60), Path(log.name).read_text()
-        assert probe.first_message("/cameras/arm/healthy", Bool, timeout=20), "no workshop CameraNode"
+        _first_state_or_exit(probe, proc)
+        assert proc.poll() is None, Path(log.name).read_text()
+        probe.first_message("/cameras/arm/healthy", Bool)
         assert "/sim/scene" not in probe.topics()
         assert "/sim/reset_scene" not in probe.services()
         arm = TwinArmClient(workshop_cfg)
@@ -149,35 +158,56 @@ def test_frames_are_stamped_after_the_arm_settles(twin):
         fan.close()
 
 
+def test_a_goal_sent_as_soon_as_the_session_is_ready_is_taken(twin):
+    """Joint states flow before the twin has discovered the client's command
+    publisher, and until then the server drops every command. The session is
+    ready only once the twin reports that publisher discovered."""
+    assert twin.scene.latest()["command_publishers"] >= 1
+    assert twin.arm.move_to({"shoulder_pan": 15.0}) == "arrived"
+
+
 _OTHER_DOMAIN = r"""
-import sys, time
+import sys, threading
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from sensor_msgs.msg import JointState
 rclpy.init()
 node = rclpy.create_node("other_domain_probe")
 pub = node.create_publisher(JointState, "/so101/joint_state", 1)
-print("UP", flush=True)
-seen = set()
-deadline = time.time() + float(sys.argv[1])
-while time.time() < deadline:
+
+
+def publish():
     msg = JointState()
     msg.name = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
     msg.position = [0.0] * 6
     pub.publish(msg)
-    rclpy.spin_once(node, timeout_sec=0.05)
-    seen.update(name for name, _types in node.get_topic_names_and_types())
-print("SEEN", " ".join(sorted(seen)), flush=True)
+
+
+def report():
+    sys.stdin.read()  # the test closes stdin once the twin is up
+    print("SEEN", " ".join(sorted(name for name, _types in node.get_topic_names_and_types())), flush=True)
+    rclpy.shutdown()
+
+
+node.create_timer(0.05, publish)
+threading.Thread(target=report, daemon=True).start()
+print("UP", flush=True)
+try:
+    rclpy.spin(node)
+except ExternalShutdownException:
+    pass
 """
 
 
 def test_the_twin_domain_is_private(workshop_cfg, no_twin):
-    """A joint-state publisher on another domain is invisible to the twin, and the twin to it."""
+    """A joint-state publisher on another domain is invisible to the twin, and the
+    twin to it: once the twin and its clients are up, that domain lists none of its topics."""
     from common.twin_ros import TwinSession
 
     env = {**os.environ, "ROS_DOMAIN_ID": str(TEST_DOMAIN_ID + 1)}
     other = subprocess.Popen(
-        [sys.executable, "-c", _OTHER_DOMAIN, "20"], env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        [sys.executable, "-c", _OTHER_DOMAIN], env=env,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     try:
         for line in other.stdout:
@@ -189,10 +219,12 @@ def test_the_twin_domain_is_private(workshop_cfg, no_twin):
         try:
             joints = session.arm.get_joints()
             assert joints["shoulder_lift"] == pytest.approx(-96.5, abs=2.0), joints
-            assert session.scene.latest(after=time.time()) is not None
+            assert session.scene.latest(after=time.time(), timeout=None) is not None
+            other.stdin.close()
+            out = other.stdout.read()
+            other.wait()
         finally:
             session.close()
-        out, _ = other.communicate(timeout=40)
     finally:
         if other.poll() is None:
             other.kill()
@@ -205,7 +237,7 @@ def test_a_second_twin_on_the_domain_is_refused(workshop_cfg, twin):
 
     with pytest.raises(RuntimeError, match="already runs on ROS domain"):
         TwinSession(workshop_cfg)
-    assert twin.scene.latest(after=time.time()) is not None, "the first twin stopped"
+    assert twin.scene.latest(after=time.time(), timeout=None) is not None, "the first twin stopped"
     assert twin.armcam.read()[0]
 
 
@@ -218,7 +250,7 @@ def test_the_node_dies_with_its_kernel(no_twin):
     kc.start_channels()
     out: list[str] = []
     try:
-        kc.wait_for_ready(timeout=60)
+        kc.wait_for_ready(timeout=None)
         code = (
             f"import sys; sys.path.insert(0, {str(SOLUTION)!r})\n"
             "from common.config import load_config\n"
@@ -233,11 +265,11 @@ def test_the_node_dies_with_its_kernel(no_twin):
             elif msg["msg_type"] == "error":
                 out.append("\n".join(msg["content"]["traceback"]))
 
-        reply = kc.execute_interactive(code, timeout=120, output_hook=hook)
+        reply = kc.execute_interactive(code, timeout=None, output_hook=hook)
         assert reply["content"]["status"] == "ok", "".join(out)
         pid = int(next(t for t in "".join(out).split("\n") if t.startswith("TWIN_PID")).split()[1])
         os.kill(km.provisioner.process.pid, signal.SIGKILL)
-        assert wait_exit(pid, 5.0), "the twin node outlived its kernel"
+        assert wait_exit(pid), "the twin node outlived its kernel"
     finally:
         kc.stop_channels()
         try:
@@ -247,25 +279,27 @@ def test_the_node_dies_with_its_kernel(no_twin):
 
 
 def test_reset_service_restores_the_scene_and_parks_the_arm(workshop_cfg, probe, no_twin):
-    from common.motion import REST_POSE, settled
+    """The reset puts the arm at rest at once, so the server's next report shows it parked."""
+    from common.motion import ACK_TICKS, DEFAULT_CONTROL_HZ, REST_POSE, settled
     from common.twin_ros import TwinSession
     from so101_sim import MOTOR_NAMES
 
     moved = default_scene_snapshot(workshop_cfg)
     moved["bodies"]["sports_ball"][:3] = [0.22, -0.04, 0.015]
     home = xml_poses(workshop_cfg)
+    tick_s = 1.0 / float(workshop_cfg["robot"].get("control_fps", DEFAULT_CONTROL_HZ))
     session = TwinSession(workshop_cfg, scene=moved)
     try:
-        start = session.scene.latest()
+        start = session.scene.latest(timeout=None)
         assert start["bodies"]["sports_ball"]["xyz"][:2] == pytest.approx([0.22, -0.04], abs=0.01)
         session.arm.go_to({"shoulder_pan": 30.0, "shoulder_lift": -40.0, "elbow_flex": 40.0})
         pressed = time.time()
         assert session.reset_scene()
         parked = probe.motion.wait(
-            lambda s: s["cmd_time"] >= pressed and settled(s, MOTOR_NAMES), 5.0, "the parked goal finished",
+            lambda s: s["cmd_time"] >= pressed and settled(s, MOTOR_NAMES), ACK_TICKS * tick_s,
+            "the parked report",
         )
-        scene = session.scene.latest(after=parked["stamp"], settled=True)
-        assert scene is not None, "the props did not come to rest after the reset"
+        scene = session.scene.latest(after=parked["stamp"], settled=True, timeout=None)
         for name, qpos in home.items():
             got = scene["bodies"][name]
             assert got["xyz"] == pytest.approx(list(qpos[:3]), abs=0.01), name

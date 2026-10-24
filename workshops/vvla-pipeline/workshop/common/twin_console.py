@@ -11,7 +11,7 @@ The same layout as the pipeline's ``run_pipeline.sh --digital-twin`` window
 (1200 x 1100)::
 
     +-----------------+-----------------+-----------------+
-    | operator: YOLO pose| operator: MediaPipe| arm: YOLO detect|   400 x 300 each
+    | mount: YOLO pose| mount: MediaPipe| arm: YOLO detect|   400 x 300 each
     +-----------------+-----------------+-----------------+
     |                                   | voice / intent  |
     |        3D view of the twin        | behavior log    |   800 x 800 + 400 x 800
@@ -259,12 +259,12 @@ def open_webcam(cfg: dict):
     with quiet_stderr():
         hands = QuietHands(HandTracker(cfg))
         hands.process(np.zeros((64, 64, 3), np.uint8))
-    cam = make_camera(cfg, "operator")
+    cam = make_camera(cfg, "mount")
     if cam.read()[0]:
         return cam, pose, hands
     cam.close()
     hands.close()
-    device = cfg["cameras"]["operator"].get("device")
+    device = cfg["cameras"]["mount"].get("device")
     print(f"webcam: no frames from {device} (in use by another kernel?) - a scripted person stands in")
     return SyntheticCamera(), ScriptedPose(), ScriptedHands()
 
@@ -272,7 +272,7 @@ def open_webcam(cfg: dict):
 class TwinConsole:
     """Compose the twin console frame from the arm, cameras, models and voice.
 
-    After construction use :attr:`operator` / :attr:`armcam` (the fanned-out
+    After construction use :attr:`mount` / :attr:`armcam` (the fanned-out
     cameras) wherever a behavior reads frames, and feed the voice side
     through :meth:`on_level`, :meth:`heard`, :meth:`say`, :meth:`parsed`,
     :meth:`stopped` and :meth:`track`.
@@ -282,7 +282,7 @@ class TwinConsole:
         self,
         arm,
         *,
-        operator=None,
+        mount=None,
         pose=None,
         hands=None,
         armcam=None,
@@ -296,7 +296,7 @@ class TwinConsole:
         self.voice = voice  # "mic" | "typed"
         self.hint = hint
         self.load_threshold = float(load_threshold)
-        self.operator = FanoutCamera(operator) if operator is not None else None
+        self.mount = FanoutCamera(mount) if mount is not None else None
         self.armcam = FanoutCamera(armcam) if armcam is not None else None
         self._pose, self._hands, self._detector = pose, hands, detector
         self.pose = ModelTap(pose, "infer") if pose is not None else None
@@ -474,26 +474,26 @@ class TwinConsole:
 
     def _webcam_tiles(self, frame) -> list[np.ndarray]:
         pose, hands = self._pose_tile(frame).copy(), self._hands_tile(frame).copy()
-        _title(pose, f"operator: YOLO pose [{provider_name(self._pose, 'off')}]")
-        _title(hands, f"operator: MediaPipe hands [{'CPU' if self._hands else 'off'}]")
+        _title(pose, f"mount: YOLO pose [{provider_name(self._pose, 'off')}]")
+        _title(hands, f"mount: MediaPipe hands [{'CPU' if self._hands else 'off'}]")
         return [pose, hands]
 
     def webcam_tiles(self) -> np.ndarray:
         """The console's two webcam tiles, YOLO pose and MediaPipe hands, side by side."""
-        frame = self.operator.latest() if self.operator is not None else None
+        frame = self.mount.latest() if self.mount is not None else None
         return np.hstack(self._webcam_tiles(frame))
 
     def compose(self) -> np.ndarray:
         """One 1200 x 1100 BGR frame of the whole console."""
-        operator_frame = self.operator.latest() if self.operator is not None else None
+        mount_frame = self.mount.latest() if self.mount is not None else None
         armcam = self.armcam.latest() if self.armcam is not None else None
         detect = self._detect_tile(armcam).copy()
         _title(detect, f"arm: YOLO detect [{provider_name(self._detector, 'off')}]")
-        tiles = [*self._webcam_tiles(operator_frame), detect]
+        tiles = [*self._webcam_tiles(mount_frame), detect]
         return np.vstack([np.hstack(tiles), np.hstack([self._view_tile(), self._panel()])])
 
     def close(self) -> None:
         """Stop the camera fan-out threads (and close the cameras they wrap)."""
-        for cam in (self.operator, self.armcam):
+        for cam in (self.mount, self.armcam):
             if cam is not None:
                 cam.close()

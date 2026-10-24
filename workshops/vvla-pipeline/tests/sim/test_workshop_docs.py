@@ -58,7 +58,7 @@ def test_instructor_commands_run():
     assert commands, "the Instructor's corner lists no command besides the diff"
     for command in commands:
         done = subprocess.run(command, shell=True, cwd=WORKSHOP, env=_env(), capture_output=True,
-                              text=True, timeout=540, executable="/bin/bash")
+                              text=True, executable="/bin/bash")
         assert done.returncode == 0, (
             f"README command failed ({done.returncode}): {command}\n"
             f"--- stdout\n{done.stdout[-3000:]}\n--- stderr\n{done.stderr[-3000:]}"

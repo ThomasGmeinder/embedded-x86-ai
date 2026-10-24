@@ -19,10 +19,11 @@ The pipeline's remaining voice commands, in the workshop's handler shape
   (``so101_sim.kinematics``; the taught poses only with ``reach: fixed`` or
   the arm camera offline), grasp, lift it above the other objects, and hold
   it out. The jaws stay
-  closed until "release", "open", or "drop it".
+  closed until "release", "open", or "drop it". A real arm whose camera is
+  not calibrated refuses the IK reach and says how to calibrate it.
 - **fetch_block** - fetch the block from its taught pose, then hand it over.
 
-The handover finds you with YOLO-pose on the operator camera, aims the pan
+The handover finds you with YOLO-pose on the mount camera, aims the pan
 joint at you, extends, opens the jaws and parks. The same sequence the
 pipeline runs (``vla_pipeline/behaviors/``); the workshop is standalone, so
 it lives here rather than being imported. Settings: ``grip``, ``pick_place``
@@ -37,7 +38,7 @@ import time
 import cv2
 import numpy as np
 
-from so101_sim.kinematics import OPEN_GRIPPER
+from so101_sim.kinematics import OPEN_GRIPPER, camera_calibrated
 
 from common.imaging import KP
 from common.intents import Intent
@@ -296,7 +297,7 @@ def find_person_pan(ctx, seek_s: float = 4.0) -> tuple[float, bool]:
     """Track the person for ``seek_s`` and aim the pan joint at them."""
     pan, found = 0.0, False
     if ctx.pose is None or ctx.camera is None:
-        logger.info("[handoff] no operator camera - handing over straight ahead")
+        logger.info("[handoff] no mount camera - handing over straight ahead")
         return pan, found
     deadline = time.time() + seek_s
     while time.time() < deadline and not ctx.stop_check():
@@ -582,7 +583,7 @@ def _log_sighting(pp, cam, frame, det, resolved, joints) -> None:
         kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
         K, dist = kin.intrinsics((cam or {}).get("intrinsics"), width, height)
         loc = kin.locate_on_table(
-            det.box, joints, K, dist, (cam or {}).get("mount"),
+            det.box, joints, K, dist, (cam or {}).get("extrinsics"),
             float(pp.get("table_z", -0.005)), (width, height), shape=shape,
         )
         if loc is not None:
@@ -747,7 +748,7 @@ def _plan_from_view(ctx, view):
     table_z = float(pp.get("table_z", -0.005))
     shape = _shape_of(resolved)
     loc = kin.locate_on_table(
-        det.box, joints, K, dist, cam.get("mount"), table_z, (width, height), shape=shape,
+        det.box, joints, K, dist, cam.get("extrinsics"), table_z, (width, height), shape=shape,
     )
     if loc is None:
         logger.info("IK reach: no table fix for the %s box %s", resolved, det.box)
@@ -769,7 +770,7 @@ def _plan_from_view(ctx, view):
         if axis is not None:
             found = kin.table_axis(
                 axis["center"], axis["direction"], axis["length_px"], joints, K, dist,
-                cam.get("mount"), table_z,
+                cam.get("extrinsics"), table_z,
             )
             if found is not None:
                 centre, object_axis = found
@@ -894,16 +895,20 @@ def run_pick_place(ctx, cmd) -> bool:
         ctx.say("I can't see anything - both cameras are offline.")
         return False
     if camera is not ctx.arm_camera:
-        ctx.say("Arm camera is offline - using the operator camera (coarser aim).")
+        ctx.say("Arm camera is offline - using the mount camera (coarser aim).")
 
-    ctx.say(f"Looking for a {name}.")
     cams = ctx.cfg.get("cameras") or {}
-    cam = cams.get("arm") if camera is ctx.arm_camera else cams.get("operator")
+    cam = cams.get("arm") if camera is ctx.arm_camera else cams.get("mount")
     use_ik = (
         pp.get("reach", "fixed") == "ik"
         and ctx.arm_camera is not None
         and camera is ctx.arm_camera
     )
+    if use_ik and not _camera_model_known(ctx.cfg, cam):
+        logger.warning("[pick] robot.backend is not sim and cameras.arm has no intrinsics and extrinsics")
+        ctx.say("The arm camera isn't calibrated: run scripts/calibrate_arm_camera.py.")
+        return False
+    ctx.say(f"Looking for a {name}.")
     plan = None
     saw_ungraspable = False
 
@@ -1010,6 +1015,14 @@ def run_pick_place(ctx, cmd) -> bool:
     ctx.shared_state["grip_lock_pos"] = hold
     ctx.say("Done.")
     return True
+
+
+def _camera_model_known(cfg: dict, cam: dict | None) -> bool:
+    """The twin's camera model fits the twin only; a real arm locates with its own calibration."""
+    if (cfg.get("robot") or {}).get("backend", "real") == "sim":
+        return True
+    cam = cam or {}
+    return camera_calibrated(cam.get("intrinsics"), cam.get("extrinsics"))
 
 
 def _reach_fixed(ctx) -> None:

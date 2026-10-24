@@ -66,7 +66,7 @@ class PipelineContext:
     pose: object | None = None  # PoseEstimator (NPU)
     detector: object | None = None  # ObjectDetector (NPU)
     hands: object | None = None  # HandTracker (CPU)
-    operator_camera: object | None = None  # CameraClient
+    mount_camera: object | None = None  # CameraClient
     arm_camera: object | None = None  # CameraClient
     shared_state: dict = field(default_factory=dict)
     stop_event: threading.Event = field(default_factory=threading.Event)
@@ -92,8 +92,8 @@ def _h_gesture_mimic(ctx: PipelineContext, cmd: ParsedCommand) -> None:
     """Dispatch to :func:`run_gesture_mimic`."""
     from vla_pipeline.behaviors.gesture_mimic import run_gesture_mimic
 
-    if ctx.pose is None or ctx.operator_camera is None:
-        ctx.say("Gesture mimic needs the operator camera and pose model.")
+    if ctx.pose is None or ctx.mount_camera is None:
+        ctx.say("Gesture mimic needs the mount camera and pose model.")
         return
     if ctx.shared_state.pop("grip_lock", None):
         ctx.shared_state.pop("grip_lock_pos", None)
@@ -103,7 +103,7 @@ def _h_gesture_mimic(ctx: PipelineContext, cmd: ParsedCommand) -> None:
         ctx.arm,
         ctx.pose,
         ctx.hands,
-        ctx.operator_camera,
+        ctx.mount_camera,
         stop_check=ctx.stop_check,
         show_preview=not ctx.headless,
     )
@@ -118,7 +118,7 @@ def _h_fetch_block(ctx: PipelineContext, cmd: ParsedCommand) -> bool:
         ctx.cfg,
         ctx.arm,
         ctx.pose,
-        ctx.operator_camera,
+        ctx.mount_camera,
         stop_check=ctx.stop_check,
         feedback=ctx.say,
     )
@@ -138,7 +138,7 @@ def _h_pick_place(ctx: PipelineContext, cmd: ParsedCommand) -> bool:
         ctx.detector,
         ctx.pose,
         ctx.arm_camera,
-        ctx.operator_camera,
+        ctx.mount_camera,
         object_name=cmd.object_name or "",
         shared_state=ctx.shared_state,
         stop_check=ctx.stop_check,
@@ -295,11 +295,11 @@ def make_noise_gate(cfg: dict):
 
 
 def apply_sim_overrides(cfg: dict) -> dict:
-    """Switch ``cfg`` to the digital twin: sim arm + sim arm camera, real operator camera."""
+    """Switch ``cfg`` to the digital twin: sim arm + sim arm camera, real mount camera."""
     cfg.setdefault("robot", {})["backend"] = "sim"
     cams = cfg.setdefault("cameras", {})
     cams.setdefault("arm", {})["source"] = "sim"
-    cams.setdefault("operator", {}).setdefault("source", "device")
+    cams.setdefault("mount", {}).setdefault("source", "device")
     return cfg
 
 
@@ -317,9 +317,9 @@ def build_context(cfg: dict, args) -> PipelineContext:
     from vla_pipeline.vision.camera import make_camera
 
     try:
-        ctx.operator_camera = make_camera(cfg, "operator")
+        ctx.mount_camera = make_camera(cfg, "mount")
     except Exception as e:
-        logger.warning("Operator camera unavailable: %s", e)
+        logger.warning("Mount camera unavailable: %s", e)
     try:
         ctx.arm_camera = make_camera(cfg, "arm")
     except Exception as e:
@@ -473,7 +473,7 @@ def main() -> None:
         ctx.stop_event.set()
         logger.info("Shutting down - parking arm.")
         for closer in (
-            getattr(ctx.operator_camera, "close", None),
+            getattr(ctx.mount_camera, "close", None),
             getattr(ctx.arm_camera, "close", None),
             getattr(ctx.hands, "close", None),
         ):

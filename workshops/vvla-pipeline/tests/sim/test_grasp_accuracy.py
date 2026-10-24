@@ -148,6 +148,8 @@ def _accepted(twin, cfg, stack: str, body: str, resolved: str, quat=(1.0, 0.0, 0
     from so101_sim.detect import SegDetector
     from so101_sim.kinematics import joint_line, shared_kinematics
 
+    from rigs import wait_settled
+
     plan_from, pp_of, usable, shape_of, *_, floor = _stack(stack)
     world = twin.world
     pp = pp_of(cfg)
@@ -163,7 +165,7 @@ def _accepted(twin, cfg, stack: str, body: str, resolved: str, quat=(1.0, 0.0, 0
                 if other != body:
                     world.hide(other)
             world.place(body, truth, quat)
-            time.sleep(0.2)
+            wait_settled(world)
             ok, frame = cam.read(fresh=True)
             if not ok or frame is None:
                 continue
@@ -331,7 +333,7 @@ def test_close_holds_the_object(twins, pipeline_cfg, workshop_cfg, stack, body, 
     the pre-grasp without it moving in the gripper, the grip eases to the
     hold limit before the overload protection trips, and ``holding()`` tells
     a held object from empty jaws."""
-    from rigs import LIFT_SLIP_TOL_M, Trace
+    from rigs import LIFT_SLIP_TOL_M, Trace, hold_seconds, step_through, wait_joint_rest, wait_settled
 
     cfg = pipeline_cfg if stack == "pipeline" else workshop_cfg
     twin = twins(stack, cfg)
@@ -340,7 +342,7 @@ def test_close_holds_the_object(twins, pipeline_cfg, workshop_cfg, stack, body, 
     try:
         arm, gripped, hold, plan, truth = _squeeze(twin, cfg, stack, body, resolved)
         assert gripped, f"{stack} reported no contact on the {body}"
-        time.sleep(0.3)
+        wait_settled(world)
         assert world.is_grasped(body), f"{stack} {body} is not held by both jaws"
         moved = float(np.linalg.norm(world.body_pos(body)[:2] - truth[:2]))
         assert moved < 0.02, f"{stack} {body} was shoved {moved * 1000:.0f} mm across the table"
@@ -357,8 +359,7 @@ def test_close_holds_the_object(twins, pipeline_cfg, workshop_cfg, stack, body, 
         t0 = time.monotonic()
         arm.go_to({**plan.poses[0], "gripper": hold})
         ease_grip(arm, grip_of(cfg))
-        time.sleep(2.0)
-        trace.stop()
+        step_through(world, trace, hold_seconds(world), time.monotonic())
         assert trace.first_overload() is None, f"{stack}: the gripper overload protection tripped"
         rise = float(world.body_pos(body)[2]) - z0
         assert rise > 0.03, f"{stack} {body} rose only {rise * 1000:.0f} mm"
@@ -369,7 +370,7 @@ def test_close_holds_the_object(twins, pipeline_cfg, workshop_cfg, stack, body, 
         )
         assert holding(arm, grip_of(cfg), hold), f"{stack}: holding() lost the lifted {body}"
         world.hide(body)
-        time.sleep(0.5)
+        wait_joint_rest(world, "gripper")
         assert not holding(arm, grip_of(cfg), hold), f"{stack}: holding() with empty jaws"
     finally:
         world.reset()

@@ -221,8 +221,10 @@ class TwinCamera:
 
 
 class TwinScene:
-    """The latest ``/sim/scene``: each prop's ``xyz``, ``quat`` and ``grasped``, and
-    ``settled`` (every prop at rest)."""
+    """The latest ``/sim/scene``: each prop's ``xyz``, ``quat`` and ``grasped``,
+    ``settled`` (every prop at rest), ``gripper`` (``torque_limit``,
+    ``overload_torque``, ``tripped``), and ``command_publishers`` (the arm
+    command publishers the twin has discovered)."""
 
     def __init__(self, topic: str = SCENE_TOPIC):
         from std_msgs.msg import String
@@ -238,20 +240,27 @@ class TwinScene:
             self._latest = data
             self._cond.notify_all()
 
-    def latest(self, after: float | None = None, timeout: float = 2.0, settled: bool = False) -> dict | None:
-        """The newest scene, or the first one stamped after ``after`` (and, with
-        ``settled``, with every prop at rest); None when ``timeout`` passes first."""
-        deadline = time.time() + timeout
+    def latest(
+        self, after: float | None = None, timeout: float | None = 2.0, settled: bool = False,
+        commanded: bool = False,
+    ) -> dict | None:
+        """The newest scene, or the first one stamped after ``after`` (with
+        ``settled``, with every prop at rest; with ``commanded``, once the twin
+        has discovered an arm command publisher); None when ``timeout`` passes
+        first (``None``: no limit)."""
+
+        def ready() -> bool:
+            s = self._latest
+            return (
+                s is not None
+                and (after is None or s["stamp"] > after)
+                and (not settled or s["settled"])
+                and (not commanded or bool(s["command_publishers"]))
+            )
+
         with self._cond:
-            while (
-                self._latest is None
-                or (after is not None and self._latest["stamp"] <= after)
-                or (settled and not self._latest["settled"])
-            ):
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    return None
-                self._cond.wait(timeout=remaining)
+            if not self._cond.wait_for(ready, timeout):
+                return None
             return self._latest
 
     def reading(self, body: str, after: float | None = None, timeout: float = 2.0) -> dict | None:
@@ -359,7 +368,8 @@ class TwinSession:
         return RuntimeError(f"the twin node exited with code {self._proc.returncode}:\n{_tail(self.log_path)}")
 
     def _wait_ready(self, timeout_s: float, cfg: dict) -> None:
-        """The node's first joint state, then the first arm frame and scene, within ``timeout_s``."""
+        """The node's first joint state, then the first arm frame, then a scene in
+        which the twin has discovered the arm client's command publisher, within ``timeout_s``."""
         from sensor_msgs.msg import JointState
 
         deadline = time.time() + timeout_s
@@ -387,8 +397,10 @@ class TwinSession:
         self.scene = TwinScene()
         if not self.armcam.next_frame(0.0, remaining())[0]:
             raise not_ready("arm camera frame")
-        if self.scene.latest(timeout=remaining()) is None:
-            raise not_ready(SCENE_TOPIC)
+        # The client sees the server's subscription before the server sees the
+        # client's publisher, and until then the server drops every command.
+        if self.scene.latest(timeout=remaining(), commanded=True) is None:
+            raise not_ready(f"{SCENE_TOPIC} with the arm client's command publisher discovered")
         logger.info(
             "twin up on ROS domain %d (pid %d, log %s)", self.domain_id, self.pid, self.log_path
         )

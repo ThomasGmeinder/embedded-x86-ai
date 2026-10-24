@@ -78,7 +78,7 @@ llm:                                # brain (intent) - iGPU via llama.cpp + ROCm
 # --- Component 2: ROS 2 nodes & topics ---------------------------------------
 
 cameras:
-  operator:                            # externally mounted, faces the human
+  mount:                            # externally mounted, faces the human
     device: /dev/video0
     width: 640
     height: 480
@@ -86,7 +86,7 @@ cameras:
     rotate: 0
     source: device                  # device (V4L2) | sim (digital-twin render)
     use_ros2: true
-    topic: /cameras/operator/image_raw
+    topic: /cameras/mount/image_raw
     stale_after_s: 1.0
   arm:                              # mounted on the end effector
     device: /dev/v4l/by-id/usb-icSpring_icspring_camera-video-index0
@@ -99,8 +99,9 @@ cameras:
     topic: /cameras/arm/image_raw
     stale_after_s: 1.0
     # for locating objects (pick_place reach: ik); print with scripts/calibrate_arm_camera.py
-    intrinsics: null                # {fx, fy, cx, cy, dist, width, height}; null = twin camera model
-    mount: null                     # {pos: [x, y, z] m, rpy: [r, p, y] deg} on the gripper; null = twin
+    # null: the twin uses its own camera model; a real arm refuses to pick until both are set
+    intrinsics: null                # {fx, fy, cx, cy, dist, width, height}
+    extrinsics: null                # {pos: [x, y, z] m, rpy: [r, p, y] deg} on the gripper
 
 robot:
   backend: real                     # real (Feetech bus) | sim (MuJoCo digital twin)
@@ -122,7 +123,7 @@ sim:                                # MuJoCo digital twin (app.py --digital-twin
   gripper_map: {open_cal: 95.0, closed_rad: -0.15, open_rad: 1.6}
   cameras:
     arm:  {camera: wrist_cam, width: 640, height: 480, fps: 30}
-    operator: {camera: operator_cam, width: 640, height: 480, fps: 30}
+    mount: {camera: mount_cam, width: 640, height: 480, fps: 30}
     view: {camera: free, width: 800, height: 800, fps: 30, lookat: [0.17, 0.0, 0.18], distance: 0.9}
 
 intent_node:                        # the Llama intent node (component 2)

@@ -9,7 +9,7 @@
 
 Roles
 -----
-- ``operator`` - faces the person. Feeds gesture-mimic pose
+- ``mount`` - externally mounted, faces the human. Feeds gesture-mimic pose
   tracking and person finding.
 - ``arm``   - mounted on the SO-101 end effector. Feeds object detection in
   the jaws/workspace and pick-and-place visual servoing.
@@ -25,7 +25,7 @@ client retries the device in the background.
 
 Independent test
 ----------------
-    python -m vla_pipeline.vision.camera --role operator          # direct preview
+    python -m vla_pipeline.vision.camera --role mount          # direct preview
     python -m vla_pipeline.vision.camera --role arm --ros2     # via topic
 """
 
@@ -302,7 +302,7 @@ def main() -> None:
     )
     parser = argparse.ArgumentParser(description="Camera client - component test")
     parser.add_argument("--config", default=None)
-    parser.add_argument("--role", choices=["operator", "arm"], default="operator")
+    parser.add_argument("--role", choices=["mount", "arm"], default="mount")
     parser.add_argument(
         "--ros2",
         action="store_true",

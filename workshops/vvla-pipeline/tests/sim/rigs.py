@@ -18,7 +18,6 @@ from __future__ import annotations
 import copy
 import logging
 import threading
-import time
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -26,7 +25,7 @@ import numpy as np
 from scripted import (
     Clock,
     CountingDetector,
-    ScriptedOperatorCamera,
+    ScriptedMountCamera,
     ScriptedTranscripts,
     SignalBoard,
     SimDetector,
@@ -39,7 +38,6 @@ logger = logging.getLogger(__name__)
 MOTORS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
 _GRIPPER = MOTORS.index("gripper")
 
-HOLD_WATCH_S = 5.0  # how long a picked object is watched after the robot says "Got the ..."
 SLIP_TOL_M = 0.002  # how far it may move in the gripper frame once it is off the table
 LIFT_SLIP_TOL_M = 0.004  # how far while the fingers take its weight (the pads give a little)
 CARRY_TOL_M = 0.01  # object rise vs hand rise; the wrist tilts a little on the way up
@@ -61,7 +59,7 @@ class Sample:
 
 
 class Trace:
-    """Samples the twin at ``hz`` on a thread (scenario clock)."""
+    """Samples the twin every ``1/hz`` of sim time, woken by its physics passes (scenario clock)."""
 
     def __init__(self, world, clock: Clock, hz: float = 50.0, watch=()):
         self.world, self.clock, self.hz = world, clock, hz
@@ -78,25 +76,38 @@ class Trace:
         self._thread.start()
 
     def stop(self) -> None:
+        """End the sampler; it wakes on the next physics pass, or at once when the physics stops."""
         self._run = False
         if self._thread is not None:
-            self._thread.join(2.0)
+            self._thread.join()
+            self._thread = None
+
+    def sample(self, t: float | None = None) -> None:
+        """One sample now, stamped ``t`` (default: the scenario clock)."""
+        w = self.world
+        snap = w.snapshot()
+        cur = snap["current_a"]["gripper"] * 1000.0 / w.current.ma_per_unit
+        grasped = {b: w.is_grasped(b) for b in self.watch}
+        heights = {b: float(w.body_pos(b)[2]) for b in self.watch}
+        in_hand = {b: w.in_gripper(b) for b in self.watch}
+        hand_z = float(w.body_pos("gripper")[2])
+        overload = bool(w.protection.tripped[_GRIPPER])
+        self.samples.append(
+            Sample(self.clock() if t is None else t, snap["joints"], snap["goal"], cur, grasped, heights,
+                   in_hand, hand_z, overload)
+        )
 
     def _loop(self) -> None:
         w = self.world
+        seen, due = w.passes, float(w.data.time)
         while self._run:
-            snap = w.snapshot()
-            cur = snap["current_a"]["gripper"] * 1000.0 / w.current.ma_per_unit
-            grasped = {b: w.is_grasped(b) for b in self.watch}
-            heights = {b: float(w.body_pos(b)[2]) for b in self.watch}
-            in_hand = {b: w.in_gripper(b) for b in self.watch}
-            hand_z = float(w.body_pos("gripper")[2])
-            overload = bool(w.protection.tripped[_GRIPPER])
-            self.samples.append(
-                Sample(self.clock(), snap["joints"], snap["goal"], cur, grasped, heights, in_hand, hand_z,
-                       overload)
-            )
-            time.sleep(1.0 / self.hz)
+            try:
+                seen = w.next_step(seen)
+            except RuntimeError:  # the physics thread stopped
+                return
+            if float(w.data.time) >= due:
+                due = float(w.data.time) + 1.0 / self.hz
+                self.sample()
 
     # -- queries ------------------------------------------------------------
     def window(self, t0: float = 0.0, t1: float = float("inf")) -> list[Sample]:
@@ -196,7 +207,47 @@ def raise_crashes(crashes: list[str]) -> None:
         raise AssertionError("a behavior crashed: " + "; ".join(crashes))
 
 
-def hold_problem(rig, body: str, z0: float, watch_s: float = HOLD_WATCH_S,
+def wait_settled(world) -> None:
+    """Block until every prop is at rest (``SimWorld.props_settled``), judged after a physics pass."""
+    seen = world.next_step(world.passes)
+    while not world.props_settled():
+        seen = world.next_step(seen)
+
+
+def wait_joint_rest(world, joint: str) -> None:
+    """Block until ``joint`` turns slower than the twin's ``SETTLED_RAD_S``, judged after a physics pass."""
+    from so101_sim.world import SETTLED_RAD_S
+
+    i = MOTORS.index(joint)
+    seen = world.next_step(world.passes)
+    while abs(float(world.joint_vel()[i])) >= SETTLED_RAD_S:
+        seen = world.next_step(seen)
+
+
+def hold_seconds(world) -> float:
+    """The gripper's ``Protection_Time`` and one physics step: a squeeze at or
+    above its ``Overload_Torque`` trips within it."""
+    return float(world.protection.time_s[_GRIPPER]) + world.dt
+
+
+def step_through(world, trace: "Trace", seconds: float, t0: float) -> None:
+    """Step ``seconds`` of physics at once, sampling ``trace`` every ``1/trace.hz``.
+
+    The physics thread is stopped for it, so nothing paces the steps to the
+    wall clock; samples are stamped ``t0`` plus the sim time stepped.
+    """
+    trace.stop()
+    world.stop()
+    try:
+        sim0 = float(world.data.time)
+        while float(world.data.time) - sim0 < seconds:
+            world.advance(1.0 / trace.hz)
+            trace.sample(t0 + float(world.data.time) - sim0)
+    finally:
+        world.start()
+
+
+def hold_problem(rig, body: str, z0: float, watch_s: float | None = None,
                  slip_m: float = SLIP_TOL_M, lift_slip_m: float = LIFT_SLIP_TOL_M,
                  until: float | None = None) -> str | None:
     """Why ``body`` was not held still from the lift to the end of the run
@@ -206,16 +257,18 @@ def hold_problem(rig, body: str, z0: float, watch_s: float = HOLD_WATCH_S,
     frame, within ``lift_slip_m`` of where it sat when the hand started to
     rise until just after it left the table, and within ``slip_m`` of that
     spot from then on; a gripper goal that never moves while it is carried;
-    and no overload trip. The run must go on ``watch_s`` past "Got the ...".
+    and no overload trip. The trace must go on ``watch_s`` past "Got the ..."
+    (default :attr:`_Rig.hold_s`, which :meth:`_Rig.watch_hold` steps).
     """
     tr = rig.trace
+    watch_s = rig.hold_s if watch_s is None else watch_s
     lift = tr.lift_off(body, z0)
     if lift is None:
         return f"{body} never left the table"
     end = tr.samples[-1].t if until is None else until
     got = [t for t, e, d in rig.events if e == "say" and "got the" in str(d.get("text", "")).lower()]
-    if got and end - got[-1] < watch_s - 0.1:
-        return f"the run ended {end - got[-1]:.1f} s after 'Got the ...', not {watch_s:.0f} s"
+    if got and end - got[-1] < watch_s:
+        return f"the trace ended {end - got[-1]:.2f} s after 'Got the ...', not {watch_s:.2f} s"
     grip = tr.grasp_start(body, lift)
     if grip is None:
         return f"{body} was not between both fingers when it left the table"
@@ -314,7 +367,8 @@ class _Rig:
         self.said: list[str] = []
         self.pose = TimelinePose(self.clock)
         self.hands = TimelineHands(self.clock, self._hand_obs_cls())
-        self.operator = ScriptedOperatorCamera(self.pose, self.hands, self.board)
+        self.mount = ScriptedMountCamera(self.world, self.pose, self.hands, self.board)
+        self._done = threading.Event()  # set by finish(): the rig's waiters stop
         self.world.reset()
         for obj in self.world.objects:
             self.world.hide(obj)
@@ -325,7 +379,7 @@ class _Rig:
 
             self.recorder = SimRecorder(
                 self.world, recorder_path, renderer=self.renderer,
-                user_source=self.operator.signals_pane, user_label="scripted user signals",
+                user_source=self.mount.signals_pane, user_label="scripted user signals",
                 title=title, load_threshold=self._load_threshold(),
             ).start()
         self._closers: list = []
@@ -408,13 +462,18 @@ class _Rig:
         }
         return {obj: round(d, 3) for obj, d in moved.items() if d > tol}
 
-    def wait_until(self, pred, timeout: float, poll: float = 0.02) -> bool:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if pred():
-                return True
-            time.sleep(poll)
-        return False
+    def _wait_for(self, pred) -> bool:
+        """True once ``pred()`` holds after a physics pass; False when the rig finishes or the physics stops."""
+        w = self.world
+        seen = w.passes
+        while not pred():
+            if self._done.is_set():
+                return False
+            try:
+                seen = w.next_step(seen)
+            except RuntimeError:
+                return False
+        return True
 
     def joints(self) -> dict:
         return self.world.joint_cal()
@@ -424,32 +483,41 @@ class _Rig:
         keys = joints or [k for k in pose if k != "gripper"]
         return all(abs(cur[k] - pose[k]) <= tol for k in keys)
 
-    def when_near(self, pose: dict, action, tol: float = 3.0, delay: float = 0.0, timeout: float = 20.0):
-        """Run ``action()`` on a thread once the arm reaches ``pose`` (+ ``delay``)."""
+    def arrived(self, pose: dict, tol: float = 3.0) -> bool:
+        """The arm is within ``tol`` of ``pose`` and its servos report the move finished."""
+        with self.world.lock:
+            moving = bool(self.world.servo.moving().any())
+        return not moving and self.near(pose, tol)
+
+    def when_near(self, pose: dict, action, tol: float = 3.0):
+        """Run ``action()`` on a thread once the arm has arrived at ``pose``."""
+        return self.when(lambda: self.arrived(pose, tol), action)
+
+    def when(self, pred, action):
+        """Run ``action()`` on a thread once ``pred()`` holds after a physics pass."""
 
         def run():
-            if self.wait_until(lambda: self.near(pose, tol), timeout):
-                time.sleep(delay)
+            if self._wait_for(pred):
                 action()
 
         th = threading.Thread(target=run, daemon=True)
         th.start()
         return th
 
-    def when(self, pred, action, timeout: float = 60.0):
-        """Run ``action()`` on a thread once ``pred()`` holds."""
-
-        def run():
-            if self.wait_until(pred, timeout):
-                action()
-
-        th = threading.Thread(target=run, daemon=True)
-        th.start()
-        return th
-
-    def when_lifted(self, obj: str, z0: float, action, dz: float = 0.03, timeout: float = 60.0):
+    def when_lifted(self, obj: str, z0: float, action, dz: float = 0.03):
         """Run ``action()`` on a thread once ``obj`` is ``dz`` above ``z0``."""
-        return self.when(lambda: self.world.body_pos(obj)[2] > z0 + dz, action, timeout)
+        return self.when(lambda: self.world.body_pos(obj)[2] > z0 + dz, action)
+
+    @property
+    def hold_s(self) -> float:
+        """How long a grip is watched once the behavior has ended (:func:`hold_seconds`)."""
+        return hold_seconds(self.world)
+
+    def watch_hold(self):
+        """Step the twin through :attr:`hold_s` with nothing commanding it, sampling the trace
+        (:func:`step_through`; the samples continue the scenario clock)."""
+        step_through(self.world, self.trace, self.hold_s, self.clock())
+        return self
 
     def slicken(self, obj: str, mu: float = 0.01) -> None:
         """Make ``obj`` slide out of any grip; :meth:`finish` restores it.
@@ -477,6 +545,7 @@ class _Rig:
 
     # -- lifecycle --------------------------------------------------------------
     def finish(self, status: str, message: str = "", keep: bool = True):
+        self._done.set()
         self.trace.stop()
         path = None
         if self.recorder is not None:
@@ -529,14 +598,17 @@ class PipelineRig(_Rig):
         self._closers.append(self.parser.close)
         self.ctx = PipelineContext(
             cfg=self.cfg, arm=self.arm, pose=self.pose, detector=self.detector, hands=self.hands,
-            operator_camera=self.operator, arm_camera=self.arm_camera, headless=True,
+            mount_camera=self.mount, arm_camera=self.arm_camera, headless=True,
         )
         self.ctx.say = self.say
         self.dispatcher = None
 
-    def run(self, script, timeout: float = 30.0, settle: float = 0.6, startup_grace_s: float = 0.0,
-            until=None) -> "PipelineRig":
-        """Play ``script`` through the real Dispatcher; return once idle (or ``until()``)."""
+    def run(self, script, startup_grace_s: float = 0.0) -> "PipelineRig":
+        """Play ``script`` through the real Dispatcher; return once it reports every command run.
+
+        Each move inside a behavior is bounded by its own servo profile
+        (``MotionTimeout``); a hang is left to the suite's hang guard.
+        """
         from vla_pipeline.dispatch import Dispatcher
         from vla_pipeline.main import is_stop, make_noise_gate, registry
 
@@ -551,30 +623,16 @@ class PipelineRig(_Rig):
         shutdown = threading.Event()
         loop = threading.Thread(target=d.run, args=(shutdown,), name="dispatch", daemon=True)
         loop.start()
-        tx = ScriptedTranscripts(self.clock, script, d.on_transcript).start()
+        tx = ScriptedTranscripts(self.world, self.clock, script, d.on_transcript).start()
         self.transcripts = tx
-
-        idle_since = None
-        deadline = time.monotonic() + timeout
         try:
-            while True:
-                if time.monotonic() > deadline:
-                    raise TimeoutError(f"scenario did not finish within {timeout}s")
-                if until is not None and until():
-                    break
-                idle = tx.done.is_set() and d.transcripts.empty() and not d.busy.is_set()
-                if idle:
-                    idle_since = idle_since or time.monotonic()
-                    if time.monotonic() - idle_since >= settle:
-                        break
-                else:
-                    idle_since = None
-                time.sleep(0.02)
+            tx.done.wait()  # every line delivered: queued ones are counted pending before this is set
+            d.wait_idle(None)
         finally:
             self.ctx.stop_event.set()
             shutdown.set()
             d.stop()
-            loop.join(15.0)
+            loop.join()
             self.ctx.stop_event.clear()
         self._raise_crashes()
         return self
@@ -609,7 +667,7 @@ class WorkshopRig(_Rig):
         self.parser = LlamaIntentParser(self.cfg, autostart=False)
         self._closers.append(self.parser.close)
         self.ctx = WorkshopContext(
-            cfg=self.cfg, arm=self.arm, pose=self.pose, hands=self.hands, camera=self.operator,
+            cfg=self.cfg, arm=self.arm, pose=self.pose, hands=self.hands, camera=self.mount,
             mapper=mapper_from_config(self.cfg), registry=build_registry(), headless=True,
             detector=self.detector, arm_camera=self.seg_camera,
         )
@@ -637,23 +695,17 @@ class WorkshopRig(_Rig):
             self.on_event("stop", text=text)
         self.on_event("handled", text=text, intent=cmd.intent.value)
 
-    def run(self, script, timeout: float = 30.0, settle: float = 0.3) -> "WorkshopRig":
+    def run(self, script) -> "WorkshopRig":
+        """Play ``script`` through ``handle_transcript``; return once every behavior it started returned."""
         self.clock.start()
         self.trace.start()
-        tx = ScriptedTranscripts(self.clock, script, self._deliver, concurrent=True).start()
+        tx = ScriptedTranscripts(self.world, self.clock, script, self._deliver, concurrent=True).start()
         self.transcripts = tx
-        deadline = time.monotonic() + timeout
         try:
-            while True:
-                if time.monotonic() > deadline:
-                    raise TimeoutError(f"scenario did not finish within {timeout}s")
-                if tx.done.is_set() and not any(w.is_alive() for w in tx.workers):
-                    break
-                time.sleep(0.02)
-            time.sleep(settle)
+            tx.join()
         finally:
             self.ctx.stop_event.set()
-            tx.join(10.0)
+            tx.join()
             self.ctx.stop_event.clear()
         self._raise_crashes()
         return self

@@ -3,7 +3,7 @@
 Layout (1200 x 1100)::
 
     +-----------------+-----------------+-----------------+
-    | operator: YOLO pose| operator: MediaPipe| arm: YOLO detect|   400 x 300 each
+    | mount: YOLO pose| mount: MediaPipe| arm: YOLO detect|   400 x 300 each
     +-----------------+-----------------+-----------------+
     |                                   | voice / intent  |
     |        3D view of the twin        | behavior log    |   800 x 800 + 400 x 800
@@ -104,8 +104,8 @@ class TwinConsole:
             ((cfg.get("behaviors") or {}).get("grip") or {}).get("load_threshold", 120.0)
         )
 
-        if ctx.operator_camera is not None:
-            ctx.operator_camera = FanoutCamera(ctx.operator_camera)
+        if ctx.mount_camera is not None:
+            ctx.mount_camera = FanoutCamera(ctx.mount_camera)
         if ctx.arm_camera is not None:
             ctx.arm_camera = FanoutCamera(ctx.arm_camera)
         self.pose = ModelTap(ctx.pose, "infer") if ctx.pose is not None else None
@@ -327,15 +327,15 @@ class TwinConsole:
                 cv2.putText(p, "   ".join(parts[i : i + 3]), (12, y + 36 + 18 * (i // 3)), FONT, 0.42, GRAY, 1, cv2.LINE_AA)
 
     def compose(self) -> np.ndarray:
-        operator_frame = self.ctx.operator_camera.latest() if self.ctx.operator_camera is not None else None
+        mount_frame = self.ctx.mount_camera.latest() if self.ctx.mount_camera is not None else None
         armcam = self.ctx.arm_camera.latest() if self.ctx.arm_camera is not None else None
         tiles = [
-            self._pose_tile(operator_frame).copy(),
-            self._hands_tile(operator_frame).copy(),
+            self._pose_tile(mount_frame).copy(),
+            self._hands_tile(mount_frame).copy(),
             self._detect_tile(armcam).copy(),
         ]
-        _title(tiles[0], f"operator: YOLO pose [{provider_name(self.pose.obj) if self.pose else 'off'}]")
-        _title(tiles[1], f"operator: MediaPipe hands [{provider_name(self.hands.obj) if self.hands else 'off'}]")
+        _title(tiles[0], f"mount: YOLO pose [{provider_name(self.pose.obj) if self.pose else 'off'}]")
+        _title(tiles[1], f"mount: MediaPipe hands [{provider_name(self.hands.obj) if self.hands else 'off'}]")
         _title(tiles[2], f"arm: YOLO detect [{provider_name(self.detector.obj) if self.detector else 'off'}]")
         top = np.hstack(tiles)
         bottom = np.hstack([self._view_tile(), self._panel()])

@@ -31,7 +31,9 @@ default launch:
   standing-grasp wrist reaches the twin;
 * the arm camera stamped with the time its scene was captured, not the time
   it was published;
-* ``/sim/scene`` (``std_msgs/String`` JSON: each prop's xyz, quat, grasped);
+* ``/sim/scene`` (``std_msgs/String`` JSON: each prop's xyz, quat, grasped,
+  the gripper's torque limit and overload state, and how many command
+  publishers this process has discovered);
 * ``/sim/reset_scene`` (``std_srvs/Trigger``): ``restore_twin`` in this process.
 """
 
@@ -186,20 +188,27 @@ class StampedCameraPublisher:
 
 
 class ScenePublisher:
-    """``/sim/scene``: where each prop is, whether both fingers hold it, and
-    ``settled``: every prop at rest (``SimWorld.props_settled``)."""
+    """``/sim/scene``: where each prop is, whether both fingers hold it,
+    ``settled``: every prop at rest (``SimWorld.props_settled``),
+    ``gripper``: its ``Torque_Limit``, ``Overload_Torque`` and whether its
+    overload protection tripped, and ``command_publishers``: the publishers
+    on ``command_topic`` this process has discovered. The server drops a
+    command until it has discovered the publisher that sent it."""
 
-    def __init__(self, world, topic: str = SCENE_TOPIC, hz: float = 20.0):
+    def __init__(self, world, command_topic: str, topic: str = SCENE_TOPIC, hz: float = 20.0):
         from rclpy.node import Node
         from std_msgs.msg import String
 
         self._String = String
         self._world = world
+        self._command_topic = command_topic
         self.node = Node("so101_sim_scene")
         self._pub = self.node.create_publisher(String, topic, _sensor_qos())
         self.node.create_timer(1.0 / hz, self._tick)
 
     def snapshot(self) -> dict:
+        from so101_sim import MOTOR_NAMES
+
         world = self._world
         with world.lock:
             stamp = time.time()
@@ -212,7 +221,15 @@ class ScenePublisher:
                 for name in world.objects
             }
             settled = world.props_settled()
-        return {"stamp": stamp, "bodies": bodies, "settled": settled}
+            gripper = {
+                "torque_limit": int(world.bus.read("Torque_Limit", "gripper", normalize=False)),
+                "overload_torque": int(world.bus.read("Overload_Torque", "gripper", normalize=False)),
+                "tripped": bool(world.protection.tripped[MOTOR_NAMES.index("gripper")]),
+            }
+        return {
+            "stamp": stamp, "bodies": bodies, "settled": settled, "gripper": gripper,
+            "command_publishers": self.node.count_publishers(self._command_topic),
+        }
 
     def _tick(self) -> None:
         self._pub.publish(self._String(data=json.dumps(self.snapshot())))
@@ -318,7 +335,7 @@ def build_nodes(
     if notebook_twin:
         _use_grasp_envelope()
     for role, spec in (cfg.get("cameras") or {}).items():
-        if role not in ("arm", "operator") or not isinstance(spec, dict):
+        if role not in ("arm", "mount") or not isinstance(spec, dict):
             continue
         source = spec.get("source", "sim" if role == "arm" else "device")
         if source == "sim" and notebook_twin and role == "arm":
@@ -339,7 +356,7 @@ def build_nodes(
         nodes.append(vp.node)
         closers.append(vp.destroy)
     if notebook_twin:
-        scene = ScenePublisher(world)
+        scene = ScenePublisher(world, cfg["robot"]["command_topic"])
         control = TwinControl(server, arm)
         nodes.extend((scene.node, control.node))
         closers.extend((scene.destroy, control.destroy))

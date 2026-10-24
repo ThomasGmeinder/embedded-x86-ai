@@ -82,7 +82,7 @@ except ImportError:  # pragma: no cover
 EFFORT_SAMPLE_EVERY_N_TICKS = 3
 
 # Transient bus errors ("There is no status packet!") are retried at the
-# transport layer (LeRobotArm._bus_retry in common.motion). The control loop's
+# transport layer (DirectArm._bus_retry in arm_interface). The control loop's
 # job is just to survive a transaction that fails anyway: a genuinely dead link
 # (power/wiring) fails every tick, so cap the log rate - warn on the first
 # failure, then once every Nth after that - instead of flooding the console.
@@ -153,7 +153,7 @@ class So101ServerNode(Node):
             self._arm = SimArmClient(cfg)
             self.get_logger().info("Bus: MuJoCo digital twin (robot.backend=sim)")
         else:
-            from vla_pipeline.robot.arm_interface import LeRobotArm, calibration_exists
+            from vla_pipeline.robot.arm_interface import DirectArm, calibration_exists
 
             # Calibration is interactive; the server usually runs backgrounded
             # (no TTY), so detect a missing file up front and fail with an
@@ -166,7 +166,9 @@ class So101ServerNode(Node):
                     "    python -m vla_pipeline.robot.arm_interface --calibrate\n"
                     "(run_pipeline.sh now does this automatically before launch)."
                 )
-            self._arm = LeRobotArm(r["motor_port"], r["robot_id"], r.get("max_relative_target", 8.0))
+            self._arm = DirectArm(
+                r["motor_port"], r["robot_id"], r.get("max_relative_target", 8.0)
+            )
             self.get_logger().info(f"SO101Follower connected on {r['motor_port']}")
         # The client already clamped this move. The bus backstop is the grasp
         # envelope (wrist_flex to 90°). The desk cap (67.5°) is what the
@@ -246,7 +248,7 @@ class So101ServerNode(Node):
 
         Both bus transactions - the command *write* and the state *read* - run
         inside one guard. Transient serial errors are retried in the transport
-        (LeRobotArm._bus_retry); if a transaction still fails here, the tick is
+        (DirectArm._bus_retry); if a transaction still fails here, the tick is
         logged and skipped rather than letting the exception escape, kill this
         daemon thread, and leave the arm uncommanded for the rest of the run.
 
@@ -367,7 +369,7 @@ class So101ServerNode(Node):
         except Exception as e:
             msg = str(e)
             if "Torque_Enable" in msg:
-                # Torque-off is disabled on disconnect (see LeRobotArm.__init__), so
+                # Torque-off is disabled on disconnect (see DirectArm.__init__), so
                 # this normally won't fire. If it does, a servo didn't ack a torque
                 # write during close - non-fatal here (the port is closing), but
                 # worth surfacing rather than crashing the shutdown.

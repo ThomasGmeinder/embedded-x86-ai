@@ -20,7 +20,7 @@ import logging
 
 import pytest
 
-from rigs import HOLD_WATCH_S, assert_ordered_high_scan, carry_problem, hold_problem
+from rigs import assert_ordered_high_scan, carry_problem, hold_problem
 from scripted import Hand, Person
 
 pytestmark = [pytest.mark.sim, pytest.mark.slow]
@@ -28,14 +28,14 @@ pytestmark = [pytest.mark.sim, pytest.mark.slow]
 PERSON_LEFT = Person(cx=0.3, wrist=(0.4, 0.45))
 
 
-def _pick_ball(rig, pos=None, timeout: float = 60.0):
+def _pick_ball(rig, pos=None):
     rig.pose.keys = [(0.0, [PERSON_LEFT])]
     if pos is None:
         rig.default_scene()  # the notebook console's scene: all four props
         z0 = rig.world.body_pos("sports_ball")[2]
     else:
         z0 = rig.put("sports_ball", pos)[2]
-    rig.run([(0.3, "pick up the ball")], timeout=timeout, settle=HOLD_WATCH_S)
+    rig.run([(0.0, "pick up the ball")]).watch_hold()
     return z0
 
 
@@ -72,7 +72,7 @@ def test_workshop_release_opens_the_jaws(workshop_rig):
     rig = workshop_rig
     rig.ctx.shared_state["grip_lock"] = True
     rig.ctx.shared_state["grip_lock_pos"] = 40.0
-    rig.run([(0.3, "drop it")], timeout=20)
+    rig.run([(0.0, "drop it")])
 
     from common.fixtures import offline_parse_text
 
@@ -107,7 +107,7 @@ def test_workshop_mimic_hands_a_held_grip_to_the_pinch(workshop_rig):
         (3.5, Hand(pinch=0.05)), (6.5, Hand(pinch=0.05)),
         (7.0, Hand(pinch=1.3)), (10.0, Hand(pinch=1.3)),
     ]
-    rig.run([(0.3, "mirror my arm"), (10.0, "stop")], timeout=30)
+    rig.run([(0.0, "mirror my arm"), (10.0, "stop")])
     assert rig.said_any("Your pinch drives the gripper"), rig.said
     assert not rig.ctx.shared_state.get("grip_lock"), "mimic left the grip locked"
     _, opened = rig.trace.series("gripper", 2.0, 3.0)
@@ -132,7 +132,7 @@ def test_workshop_mimic_keeps_a_held_ball_until_the_pinch_is_seen(workshop_rig):
     rig.pose.keys = [(0.0, [Person(wrist=(0.5, 0.45))]), (10.0, [Person(wrist=(0.5, 0.45))])]
     rig.hands.keys = [(0.0, None), (1.0, None), (1.01, pinched), (10.0, pinched)]
     first = len(rig.trace.samples)  # the trace runs on across runs; the clock restarts
-    rig.run([(0.3, "mirror my arm"), (6.0, "stop")], timeout=60)
+    rig.run([(0.0, "mirror my arm"), (6.0, "stop")])
 
     assert rig.said_any("Your pinch drives the gripper"), rig.said
     goals = [s.goal["gripper"] for s in rig.trace.samples[first:]]
@@ -165,7 +165,7 @@ def test_workshop_bottle_that_slips_out_mid_carry_is_reported_dropped(workshop_r
     rig.default_scene()
     z0 = rig.world.body_pos("bottle")[2]
     rig.when_lifted("bottle", z0, lambda: rig.slicken("bottle"))
-    rig.run([(0.3, "pick up the bottle")], timeout=90, settle=2.0)
+    rig.run([(0.0, "pick up the bottle")])
 
     assert rig.event_times("slicken"), "the bottle was never lifted"
     assert hold_problem(rig, "bottle", z0, watch_s=0.0) is not None, "the slip check missed the drop"
@@ -179,7 +179,7 @@ def test_workshop_pick_up_toothbrush_aligns_wrist(workshop_rig, caplog):
     rig.pose.keys = [(0.0, [PERSON_LEFT])]
     rig.default_scene()  # the notebook console's scene: all four props
     z0 = rig.world.body_pos("toothbrush")[2]
-    rig.run([(0.3, "pick up the toothbrush")], timeout=90, settle=HOLD_WATCH_S)
+    rig.run([(0.0, "pick up the toothbrush")]).watch_hold()
 
     assert_ordered_high_scan(caplog, rig.cfg["pick_place"]["scan_pans"])
     assert caplog.text.count("IK locate:") == 1
@@ -194,7 +194,7 @@ def test_workshop_pick_up_the_bottle(workshop_rig, caplog):
     rig.pose.keys = [(0.0, [PERSON_LEFT])]
     rig.default_scene()
     z0 = rig.world.body_pos("bottle")[2]
-    rig.run([(0.3, "pick up the bottle")], timeout=90, settle=HOLD_WATCH_S)
+    rig.run([(0.0, "pick up the bottle")]).watch_hold()
 
     assert "IK reach: bottle" in caplog.text and "-> solved" in caplog.text, "IK reach not used"
     assert_ordered_high_scan(caplog, rig.cfg["pick_place"]["scan_pans"])
@@ -211,6 +211,21 @@ def test_workshop_pick_ball_out_of_fixed_reach_says_so(workshop_rig):
     assert rig.said_any("couldn't get a grip on the sports ball"), rig.said
     assert not rig.said_any("Got the"), rig.said
     assert rig.trace.heights("sports_ball").max() - z0 < 0.03, "ball was lifted"
+
+
+def test_workshop_pick_on_an_uncalibrated_real_arm_asks_for_calibration(workshop_rig):
+    rig = workshop_rig
+    rig.cfg["robot"]["backend"] = "real"
+    rig.default_scene()
+    start = rig.joints()
+    rig.run([(0.0, "pick up the ball")])
+
+    assert rig.said_any("isn't calibrated: run scripts/calibrate_arm_camera.py"), rig.said
+    assert rig.detector.calls == 0, "the arm looked for the ball"
+    assert not rig.disturbed(), f"the arm moved objects (m): {rig.disturbed()}"
+    end = rig.joints()
+    moved = {k: round(end[k] - start[k], 1) for k in start if abs(end[k] - start[k]) > 1.0}
+    assert not moved, f"the arm moved (deg): {moved}"
 
 
 _TRACE_PREFIXES = (
@@ -257,17 +272,17 @@ def test_workshop_reset_then_pick_the_toothbrush(workshop_rig, caplog):
     rig.pose.keys = [(0.0, [PERSON_LEFT])]
     rig.default_scene()
 
-    rig.run([(0.3, "pick up the toothbrush")], timeout=90, settle=HOLD_WATCH_S)
+    rig.run([(0.0, "pick up the toothbrush")]).watch_hold()
     assert rig.said_any("Got the toothbrush"), _postmortem(caplog, rig.said)
     assert rig.world.is_grasped("toothbrush"), _postmortem(caplog, rig.said)
 
     for n in (1, 2, 3):
         spoken = len(rig.said)
-        rig.run([(0.3, "drop it")], timeout=20)
+        rig.run([(0.0, "drop it")])
         assert _said_since(rig, spoken, "Released"), _postmortem(caplog, rig.said)
         _press_reset(rig)
         spoken = len(rig.said)
-        rig.run([(0.3, "pick up the toothbrush")], timeout=90, settle=HOLD_WATCH_S)
+        rig.run([(0.0, "pick up the toothbrush")]).watch_hold()
         report = f"after reset {n}\n{_postmortem(caplog, rig.said)}"
         assert _said_since(rig, spoken, "Got the toothbrush"), report
         assert rig.world.is_grasped("toothbrush"), report

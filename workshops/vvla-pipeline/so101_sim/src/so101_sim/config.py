@@ -74,7 +74,7 @@ DEFAULTS: dict = {
     "rest_pose": None,  # None -> the host stack's REST_POSE (set by adapters)
     "cameras": {
         "arm": {"camera": "wrist_cam", "width": 640, "height": 480, "fps": 30},
-        "operator": {"camera": "operator_cam", "width": 640, "height": 480, "fps": 30},
+        "mount": {"camera": "mount_cam", "width": 640, "height": 480, "fps": 30},
         "view": {
             "camera": "free",
             "width": 800,

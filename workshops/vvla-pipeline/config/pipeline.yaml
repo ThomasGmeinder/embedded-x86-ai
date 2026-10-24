@@ -92,7 +92,7 @@ mediapipe:
 # NEW: two-camera architecture. Each camera can be served by its own ROS 2
 # node (vla_pipeline.vision.camera_node) or opened directly by the process.
 cameras:
-  operator:                      # faces the operator (pose / mimic)
+  mount:                      # externally mounted, faces the human (pose / mimic)
     device: /dev/video0
     width: 640
     height: 480
@@ -100,22 +100,23 @@ cameras:
     rotate: 0
     source: device            # device (V4L2) | sim (digital-twin render)
     use_ros2: true            # subscribe to the camera node's topic
-    topic: /cameras/operator/image_raw
+    topic: /cameras/mount/image_raw
     stale_after_s: 1.0
   arm:                        # mounted on the end effector (jaws / objects)
     device: /dev/v4l/by-id/usb-icSpring_icspring_camera-video-index0
     width: 640
     height: 480
     fps: 30
-    rotate: 0                 # set 90/180/270 to match how it is mounted on the gripper
+    rotate: 0                 # set 90/180/270 to match the mount orientation
     source: device            # device | sim (rendered on the twin's gripper)
     use_ros2: true
     topic: /cameras/arm/image_raw
     stale_after_s: 1.0
     # Calibration for locating objects (pick_place reach: ik), printed by
-    # scripts/calibrate_arm_camera.py. null = the twin's wrist_cam model.
+    # scripts/calibrate_arm_camera.py. null: the twin uses its wrist_cam model;
+    # a real arm (robot.backend: real) refuses to pick until both are set.
     intrinsics: null          # {fx, fy, cx, cy, dist: [k1, k2, p1, p2, k3], width, height}
-    mount: null               # camera on the gripper: {pos: [x, y, z] m, rpy: [roll, pitch, yaw] deg}
+    extrinsics: null          # camera on the gripper: {pos: [x, y, z] m, rpy: [roll, pitch, yaw] deg}
 
 robot:
   backend: real               # real (Feetech bus) | sim (MuJoCo digital twin, so101_sim)
@@ -163,7 +164,7 @@ behaviors:
     y_center: 0.5
     y_half: 0.336              #   ±this fraction → full up/down
     deadzone: 0.05             # |axis| below this → 0 (kills resting jitter)
-    mirror: true               # operator camera faces the user → mirror left/right
+    mirror: true               # mount camera faces the user → mirror left/right
     # --- Forward/back depth from MediaPipe hand size (fraction of frame height).
     hand_size_neutral: 0.0     # 0 = auto-calibrate from the first frames;
                                #   set via --calibrate-depth for a fixed neutral
@@ -277,7 +278,7 @@ sim:
   current_model: {idle_a: 0.006, moving_a: 0.15, rated_nm: 0.49, rated_a: 0.65, stall_a: 2.5, stall_torque_nm: 1.91, ma_per_unit: 6.5, noise_units: 3, lpf_hz: 20}  # 7.4 V STS3215
   cameras:
     arm:  {camera: wrist_cam, width: 640, height: 480, fps: 30}
-    operator: {camera: operator_cam, width: 640, height: 480, fps: 30}
+    mount: {camera: mount_cam, width: 640, height: 480, fps: 30}
     view: {camera: free, width: 800, height: 800, fps: 30, lookat: [0.17, 0.0, 0.18], distance: 0.9}
 
 resource_monitor:

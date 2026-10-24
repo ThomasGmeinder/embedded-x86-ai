@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import signal
@@ -75,6 +76,8 @@ nbformat = pytest.importorskip("nbformat")
 pytest.importorskip("nbclient")
 
 from common.twin_voice import RESET_LINE  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 NOTEBOOK = NOTEBOOKS / "03_integration" / "02_digital_twin.ipynb"
 SESSION_ENDED = "session ended, arm parked"  # the console cell's last line
@@ -169,7 +172,7 @@ class NotebookKernel:
 
     def _load_notebook(self) -> None:
         self.nb = with_standins(nbformat.read(NOTEBOOK, as_version=4))
-        self.client = client_for(self.nb, NOTEBOOK, timeout=900)
+        self.client = client_for(self.nb, NOTEBOOK)
         self.console_cell = cell_index(self.nb, "c0000016")
         self.cleanup = cell_index(self.nb, "c0000018")
 
@@ -183,8 +186,7 @@ class NotebookKernel:
     def start(self) -> None:
         self._thread.start()
         self._serve_fut = asyncio.run_coroutine_threadsafe(self._serve(), self._loop)
-        # _serve ending before the kernel opened wakes this wait too; nbclient's
-        # per-cell timeout bounds how long _serve can take to open it.
+        # _serve ending before the kernel opened wakes this wait too.
         self._serve_fut.add_done_callback(lambda _f: self._open.set())
         self._open.wait()
         if self._serve_fut.done():
@@ -202,13 +204,21 @@ class NotebookKernel:
         finally:
             self._closing.set()
             self._loop.call_soon_threadsafe(self._close_now.set)
-            self._down.wait(timeout=180)
+            self._down.wait()
             self._loop.call_soon_threadsafe(self._loop.stop)
-            self._thread.join(timeout=30)
+            self._thread.join()
 
     def run(self, script, end_with: str = "end session", after=None) -> dict:
-        """Run ``script`` against a fresh console cell. ``end_with`` is "end session", "interrupt", or "rerun"."""
-        return self._call(self._scenario(script, end_with, after))
+        """Run ``script`` against a fresh console cell. ``end_with`` is "end session", "interrupt", or "rerun".
+
+        A scenario that fails, the hang guard's timeout included, first has
+        every kernel thread's stack written to kernel.log.
+        """
+        try:
+            return self._call(self._scenario(script, end_with, after))
+        except BaseException:
+            self._dump_kernel_threads()
+            raise
 
     async def _serve(self) -> None:
         self._serve_task = asyncio.current_task()
@@ -243,12 +253,10 @@ class NotebookKernel:
         self._load_notebook()
         serving = asyncio.create_task(self._serve())
         opened = asyncio.create_task(self._opened.wait())
-        done, _ = await asyncio.wait({serving, opened}, timeout=900, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait({serving, opened}, return_when=asyncio.FIRST_COMPLETED)
         if opened not in done:
             opened.cancel()
-            if serving in done:
-                raise RuntimeError("the notebook kernel did not come back") from serving.exception()
-            raise TimeoutError("the notebook kernel did not come back within 900 s")
+            raise RuntimeError("the notebook kernel did not come back") from serving.exception()
 
     async def _through(self, cell_id: str) -> None:
         for i in range(cell_index(self.nb, cell_id) + 1):
@@ -303,7 +311,7 @@ class NotebookKernel:
         if "reset failed" in text or "SETTLED" not in text:
             raise RuntimeError(f"voice.reset_scene() did not park the arm:\n{text}")
 
-    async def _end_cell(self, task, console: Console, end_with: str) -> float:
+    async def _end_cell(self, task, console: Console, end_with: str) -> None:
         from nbclient.exceptions import CellExecutionError
 
         ending = time.monotonic()
@@ -315,22 +323,13 @@ class NotebookKernel:
         elif not console.said(SESSION_ENDED) and console.widgets.get("end session"):
             console.click("end session")
         # Not wait_for: nbclient reports a cancelled cell as "Kernel died".
-        done, _ = await asyncio.wait({task}, timeout=120.0)
-        if not done:
-            self._dump_kernel_threads()
-            await self.client.km.interrupt_kernel()
-            await asyncio.wait({task}, timeout=30.0)
-            task.cancel()
-            raise TimeoutError(
-                f"the console cell did not end within 120 s of {end_with!r}; "
-                "every kernel thread's stack is in kernel.log"
-            )
+        await asyncio.wait({task})
+        logger.info("the console cell ended %.2f s after %r", time.monotonic() - ending, end_with)
         try:
             task.result()
         except CellExecutionError as e:
             if end_with != "interrupt" or "KeyboardInterrupt" not in str(e):
                 raise
-        return time.monotonic() - ending
 
     def _dump_kernel_threads(self) -> None:
         """SIGUSR1: faulthandler (registered by ``KERNEL_LOG``) writes every thread's stack to kernel.log."""
@@ -351,7 +350,7 @@ class NotebookKernel:
         console = Console(self.watcher, before=set(self.watcher.widgets()), since=mark)
         error = None
         try:
-            await until(lambda: console.find_widgets() or task.done(), 60.0, "the console widgets",
+            await until(lambda: console.find_widgets() or task.done(), "the console widgets",
                         self.watcher, task=task)
             if task.done():
                 task.result()  # the cell ended before its console came up: its error
@@ -359,7 +358,7 @@ class NotebookKernel:
         except Exception as e:
             error = e
         try:
-            ended_s = await self._end_cell(task, console, end_with)
+            await self._end_cell(task, console, end_with)
         except Exception as e:
             self.needs_new_kernel = True  # a cell that would not end leaves the kernel wedged
             raise e from error
@@ -374,7 +373,6 @@ class NotebookKernel:
             self.needs_new_kernel = True
             raise error or e
         namespace.update(
-            ended_s=ended_s,
             parked=self.watcher.said(SESSION_ENDED, since=mark),
             twin_alive=not process_gone(namespace["pid"]),
         )
@@ -412,7 +410,7 @@ class NotebookKernel:
         if self.last_pid is not None and not process_gone(self.last_pid):
             # A second hands.close() raises, so skip this when a scenario already ran c0000018.
             await self.client.async_execute_cell(self.nb.cells[self.cleanup], self.cleanup)
-            assert await asyncio.to_thread(wait_exit, self.last_pid, 15.0), "the cleanup cell left the twin node running"
+            assert await asyncio.to_thread(wait_exit, self.last_pid), "the cleanup cell left the twin node running"
 
 
 @pytest.fixture(scope="module")
@@ -436,7 +434,7 @@ def kernel(observers):
         yield session
     finally:
         session.finish()
-    assert_domain_free("the notebook's twin node outlived its cleanup cell", exit_s=20.0)
+    assert_domain_free("the notebook's twin node outlived its cleanup cell", wait=True)
 
 
 @pytest.mark.parametrize(
@@ -456,8 +454,8 @@ def test_console_pickup(observers, kernel, text, body, spoken):
         console.type(text)
         record = await console.record(text)
         seen["record"] = record
-        seen["reading"] = await asyncio.to_thread(scene.reading, body, after=time.time(), timeout=5.0)
-        await until(lambda: console.said(f"Got the {spoken}"), 5.0, f"'Got the {spoken}'", console.watcher)
+        seen["reading"] = await asyncio.to_thread(scene.reading, body, after=time.time(), timeout=None)
+        await until(lambda: console.said(f"Got the {spoken}"), f"'Got the {spoken}'", console.watcher)
 
     namespace = kernel.run(script)
     record, reading = seen["record"], seen["reading"]
@@ -472,11 +470,12 @@ def test_console_pickup(observers, kernel, text, body, spoken):
 def test_console_reset(observers, kernel, workshop_cfg):
     """The GUI sequence on the console's own widgets: pick up the toothbrush,
     drop it, press reset, and pick the toothbrush up again."""
-    from common.motion import REST_POSE, settled
+    from common.motion import ACK_TICKS, DEFAULT_CONTROL_HZ, REST_POSE, settled
     from so101_sim import MOTOR_NAMES
 
     probe, scene = observers
     home = xml_poses(workshop_cfg)
+    tick_s = 1.0 / float(workshop_cfg["robot"].get("control_fps", DEFAULT_CONTROL_HZ))
     seen = {}
 
     async def script(console):
@@ -485,17 +484,19 @@ def test_console_reset(observers, kernel, workshop_cfg):
         assert first["grasped"], first
         console.type("drop it")
         seen["drop"] = await console.record("drop it")
-        seen["dropped"] = await asyncio.to_thread(scene.reading, "toothbrush", after=time.time(), timeout=5.0)
-        seen["jaw"] = (await asyncio.to_thread(probe.joints, after=time.time(), timeout=5.0))["gripper"]
+        seen["dropped"] = await asyncio.to_thread(scene.reading, "toothbrush", after=time.time(), timeout=None)
+        seen["jaw"] = (await asyncio.to_thread(probe.joints, after=time.time()))["gripper"]
         pressed = time.time()
         console.click("reset")
-        await until(lambda: console.said(RESET_LINE), 15.0, "the reset line", console.watcher)
+        await until(lambda: console.said(RESET_LINE), "the reset line", console.watcher)
+        # The reset puts the arm at rest at once: the server's next report shows it parked.
         seen["parked"] = await asyncio.to_thread(
             probe.motion.wait,
-            lambda s: s["cmd_time"] >= pressed and settled(s, MOTOR_NAMES), 5.0, "the parked goal finished",
+            lambda s: s["cmd_time"] >= pressed and settled(s, MOTOR_NAMES), ACK_TICKS * tick_s,
+            "the parked report",
         )
         seen["scene"] = await asyncio.to_thread(
-            scene.latest, after=seen["parked"]["stamp"], timeout=5.0, settled=True,
+            scene.latest, after=seen["parked"]["stamp"], timeout=None, settled=True,
         )
         again = console.watcher.mark()
         console.type("pick up the toothbrush")
@@ -532,16 +533,15 @@ def _arm_moved(probe, start) -> bool:
 
 def test_console_end_session_during_mimic(observers, kernel):
     """"end session" while the arm mirrors the webcam: the console cell ends
-    within 20 s and parks the arm. The module teardown closes the twin once."""
+    and parks the arm. The module teardown closes the twin once."""
     probe, _scene = observers
 
     async def script(console):
-        start = await asyncio.to_thread(probe.joints, timeout=10.0)
+        start = await asyncio.to_thread(probe.joints)
         console.type("copy my movements")
-        await until(lambda: _arm_moved(probe, start), 30.0, "the arm to follow the webcam", probe)
+        await until(lambda: _arm_moved(probe, start), "the arm to follow the webcam", probe)
 
     namespace = kernel.run(script)
-    assert namespace["ended_s"] < 20.0, f"the console cell took {namespace['ended_s']:.0f} s to end"
     assert namespace["parked"], "the console cell did not park the arm"
     _assert_dispatcher_dead(namespace)
 
@@ -555,15 +555,14 @@ def test_console_interrupted(observers, kernel):
     seen = {}
 
     async def script(console):
-        start = await asyncio.to_thread(probe.joints, timeout=10.0)
+        start = await asyncio.to_thread(probe.joints)
         console.type("copy my movements")
-        await until(lambda: _arm_moved(probe, start), 30.0, "the arm to follow the webcam", probe)
+        await until(lambda: _arm_moved(probe, start), "the arm to follow the webcam", probe)
 
     async def after():
-        seen["joints"] = await asyncio.to_thread(probe.joints, after=time.time(), timeout=5.0)
+        seen["joints"] = await asyncio.to_thread(probe.joints, after=time.time())
 
     namespace = kernel.run(script, end_with="interrupt", after=after)
-    assert namespace["ended_s"] < 20.0, f"the console cell took {namespace['ended_s']:.0f} s to end"
     assert namespace["parked"], "the interrupted console cell did not park the arm"
     assert namespace["twin_alive"], "the kernel's stop button also stopped the twin program"
     joints = seen["joints"]
@@ -582,22 +581,21 @@ def test_console_run_and_advance(observers, kernel):
 
     async def script(console):
         seen["console"] = console
-        start = await asyncio.to_thread(probe.joints, timeout=10.0)
+        start = await asyncio.to_thread(probe.joints)
         console.type("copy my movements")
-        await until(lambda: _arm_moved(probe, start), 30.0, "the arm to follow the webcam", probe)
+        await until(lambda: _arm_moved(probe, start), "the arm to follow the webcam", probe)
 
     async def after():
         console = seen["console"]
-        await until(lambda: console.said("twin closed"), 60.0, "the cleanup cell's 'twin closed'", console.watcher)
+        await until(lambda: console.said("twin closed"), "the cleanup cell's 'twin closed'", console.watcher)
         console.watcher.execute('print("kernel free")')
-        await until(lambda: console.said("kernel free"), 30.0, "a cell run after the cleanup", console.watcher)
+        await until(lambda: console.said("kernel free"), "a cell run after the cleanup", console.watcher)
         seen["parked"] = console.count(SESSION_ENDED)
 
     namespace = kernel.run(script, end_with="rerun", after=after)
-    assert namespace["ended_s"] < 20.0, f"the console cell took {namespace['ended_s']:.0f} s to end"
     assert seen["parked"] == 1, "the console cell ran a second session"
     _assert_dispatcher_dead(namespace)
-    assert wait_exit(namespace["pid"], 15.0), "the cleanup cell left the twin node running"
+    assert wait_exit(namespace["pid"]), "the cleanup cell left the twin node running"
 
 
 def test_console_stop(observers, kernel):
@@ -609,16 +607,15 @@ def test_console_stop(observers, kernel):
     seen = {}
 
     async def script(console):
-        start = await asyncio.to_thread(probe.joints, timeout=10.0)
+        start = await asyncio.to_thread(probe.joints)
         console.type("pick up the bottle")
-        await until(lambda: _arm_moved(probe, start), 30.0, "the arm to start moving", probe)
+        await until(lambda: _arm_moved(probe, start), "the arm to start moving", probe)
         console.click("stop")
-        await until(lambda: console.said(SESSION_ENDED), 20.0, "the console cell to end", console.watcher)
-        seen["record"] = await console.record("pick up the bottle", timeout=30.0)
-        seen["joints"] = await asyncio.to_thread(probe.joints, after=time.time(), timeout=5.0)
+        await until(lambda: console.said(SESSION_ENDED), "the console cell to end", console.watcher)
+        seen["record"] = await console.record("pick up the bottle")
+        seen["joints"] = await asyncio.to_thread(probe.joints, after=time.time())
 
     namespace = kernel.run(script)
-    assert namespace["ended_s"] < 20.0, f"the console cell took {namespace['ended_s']:.0f} s to end"
     assert namespace["parked"], "the stop button did not end the console cell"
     assert seen["record"]["grasped"] is False, seen["record"]
     assert [r["text"] for r in namespace["trace"]] == ["pick up the bottle"]

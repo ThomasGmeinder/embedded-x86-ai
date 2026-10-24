@@ -96,7 +96,8 @@ if _PHOTO is None or not _PHOTO.is_file():
 
 
 class _PhotoCamera:
-    """The webcam: two people panning left and right, 30 frames a second."""
+    """The webcam: two people panning left and right. ``read()`` blocks until
+    the next frame is due at the camera's 30 fps, as the device does."""
 
     def __init__(self, *args, **kwargs):
         img = _cv2.imread(str(_PHOTO))
@@ -309,8 +310,8 @@ class Watcher:
             return found[-1] if found else None
 
     def close(self) -> None:
-        self._wake_tx.send(b"")
-        self._thread.join(timeout=2.0)
+        self._wake_tx.send(b"")  # the pump returns on it
+        self._thread.join()
         self._wake_tx.close()
         self._wake_rx.close()
         self._kc.stop_channels()
@@ -334,12 +335,12 @@ def _records_at(since: Mark | int) -> int:
     return since.records if isinstance(since, Mark) else 0
 
 
-async def until(predicate, timeout: float, what: str, *sources, task=None):
+async def until(predicate, what: str, *sources, task=None):
     """``predicate()`` once it holds, checked again whenever a source reports new data.
 
     ``sources`` have ``subscribe(callback) -> unsubscribe`` (the
     :class:`Watcher`, a ROS probe); ``task`` ending also wakes the check.
-    Fails when ``timeout`` passes first.
+    A wait whose event never comes is the module's hang guard's to fail.
     """
     loop = asyncio.get_running_loop()
     changed = asyncio.Event()
@@ -351,20 +352,14 @@ async def until(predicate, timeout: float, what: str, *sources, task=None):
     if task is not None:
         task.add_done_callback(wake)
     started = loop.time()
-    deadline = started + timeout
     try:
         while True:
             changed.clear()
             value = predicate()
             if value:
-                logger.info("%s after %.2f s (budget %.0f s)", what, loop.time() - started, timeout)
+                logger.info("%s after %.2f s", what, loop.time() - started)
                 return value
-            if loop.time() >= deadline:
-                raise AssertionError(f"timed out after {timeout:.0f} s waiting for {what}")
-            try:
-                await asyncio.wait_for(changed.wait(), deadline - loop.time())
-            except asyncio.TimeoutError:
-                pass  # one last look at the predicate, then fail
+            await changed.wait()
     finally:
         for off in unsubscribe:
             off()
@@ -421,12 +416,10 @@ class Console:
         comm_id = self.widgets.get(label) or self.buttons()[label]
         self.watcher.send_comm(comm_id, {"method": "custom", "content": {"event": "click"}})
 
-    async def record(self, text: str, timeout: float = 240.0, since: Mark | None = None) -> dict:
+    async def record(self, text: str, since: Mark | None = None) -> dict:
         """The record of ``text`` after ``since`` (default: since the scenario began)."""
         after = self.since if since is None else since
-        return await until(
-            lambda: self.watcher.record(text, since=after), timeout, f"the record of {text!r}", self.watcher,
-        )
+        return await until(lambda: self.watcher.record(text, since=after), f"the record of {text!r}", self.watcher)
 
 
 def cell_index(nb, cell_id: str) -> int:
@@ -452,10 +445,11 @@ def report(nb) -> dict:
     return json.loads(line[len("REPORT "):])
 
 
-def client_for(nb, path: Path, timeout: float = 600.0):
+def client_for(nb, path: Path):
+    """An nbclient client with no per-cell timeout: each cell ends on its own reply."""
     from nbclient import NotebookClient
 
-    return NotebookClient(nb, kernel_name=KERNEL, timeout=timeout, resources={"metadata": {"path": str(path.parent)}})
+    return NotebookClient(nb, kernel_name=KERNEL, timeout=None, resources={"metadata": {"path": str(path.parent)}})
 
 
 @dataclass
@@ -464,11 +458,11 @@ class NotebookRun:
     sessions: list = field(default_factory=list)
 
 
-# A student action: ("type", text), ("click", label), ("wait_for", phrase, timeout_s),
-# or ("updates", n, timeout_s): the cell sent n widget updates, a live view's frames.
+# A student action: ("type", text), ("click", label), ("wait_for", phrase), or
+# ("updates", n): the cell sent n widget updates, a live view's frames.
 # The kernel handles the clicks in the order they arrive, so the button that ends
 # the cell comes after every earlier action.
-DEFAULT_ACTIONS = (("updates", 3, 30.0),)
+DEFAULT_ACTIONS = (("updates", 3),)
 
 
 async def _interact(client, watcher, nb, index: int, actions) -> None:
@@ -476,7 +470,7 @@ async def _interact(client, watcher, nb, index: int, actions) -> None:
     console = Console(watcher, before=set(watcher.widgets()))
     task = asyncio.create_task(client.async_execute_cell(nb.cells[index], index))
     cell = nb.cells[index].get("id")
-    await until(lambda: task.done() or any(b in console.buttons() for b in FINISH), 300.0,
+    await until(lambda: task.done() or any(b in console.buttons() for b in FINISH),
                 f"the buttons of cell {cell}", watcher, task=task)
     if task.done():
         task.result()
@@ -486,22 +480,22 @@ async def _interact(client, watcher, nb, index: int, actions) -> None:
         kind = action[0]
         if kind == "type":
             # The cell creates its widgets one message at a time: wait for this one.
-            await until(lambda: task.done() or console.text_box(), 60.0, f"the text box of cell {cell}",
+            await until(lambda: task.done() or console.text_box(), f"the text box of cell {cell}",
                         watcher, task=task)
             if not task.done():
                 mark = watcher.mark()
                 console.type(action[1])
         elif kind == "click":
-            await until(lambda: task.done() or action[1] in console.buttons(), 60.0,
+            await until(lambda: task.done() or action[1] in console.buttons(),
                         f"the {action[1]!r} button of cell {cell}", watcher, task=task)
             if not task.done():
                 mark = watcher.mark()
                 console.click(action[1])
         elif kind == "wait_for":
-            await until(lambda: task.done() or watcher.said(action[1], since=mark), action[2],
+            await until(lambda: task.done() or watcher.said(action[1], since=mark),
                         f"{action[1]!r} from cell {cell}", watcher, task=task)
         elif kind == "updates":
-            await until(lambda: task.done() or watcher.updates_since(mark) >= action[1], action[2],
+            await until(lambda: task.done() or watcher.updates_since(mark) >= action[1],
                         f"{action[1]} widget updates from cell {cell}", watcher, task=task)
         else:
             raise ValueError(f"unknown student action {action!r}")
@@ -510,8 +504,7 @@ async def _interact(client, watcher, nb, index: int, actions) -> None:
             return
     console.click(next(b for b in FINISH if b in console.buttons()))
     # Not wait_for: nbclient reports a cancelled cell as "Kernel died".
-    if not (await asyncio.wait({task}, timeout=120.0))[0]:
-        raise TimeoutError(f"cell {cell} did not end within 120 s of its finish button")
+    await asyncio.wait({task})
     task.result()
 
 

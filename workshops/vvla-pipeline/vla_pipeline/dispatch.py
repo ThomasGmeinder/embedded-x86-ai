@@ -178,8 +178,9 @@ class Dispatcher:
         """Drop every queued transcript."""
         self._finished(len(self._take_all()))
 
-    def wait_idle(self, timeout: float) -> bool:
-        """True once no transcript is queued and no behavior runs; False when ``timeout`` passes first."""
+    def wait_idle(self, timeout: float | None) -> bool:
+        """True once no transcript is queued and no behavior runs; False when ``timeout`` passes first
+        (``None``: no limit)."""
         with self._work:
             return self._work.wait_for(lambda: self._pending == 0, timeout)
 

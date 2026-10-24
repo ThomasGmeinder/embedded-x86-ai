@@ -23,7 +23,7 @@ def run_fetch_block(
     cfg: dict,
     arm,
     pose,
-    operator_camera,
+    mount_camera,
     stop_check=None,
     feedback=None,
 ) -> bool:
@@ -33,7 +33,7 @@ def run_fetch_block(
         arm,
         say=feedback,
         stop_check=stop_check,
-        camera=operator_camera,
+        camera=mount_camera,
         pose=pose,
     )
     return _run_fetch_block(ctx)

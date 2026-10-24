@@ -47,6 +47,9 @@ __all__ = [
     "matrix_to_rpy",
     "solve_mount",
     "shared_kinematics",
+    "intrinsics_calibrated",
+    "extrinsics_calibrated",
+    "camera_calibrated",
 ]
 
 IK_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex")
@@ -163,6 +166,23 @@ def matrix_to_rpy(R) -> list[float]:
     return [math.degrees(roll), math.degrees(pitch), math.degrees(yaw)]
 
 
+def intrinsics_calibrated(spec) -> bool:
+    """A ``cameras.arm.intrinsics`` dict replaces the twin's ``wrist_cam`` intrinsics."""
+    return bool(spec) and spec.get("fx") is not None
+
+
+def extrinsics_calibrated(mount) -> bool:
+    """A ``cameras.arm.extrinsics`` dict, or an ``(R, t)``, replaces the twin's camera pose."""
+    if isinstance(mount, dict):
+        return mount.get("pos") is not None and mount.get("rpy") is not None
+    return mount is not None
+
+
+def camera_calibrated(intrinsics, extrinsics) -> bool:
+    """Neither part of the arm camera model falls back to the twin's ``wrist_cam``."""
+    return intrinsics_calibrated(intrinsics) and extrinsics_calibrated(extrinsics)
+
+
 class Kinematics:
     """FK, camera rays and grasp IK on the SO-101 model (no physics thread)."""
 
@@ -231,11 +251,9 @@ class Kinematics:
 
     def mount(self, mount=None):
         """Normalise a mount spec to ``(R, t)`` (see :meth:`camera_pose`)."""
-        if mount is None:
+        if not extrinsics_calibrated(mount):
             return self.default_mount
         if isinstance(mount, dict):
-            if mount.get("pos") is None or mount.get("rpy") is None:
-                return self.default_mount
             return rpy_to_matrix(mount["rpy"]), np.asarray(mount["pos"], float)
         R, t = mount
         return np.asarray(R, float), np.asarray(t, float).reshape(3)
@@ -253,7 +271,7 @@ class Kinematics:
 
         A calibration taken at another resolution is scaled to the frame.
         """
-        if not spec or spec.get("fx") is None:
+        if not intrinsics_calibrated(spec):
             return self.default_intrinsics(width, height), None
         sx = width / float(spec.get("width") or width)
         sy = height / float(spec.get("height") or height)

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import sys
 import threading
-import time
 import types
 
 import numpy as np
@@ -80,7 +79,8 @@ def test_click_is_dropped_and_measured():
 
 
 class _FakeStream:
-    """``sounddevice.InputStream``: plays ``script`` blocks into the callback, 2 ms apart."""
+    """``sounddevice.InputStream``: plays ``script`` blocks into the callback back to back
+    (``MicListener`` queues every block, unbounded)."""
 
     script: list = []
 
@@ -91,7 +91,6 @@ class _FakeStream:
     def _play(self):
         for block, overflow in self.script:
             self._callback(block[:, None], len(block), None, types.SimpleNamespace(input_overflow=overflow))
-            time.sleep(0.002)
 
     def start(self):
         self._thread.start()
@@ -123,8 +122,9 @@ def test_mic_listener_reports_what_never_becomes_text(monkeypatch):
             three.set()
 
     mic = speech.MicListener(CFG, lambda audio: "", texts.append, on_drop=dropped).start()
-    assert mic.opened.wait(5.0) and mic.error is None, mic.error
-    three.wait(10.0)
+    mic.opened.wait()
+    assert mic.error is None, mic.error
+    three.wait()  # the listener's own reports: too short, no words, audio lost
     mic.stop()
     assert not texts
     assert any(d.startswith("too short to hear") for d in drops), drops

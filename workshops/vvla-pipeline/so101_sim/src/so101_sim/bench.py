@@ -13,7 +13,7 @@
 
 physics     real-time loop budget: mj_step + servo profile + current model
 rollout     raw mj_step throughput, 1 process vs. N processes (CPU cores)
-render      one tiled pass of the three standard views (wrist, operator, 3-D)
+render      one tiled pass of the three standard views (wrist, mount, 3-D)
 contention  llama-server intent-parse latency with/without the renderer
             running, and render pass time with/without LLM requests - the
             numbers behind llm.ubatch_size / llm.cu_mask in pipeline.yaml
@@ -85,7 +85,7 @@ def _render_rig(require_hw=False):
 
     w = SimWorld(start=True)
     rs = RenderService(w, require_hw=require_hw)
-    cams = [SimCamera(w, r, renderer=rs, blocking=False) for r in ("arm", "operator", "view")]
+    cams = [SimCamera(w, r, renderer=rs, blocking=False) for r in ("arm", "mount", "view")]
     return w, rs, cams
 
 
@@ -100,7 +100,7 @@ def bench_render(seconds: float = 3.0) -> dict:
             samples.append(rs.pass_ms)
             time.sleep(1 / 60)
         passes = rs.passes - p0
-        return {"renderer": rs.renderer, "views": "640x480 wrist + 640x480 operator + 800x800 3-D",
+        return {"renderer": rs.renderer, "views": "640x480 wrist + 640x480 mount + 800x800 3-D",
                 "pass_ms_median": round(statistics.median(samples), 2),
                 "pass_ms_p95": round(sorted(samples)[int(0.95 * (len(samples) - 1))], 2),
                 "passes_per_s": round(passes / seconds, 1)}

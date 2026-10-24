@@ -59,7 +59,7 @@ def run_pick_place(
     detector,
     pose,
     arm_camera,
-    operator_camera,
+    mount_camera,
     object_name: str = "",
     shared_state: dict | None = None,
     stop_check=None,
@@ -74,7 +74,7 @@ def run_pick_place(
         shared_state=shared_state,
         detector=detector,
         arm_camera=arm_camera,
-        camera=operator_camera,
+        camera=mount_camera,
         pose=pose,
     )
     return _run_pick_place(ctx, command(object_name))
