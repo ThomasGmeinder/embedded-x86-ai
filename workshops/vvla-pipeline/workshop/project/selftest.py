@@ -16,7 +16,8 @@ It does three things, all without a robot, an NPU, a GPU, ROS 2, or a webcam:
 1. **TODO scan** - reads your source and lists which of the 21 TODOs are still
    stubs (the same checklist ``app.py`` shows on startup).
 2. **The three component harnesses** - runs ``models.selftest``,
-   ``ros.selftest --fake`` and ``integration.selftest`` and tallies every
+   ``ros.selftest`` (``--fake`` unless ``--real-ros``: on the in-memory shim
+   its arm checks SKIP) and ``integration.selftest`` and tallies every
    PASS / FAIL / TODO / SKIP into one scoreboard. A FAIL means code you wrote
    does the wrong thing; a TODO means a stub you haven't filled in yet.
 3. **Solution parity (the oracle)** - runs those same three harnesses against

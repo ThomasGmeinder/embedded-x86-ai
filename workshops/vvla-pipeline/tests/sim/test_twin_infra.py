@@ -45,14 +45,9 @@ SOLUTION = Path(__file__).resolve().parents[2] / "workshop" / "solution"
 @pytest.fixture(scope="module")
 def probe(workshop_cfg):
     join_test_domain()
-    p = Probe(workshop_cfg["robot"]["state_topic"])
+    p = Probe(workshop_cfg)
     yield p
     p.close()
-
-
-@pytest.fixture
-def state_topic(workshop_cfg):
-    return workshop_cfg["robot"]["state_topic"]
 
 
 @pytest.fixture
@@ -90,36 +85,44 @@ def _first_state_or_exit(probe, proc: subprocess.Popen) -> None:
         unsubscribe()
 
 
-def test_default_launch_is_unchanged(workshop_cfg, probe, state_topic, no_twin):
-    """Without --notebook-twin: the workshop CameraNode, no twin extras, the live-mimic clamp."""
+def test_default_launch_is_unchanged(workshop_cfg, probe, no_twin):
+    """Without --notebook-twin: the workshop CameraNode, no scene topic, the
+    live-mimic clamp. The reset service is every twin's."""
     from common.config import DEFAULT_CONFIG
     from common.motion import GRASP_LIMITS
-    from common.twin_ros import TwinArmClient
+    from common.ros2_control_arm import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
+    from ros.arm_client import Ros2ArmClient
+    from so101_sim.node import RESET_SERVICE
 
     from std_msgs.msg import Bool
 
+    r = workshop_cfg["robot"]
     log = tempfile.NamedTemporaryFile(prefix="twin_default_", suffix=".log", delete=False)
     proc = subprocess.Popen(
         [sys.executable, "-m", "so101_sim.node", "--config", str(DEFAULT_CONFIG),
-         "--stack", "workshop", "--sim-cameras", "arm"],
+         "--stack", "workshop", "--sim-cameras", "arm",
+         "--ros-args", "-r", f"{r['command_topic']}:={HARDWARE_COMMANDS}",
+         "-r", f"{r['state_topic']}:={HARDWARE_STATES}"],
         stdout=log, stderr=subprocess.STDOUT, env=os.environ.copy(),
     )
+    controllers = start_controllers(DEFAULT_CONFIG, "workshop", log=log)
     try:
         _first_state_or_exit(probe, proc)
         assert proc.poll() is None, Path(log.name).read_text()
         probe.first_message("/cameras/arm/healthy", Bool)
         assert "/sim/scene" not in probe.topics()
-        assert "/sim/reset_scene" not in probe.services()
-        arm = TwinArmClient(workshop_cfg)
+        arm = Ros2ArmClient(workshop_cfg)
         try:
+            assert RESET_SERVICE in probe.services()
             arm.go_to(EXTENDED)
             arm.go_to({"wrist_flex": 90.0}, limits=GRASP_LIMITS)
             wrist = arm.get_joints()["wrist_flex"]
         finally:
             arm.close()
-        # LIVE_MIMIC_LIMITS caps the wrist at 84.4; move_to settles within 2.5 deg
+        # LIVE_MIMIC_LIMITS caps the wrist at 84.4 in the server, so the 90 deg goal ends there
         assert 81.0 <= wrist <= 84.9, f"wrist settled at {wrist:.1f}"
     finally:
+        stop_controllers(controllers)
         _stop(proc)
         log.close()
         Path(log.name).unlink(missing_ok=True)
@@ -159,10 +162,7 @@ def test_frames_are_stamped_after_the_arm_settles(twin):
 
 
 def test_a_goal_sent_as_soon_as_the_session_is_ready_is_taken(twin):
-    """Joint states flow before the twin has discovered the client's command
-    publisher, and until then the server drops every command. The session is
-    ready only once the twin reports that publisher discovered."""
-    assert twin.scene.latest()["command_publishers"] >= 1
+    """The session is ready once the controllers are; a goal sent at once arrives."""
     assert twin.arm.move_to({"shoulder_pan": 15.0}) == "arrived"
 
 
@@ -256,7 +256,7 @@ def test_the_node_dies_with_its_kernel(no_twin):
             "from common.config import load_config\n"
             "from common.twin_ros import TwinSession\n"
             "twin = TwinSession(load_config())\n"
-            "print('TWIN_PID', twin.pid)\n"
+            "print('TWIN_PID', twin.pid, twin.controllers_pid)\n"
         )
 
         def hook(msg):
@@ -267,9 +267,10 @@ def test_the_node_dies_with_its_kernel(no_twin):
 
         reply = kc.execute_interactive(code, timeout=None, output_hook=hook)
         assert reply["content"]["status"] == "ok", "".join(out)
-        pid = int(next(t for t in "".join(out).split("\n") if t.startswith("TWIN_PID")).split()[1])
+        pid, controllers = map(int, next(t for t in "".join(out).split("\n") if t.startswith("TWIN_PID")).split()[1:])
         os.kill(km.provisioner.process.pid, signal.SIGKILL)
         assert wait_exit(pid), "the twin node outlived its kernel"
+        assert wait_exit(controllers), "the controllers outlived their kernel"
     finally:
         kc.stop_channels()
         try:
@@ -279,33 +280,28 @@ def test_the_node_dies_with_its_kernel(no_twin):
 
 
 def test_reset_service_restores_the_scene_and_parks_the_arm(workshop_cfg, probe, no_twin):
-    """The reset puts the arm at rest at once, so the server's next report shows it parked."""
-    from common.motion import ACK_TICKS, DEFAULT_CONTROL_HZ, REST_POSE, settled
+    """The reset parks the arm through the controllers, then puts the props
+    back, so the server's first report after it shows the arm parked."""
+    from common.motion import REST_POSE
     from common.twin_ros import TwinSession
-    from so101_sim import MOTOR_NAMES
 
     moved = default_scene_snapshot(workshop_cfg)
     moved["bodies"]["sports_ball"][:3] = [0.22, -0.04, 0.015]
     home = xml_poses(workshop_cfg)
-    tick_s = 1.0 / float(workshop_cfg["robot"].get("control_fps", DEFAULT_CONTROL_HZ))
     session = TwinSession(workshop_cfg, scene=moved)
     try:
         start = session.scene.latest(timeout=None)
         assert start["bodies"]["sports_ball"]["xyz"][:2] == pytest.approx([0.22, -0.04], abs=0.01)
         session.arm.go_to({"shoulder_pan": 30.0, "shoulder_lift": -40.0, "elbow_flex": 40.0})
-        pressed = time.time()
         assert session.reset_scene()
-        parked = probe.motion.wait(
-            lambda s: s["cmd_time"] >= pressed and settled(s, MOTOR_NAMES), ACK_TICKS * tick_s,
-            "the parked report",
-        )
-        scene = session.scene.latest(after=parked["stamp"], settled=True, timeout=None)
+        reset_at = time.time()
+        joints = probe.joints(after=reset_at)
+        scene = session.scene.latest(after=reset_at, settled=True, timeout=None)
         for name, qpos in home.items():
             got = scene["bodies"][name]
             assert got["xyz"] == pytest.approx(list(qpos[:3]), abs=0.01), name
             assert quat_close(got["quat"], qpos[3:7]), name
             assert not got["grasped"], name
-        joints = parked["joints"]
         for k in BODY_JOINTS:
             assert joints[k] == pytest.approx(REST_POSE[k], abs=3.0), (k, joints)
         assert joints["gripper"] >= 70.0, joints

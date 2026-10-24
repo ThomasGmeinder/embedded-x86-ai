@@ -10,15 +10,14 @@
 A direct-goal move is one ``Goal_Position`` write. ``common.servo_profile``
 picks each joint's ``Goal_Velocity`` and ``Acceleration`` from the arm's
 gravity and inertia, and the move is over when the servo bus owner reports
-the goal finished (``common.motion.await_reported_motion``). The twin runs
-the same registers, so its ``Moving`` flag must drop when the planner says.
+the goal finished (``ArmClient._await_motion``). The twin runs the same
+registers, so its ``Moving`` flag must drop when the planner says.
 In-process, the twin's physics thread is that owner.
 """
 
 from __future__ import annotations
 
 import math
-import threading
 
 import pytest
 
@@ -250,59 +249,6 @@ def test_a_twin_move_fails_at_once_without_a_physics_thread(world):
     world.reset(dict(REST_POSE))
     with pytest.raises(RuntimeError, match="physics thread is not running"):
         arm.move_to({"shoulder_pan": 20.0})
-
-
-def _state(stamp: float, cmd_time: float, moving: bool, pan: float = 0.0, eta_s: float = 0.5) -> dict:
-    return {
-        "stamp": stamp, "cmd_time": cmd_time, "goal": {"shoulder_pan": 20.0}, "eta_s": eta_s,
-        "moving": {"shoulder_pan": moving}, "overload": {"shoulder_pan": False}, "joints": {"shoulder_pan": pan},
-    }
-
-
-def test_an_idle_state_from_before_the_goal_does_not_finish_it():
-    from common.motion import MotionMonitor, MotionTimeout, await_reported_motion
-
-    monitor = MotionMonitor()
-    monitor.update(_state(99.0, 99.0, moving=False))
-    with pytest.raises(MotionTimeout, match="acknowledgement"):
-        await_reported_motion(monitor, ["shoulder_pan"], 100.0, 0.005, None, dict)
-
-
-def test_the_wait_ends_on_the_report_that_the_goal_finished():
-    from common.motion import MotionMonitor, await_reported_motion
-
-    monitor = MotionMonitor()
-    monitor.update(_state(99.0, 99.0, moving=False))
-    result = {}
-    waiter = threading.Thread(
-        target=lambda: result.update(out=await_reported_motion(monitor, ["shoulder_pan"], 100.0, 0.5, None, dict))
-    )
-    waiter.start()
-    monitor.update(_state(100.01, 100.0, moving=True, pan=3.0))
-    monitor.update(_state(100.6, 100.0, moving=False, pan=20.0))
-    waiter.join()  # the wait ends within its own motion budget
-    how, state = result["out"]
-    assert how == "settled"
-    assert state["joints"]["shoulder_pan"] == 20.0
-
-
-def test_stop_check_ends_the_wait_with_the_latest_state():
-    from common.motion import MotionMonitor, await_reported_motion
-
-    monitor = MotionMonitor()
-    monitor.update(_state(100.2, 100.0, moving=True, pan=7.0))
-    how, state = await_reported_motion(monitor, ["shoulder_pan"], 100.0, 0.5, lambda: True, dict)
-    assert how == "stopped"
-    assert state["joints"]["shoulder_pan"] == 7.0
-
-
-def test_a_goal_that_never_finishes_fails_within_its_profile_budget():
-    from common.motion import MotionMonitor, MotionTimeout, await_reported_motion
-
-    monitor = MotionMonitor()
-    monitor.update(_state(100.01, 100.0, moving=True, eta_s=0.02))
-    with pytest.raises(MotionTimeout, match="end of the move"):
-        await_reported_motion(monitor, ["shoulder_pan"], 100.0, 0.002, None, dict)
 
 
 def _reporting_arm(finish: dict, how: str = "settled"):

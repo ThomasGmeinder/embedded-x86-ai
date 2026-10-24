@@ -11,6 +11,6 @@ Your TODOs live in ``camera_node.py`` / ``camera_client.py`` (frames),
 ``arm_node.py`` / ``arm_client.py`` (joint commands and state), and
 ``intent_node.py`` (the Llama intent node). Run the harness with:
 
-    python -m ros.selftest            # offline (in-memory ROS shim if needed)
-    python -m ros.selftest --fake     # force the in-memory ROS shim
+    python -m ros.selftest            # real ROS 2 (the in-memory ROS shim if it is missing)
+    python -m ros.selftest --fake     # force the in-memory ROS shim (the arm checks SKIP)
 """

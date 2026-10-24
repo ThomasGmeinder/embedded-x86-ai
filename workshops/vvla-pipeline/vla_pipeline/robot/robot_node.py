@@ -9,28 +9,27 @@
 
 Two halves:
 
-- :class:`So101ServerNode` - owns the Feetech bus (exactly one process may).
-  Subscribes ``robot.command_topic`` (``sensor_msgs/JointState``, degrees),
-  publishes ``robot.state_topic`` at ``control_fps``. A single daemon control
-  thread does the bus I/O - the same threading model as the production node
-  (subscriptions on executor threads, one sequential control loop, rest-pose
-  parking on shutdown).
-- :class:`Ros2ArmClient` - implements the :class:`ArmClient` API on top of
-  those topics so behaviors are transport-agnostic. It spins its own
-  background executor, so the orchestrator stays a plain Python program.
-
-New in this revision: the server samples the gripper's effort/current
-(:meth:`ArmClient.get_gripper_load`, runtime-detected) every few control
-ticks and publishes it in ``JointState.effort``; ``Ros2ArmClient`` exposes it
-back through ``get_gripper_load()`` so the feedback-based grip works
-identically over ROS 2 and over the direct serial transport.
+- :class:`So101ServerNode` - owns the Feetech bus (exactly one process may)
+  and is ros2_control's hardware side. ``topic_based_ros2_control`` publishes
+  the controllers' setpoints on ``robot.command_topic`` and reads
+  ``robot.state_topic``; the launch remaps both onto ``/so101/hardware/*``.
+  Both are ``sensor_msgs/JointState`` in radians, through the twin's joint
+  map; the state also carries each joint's velocity and the gripper's effort
+  in N·m. A single daemon control thread does the bus I/O and writes every
+  setpoint as it comes - the controllers interpolate - with the same
+  threading model as the production node (subscriptions on executor
+  threads, one sequential control loop, rest-pose parking on shutdown). The
+  gripper's torque limit is the ``gripper_torque_limit_nm`` parameter.
+- :class:`Ros2ArmClient` - the :class:`~common.ros2_control_arm.ControllerArm`
+  behaviors drive the controllers with, so they stay transport-agnostic: the
+  trajectory action, the forward controllers and ``/joint_states``.
 
 Independent test
 ----------------
-    # Terminal 1 - start the server node (or use --dry-run without hardware)
-    python -m vla_pipeline.robot.robot_node --server [--dry-run]
+    # Terminal 1 - the server and its controllers (dry_run:=true: no motors)
+    ros2 launch launch/strix_vla.launch.py dry_run:=true
 
-    # Terminal 2 - client round-trip test over DDS
+    # Terminal 2 - client round-trip test
     python -m vla_pipeline.robot.robot_node --client-test
 """
 
@@ -49,6 +48,7 @@ logger = logging.getLogger(__name__)
 from vla_pipeline.robot.arm_interface import (
     DEFAULT_CONTROL_HZ,
     GRASP_LIMITS,
+    GRIPPER_TORQUE_LIMIT,
     MOTOR_NAMES,
     REST_POSE,
     ArmClient,
@@ -57,20 +57,24 @@ from vla_pipeline.robot.arm_interface import (
 )
 from vla_pipeline.utils.config import load_config
 
-from common.motion import MotionMonitor, await_reported_motion  # noqa: E402
-from common.ros_helpers import motion_state_msg, motion_state_publisher, subscribe_motion_state  # noqa: E402
+from common.ros2_control_arm import (  # noqa: E402
+    ARM_CONTROLLER,
+    BODY,
+    BRING_UP_S,
+    GRIPPER_CONTROLLER,
+    STREAM_CONTROLLER,
+    TORQUE_PARAMETER,
+    ControllerArm,
+    server_transport_cfg,
+)
+from so101_sim.servo import current_to_torque_nm  # noqa: E402
 
 try:  # ROS 2 is optional at import time so non-ROS machines can run dry tests
     import rclpy
-    from rclpy.executors import (
-        ExternalShutdownException,
-        MultiThreadedExecutor,
-        SingleThreadedExecutor,
-    )
+    from rclpy.executors import SingleThreadedExecutor
     from rclpy.node import Node
     from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
     from sensor_msgs.msg import JointState
-    from std_msgs.msg import Int32
 
     ROS2_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -87,9 +91,6 @@ EFFORT_SAMPLE_EVERY_N_TICKS = 3
 # (power/wiring) fails every tick, so cap the log rate - warn on the first
 # failure, then once every Nth after that - instead of flooding the console.
 BUS_ERROR_LOG_EVERY_N = 30
-
-# Gripper Torque_Limit (std_msgs/Int32, 0-1000). Reliable: one write, not a stream.
-GRIPPER_TORQUE_TOPIC = "/so101/gripper_torque_limit"
 
 
 def _require_ros2() -> None:
@@ -123,11 +124,18 @@ def _joint_state(node, names, positions, effort=None) -> "JointState":
 
 
 class So101ServerNode(Node):
-    """Owns the SO-101 Feetech bus; bridges it to ROS 2 topics."""
+    """Owns the SO-101 Feetech bus; ros2_control's hardware side over ROS 2 topics.
+
+    An injected ``arm`` must stream: build it from :func:`server_transport_cfg`.
+    """
 
     def __init__(self, cfg: dict, dry_run: bool = False, arm: ArmClient | None = None):
         _require_ros2()
         super().__init__("so101_server_node")
+        from so101_sim.config import load_sim_config
+        from so101_sim.mapping import JointMap
+
+        cfg = server_transport_cfg(cfg)
         r = cfg["robot"]
         self._control_fps = float(r.get("control_fps", DEFAULT_CONTROL_HZ))
         self._shutting_down = False
@@ -166,9 +174,7 @@ class So101ServerNode(Node):
                     "    python -m vla_pipeline.robot.arm_interface --calibrate\n"
                     "(run_pipeline.sh now does this automatically before launch)."
                 )
-            self._arm = DirectArm(
-                r["motor_port"], r["robot_id"], r.get("max_relative_target", 8.0)
-            )
+            self._arm = DirectArm(r["motor_port"], r["robot_id"], r["max_relative_target"])
             self.get_logger().info(f"SO101Follower connected on {r['motor_port']}")
         # The client already clamped this move. The bus backstop is the grasp
         # envelope (wrist_flex to 90°). The desk cap (67.5°) is what the
@@ -182,78 +188,67 @@ class So101ServerNode(Node):
         self._last_cmd_time = 0.0
         self._gripper_load: float = math.nan  # nan = feedback unavailable
         self._tick_count = 0
-        # Direct-goal mode (clamp disabled): the servo profiles its own way to
-        # each goal, so the loop must write a Goal_Position only when it CHANGES
-        # - re-writing the same goal every tick would restart that onboard
-        # profile and reintroduce the stepping. _last_sent_target tracks the last
-        # value actually written so unchanged ticks are skipped.
-        self._direct_goal = r.get("max_relative_target", 8.0) is None
-        self._last_sent_target: dict[str, float] | None = None
         self._torque_limit: int | None = None  # next gripper Torque_Limit to write
-        # joint_units:=rad puts radians on the joint topics for ros2_control's
-        # topic_based_ros2_control (the proof of concept), through the twin's joint map.
-        self._jmap = None
+        sim = load_sim_config(cfg)
+        self._jmap = JointMap(sim["joint_map"], sim["gripper_map"])
+        self._current_model = sim["current_model"]
+        self._stall_nm = float(sim["current_model"]["stall_torque_nm"])
         self._last_rad: tuple[float, list[float]] | None = None
-        if self.declare_parameter("joint_units", "deg").value == "rad":
-            from so101_sim.config import load_sim_config
-            from so101_sim.mapping import JointMap
+        self.declare_parameter(TORQUE_PARAMETER, GRIPPER_TORQUE_LIMIT / 1000.0 * self._stall_nm)
+        self.add_on_set_parameters_callback(self._on_parameters)
 
-            sim = load_sim_config(cfg)
-            self._jmap = JointMap(sim["joint_map"], sim["gripper_map"])
-
-        self.create_subscription(
+        commands = self.create_subscription(
             JointState, r["command_topic"], self._on_command, _best_effort_qos()
         )
-        self.create_subscription(Int32, GRIPPER_TORQUE_TOPIC, self._on_torque_limit, 10)
-        if getattr(self._arm, "world", None) is not None:
-            from std_srvs.srv import Trigger
-
-            self.create_service(Trigger, "/so101/reset_scene", self._on_reset_scene)
         self._state_pub = self.create_publisher(
             JointState, r["state_topic"], _best_effort_qos()
         )
-        # The servos' own report of the goal they run toward; clients wait on it.
-        self._motion_pub = motion_state_publisher(self)
 
         self._running = True
         self._control_thread = threading.Thread(target=self._control_loop, daemon=True)
         self._control_thread.start()
         self.get_logger().info(
-            f"Ready - cmd: {r['command_topic']}  state: {r['state_topic']}  "
+            f"Ready - cmd: {commands.topic_name}  state: {self._state_pub.topic_name}  "
             f"{self._control_fps:.0f} Hz"
         )
 
-    def _on_reset_scene(self, _request, response):
-        """Park the twin and put its props back on their starting spots."""
-        from vla_pipeline.robot.arm_interface import restore_twin
-
+    def reset_with(self, restore) -> dict:
+        """Run ``restore`` (a twin reset that returns the pose it parked the arm
+        at) under the target lock, and make that pose the target, so the
+        control loop does not drive the arm back to the goal before it."""
         with self._target_lock:
-            parked = restore_twin(self._arm)
+            parked = restore()
             self._target = dict(parked)
             self._last_cmd_time = time.time()
-            self._last_sent_target = None
             self._target_gen += 1
-        response.success = True
-        response.message = "arm parked, objects back on the table"
-        return response
+        return parked
 
     def _on_command(self, msg: "JointState") -> None:
-        """Merge an incoming JointState command into the current target."""
+        """Merge an incoming setpoint (radians) into the current target."""
         joints = {
-            n: float(p) for n, p in zip(msg.name, msg.position) if n in MOTOR_NAMES
+            n: self._jmap.to_cal(n, float(p)) for n, p in zip(msg.name, msg.position) if n in MOTOR_NAMES
         }
         if not joints:
             return
-        if self._jmap is not None:
-            joints = {n: self._jmap.to_cal(n, p) for n, p in joints.items()}
         with self._target_lock:
             self._target.update(clamp_joints(joints, GRASP_LIMITS))
             self._last_cmd_time = time.time()
 
-    def _on_torque_limit(self, msg: "Int32") -> None:
-        """Queue a gripper Torque_Limit for the control loop (the only bus thread)."""
-        with self._target_lock:
-            self._torque_limit = int(msg.data)
+    def _on_parameters(self, params):
+        """Queue a new gripper torque limit (N·m) for the control loop, the only bus thread."""
+        from rcl_interfaces.msg import SetParametersResult
+
+        for p in params:
+            if p.name != TORQUE_PARAMETER:
+                continue
+            nm = float(p.value)
+            if not 0.0 <= nm <= self._stall_nm:
+                return SetParametersResult(
+                    successful=False, reason=f"{TORQUE_PARAMETER} must be within 0..{self._stall_nm} N·m",
+                )
+            with self._target_lock:
+                self._torque_limit = int(round(nm / self._stall_nm * 1000.0))
+        return SetParametersResult(successful=True)
 
     def _control_loop(self) -> None:
         """Sequential observe → act loop (one thread on the bus, no contention).
@@ -284,27 +279,22 @@ class So101ServerNode(Node):
                 p_worst = p_dt
             with self._target_lock:
                 target = dict(self._target)
-                cmd_time = self._last_cmd_time
-                fresh = (time.time() - cmd_time) < 1.0
+                fresh = (time.time() - self._last_cmd_time) < 1.0
                 generation = self._target_gen
                 torque_limit, self._torque_limit = self._torque_limit, None
 
             try:
                 if torque_limit is not None:
                     self._arm.set_gripper_torque_limit(torque_limit)
-                if fresh:  # hold last pose silently when commands stop
+                if fresh:  # hold last pose silently when setpoints stop
                     with self._target_lock:
                         if generation != self._target_gen:
                             fresh = False  # a scene reset replaced this goal
-                    # Direct-goal mode: write only when the goal changes so the
-                    # servo's onboard profile runs once, uninterrupted. Streaming
-                    # mode writes every tick (each tick carries a new setpoint).
-                    if fresh and (not self._direct_goal or target != self._last_sent_target):
+                    if fresh:
                         _s = time.perf_counter()
                         self._arm.send_joints(target)
                         p_send_s += time.perf_counter() - _s
                         p_send += 1
-                        self._last_sent_target = target
 
                 _s = time.perf_counter()
                 joints = self._arm.get_joints()
@@ -318,26 +308,18 @@ class So101ServerNode(Node):
                     load = self._arm.get_gripper_load()
                     self._gripper_load = math.nan if load is None else float(load)
 
-                if self._jmap is None:
-                    msg = _joint_state(
-                        self,
-                        MOTOR_NAMES,
-                        [joints[m] for m in MOTOR_NAMES],
-                        effort=[
-                            self._gripper_load if m == "gripper" else math.nan
-                            for m in MOTOR_NAMES
-                        ],
-                    )
-                else:
-                    read_at = time.perf_counter()
-                    rad = [self._jmap.to_rad(m, joints[m]) for m in MOTOR_NAMES]
-                    msg = _joint_state(self, MOTOR_NAMES, rad)
-                    if self._last_rad is not None:
-                        then, before = self._last_rad
-                        msg.velocity = [(a - b) / (read_at - then) for a, b in zip(rad, before)]
-                    self._last_rad = (read_at, rad)
+                read_at = time.perf_counter()
+                rad = [self._jmap.to_rad(m, joints[m]) for m in MOTOR_NAMES]
+                load = self._gripper_load
+                grip_nm = math.nan if math.isnan(load) else current_to_torque_nm(load, self._current_model)
+                msg = _joint_state(
+                    self, MOTOR_NAMES, rad, effort=[grip_nm if m == "gripper" else math.nan for m in MOTOR_NAMES],
+                )
+                if self._last_rad is not None:
+                    then, before = self._last_rad
+                    msg.velocity = [(a - b) / (read_at - then) for a, b in zip(rad, before)]
+                self._last_rad = (read_at, rad)
                 self._state_pub.publish(msg)
-                self._motion_pub.publish(motion_state_msg(self._arm, cmd_time, joints))
                 bus_errors = 0
             except Exception as e:  # transport retries exhausted, or shutdown race
                 bus_errors += 1
@@ -366,19 +348,6 @@ class So101ServerNode(Node):
             elapsed = now - t0
             time.sleep(max(interval - elapsed, 0.0))
 
-    def set_coordinated_speeds(self, travels: dict[str, float]) -> None:
-        """Scale per-joint servo speed so joints finish together (speed ∝ travel).
-        No-op if the arm doesn't support it (e.g. dry-run)."""
-        fn = getattr(self._arm, "set_coordinated_speeds", None)
-        if callable(fn):
-            fn(travels)
-
-    def reset_joint_speeds(self) -> None:
-        """Restore the default direct-mode speed on the joints last coordinated."""
-        fn = getattr(self._arm, "set_joint_speeds", None)
-        if callable(fn):
-            fn(None)
-
     def destroy_node(self) -> None:
         """Stop the control loop, park the arm, and release the bus before the base class teardown."""
         self._shutting_down = True
@@ -402,129 +371,49 @@ class So101ServerNode(Node):
         super().destroy_node()
 
 
-class Ros2ArmClient(ArmClient):
-    """ArmClient over the server node's topics; spins a private executor."""
+class Ros2ArmClient(ControllerArm):
+    """The pipeline's arm over ros2_control (:class:`~common.ros2_control_arm.ControllerArm`)."""
 
-    def __init__(self, cfg: dict, state_timeout_s: float = 5.0):
+    def __init__(self, cfg: dict, state_timeout_s: float = BRING_UP_S):
         _require_ros2()
-        r = cfg["robot"]
-        # Mirror the server's mode: with the clamp off, go_to() sends one goal and
-        # waits (move_to) instead of streaming an interpolated trajectory.
-        self._direct_goal = r.get("max_relative_target", 8.0) is None
-        if not rclpy.ok():
-            rclpy.init()
-        self._node = rclpy.create_node("so101_arm_client")
-        self._pub = self._node.create_publisher(
-            JointState, r["command_topic"], _best_effort_qos()
-        )
-        self._torque_pub = self._node.create_publisher(Int32, GRIPPER_TORQUE_TOPIC, 10)
-        self._state_lock = threading.Lock()
-        self._state: dict[str, float] | None = None
-        self._effort: float | None = None
-        self._state_ready = threading.Event()
-        self._motion = MotionMonitor()
-        self._tick_s = 1.0 / float(r.get("control_fps", DEFAULT_CONTROL_HZ))  # the server's control period
-        self._node.create_subscription(
-            JointState, r["state_topic"], self._on_state, _best_effort_qos()
-        )
-        subscribe_motion_state(self._node, self._motion)
+        super().__init__(cfg, node_name="so101_arm_client", state_timeout_s=state_timeout_s)
 
-        # The node's callbacks run one at a time, so a single-threaded executor
-        # is the right fit - and it avoids rclpy's "MultiThreadedExecutor is
-        # used with a single thread" warning seen in the logs.
-        self._executor = SingleThreadedExecutor()
-        self._executor.add_node(self._node)
-        self._spin_stop = threading.Event()
-        self._spin_thread = threading.Thread(target=self._spin, daemon=True, name="so101_arm_client")
-        self._spin_thread.start()
+    def _setup_ros(self, node) -> None:
+        from control_msgs.action import FollowJointTrajectory
+        from rclpy.action import ActionClient
+        from std_msgs.msg import Float64MultiArray
 
-        if not self._state_ready.wait(state_timeout_s):
-            self.close()
-            raise TimeoutError(
-                f"No JointState on {r['state_topic']} within {state_timeout_s}s - "
-                "is the server node running? (python -m vla_pipeline.robot.robot_node --server)"
-            )
-        logger.info("Ros2ArmClient: state stream live.")
+        self._trajectory = ActionClient(node, FollowJointTrajectory, f"/{ARM_CONTROLLER}/follow_joint_trajectory")
+        self._stream_pub = node.create_publisher(Float64MultiArray, f"/{STREAM_CONTROLLER}/commands", 10)
+        self._gripper_pub = node.create_publisher(Float64MultiArray, f"/{GRIPPER_CONTROLLER}/commands", 10)
+        node.create_subscription(JointState, "/joint_states", self._on_state, 10)
 
-    def _spin(self) -> None:
-        """Spin in short slices until :meth:`close`. A thread still inside
-        ``executor.spin()`` when Python exits aborts the process ("terminate
-        called without an active exception"), so ``close()`` must join it."""
-        while not self._spin_stop.is_set():
-            try:
-                self._executor.spin_once(timeout_sec=0.1)
-            except ExternalShutdownException:
-                return
+    def _on_state(self, msg) -> None:
+        positions, effort, speed = {}, None, 0.0
+        for i, name in enumerate(msg.name):
+            if name not in MOTOR_NAMES:
+                continue
+            positions[name] = self._jmap.to_cal(name, msg.position[i])
+            if name == "gripper":
+                if len(msg.velocity) > i and math.isfinite(msg.velocity[i]):
+                    speed = float(msg.velocity[i])
+                if len(msg.effort) > i and math.isfinite(msg.effort[i]):
+                    effort = float(msg.effort[i])
+        self._update_state(positions, speed, effort)
 
-    def _on_state(self, msg: "JointState") -> None:
-        """Update the cached joint state and gripper effort from an incoming JointState."""
-        state = {n: float(p) for n, p in zip(msg.name, msg.position)}
-        effort: float | None = None
-        if msg.effort:
-            for n, e in zip(msg.name, msg.effort):
-                if n == "gripper" and not math.isnan(e):
-                    effort = float(e)
-        with self._state_lock:
-            self._state = state
-            self._effort = effort
-        self._state_ready.set()
+    def send_joints(self, joints: dict) -> None:
+        from std_msgs.msg import Float64MultiArray
 
-    def _await_motion(self, joints: list, sent_at: float, stop_check) -> tuple[str, dict]:
-        """Wait on the server's motion state for the goal sent at ``sent_at``."""
-        return await_reported_motion(self._motion, joints, sent_at, self._tick_s, stop_check, self.get_joints)
+        joints = clamp_joints(joints, self._send_limits)
+        if "gripper" in joints:
+            self._command_gripper(joints["gripper"])
+        body = self._stream_setpoint(joints)
+        if body is not None:
+            self._stream_pub.publish(Float64MultiArray(data=[self._jmap.to_rad(k, body[k]) for k in BODY]))
 
     def reset_sim(self) -> bool:
-        """Ask the digital-twin server to park the arm and restore the props."""
-        from std_srvs.srv import Trigger
-
-        if not hasattr(self, "_reset_client"):
-            self._reset_client = self._node.create_client(Trigger, "/so101/reset_scene")
-        if not self._reset_client.wait_for_service(timeout_sec=0.5):
-            return False
-        done = threading.Event()
-        future = self._reset_client.call_async(Trigger.Request())
-        future.add_done_callback(lambda _f: done.set())
-        if not done.wait(2.0):
-            return False
-        result = future.result()
-        return bool(result and result.success)
-
-    def send_joints(self, joints: dict[str, float]) -> None:
-        """Publish joints as a JointState command.
-
-        ``go_to(limits=GRASP_LIMITS)`` has already set ``_send_limits``.
-        Clamping with the desk cap here drops a 90° wrist to 67.5° before
-        the server ever sees the grasp.
-        """
-        joints = clamp_joints(joints, self._send_limits)
-        names = list(joints.keys())
-        self._pub.publish(_joint_state(self._node, names, [joints[k] for k in names]))
-
-    def get_joints(self) -> dict[str, float]:
-        """Return the most recently received joint state."""
-        with self._state_lock:
-            if self._state is None:
-                raise RuntimeError("No arm state received yet.")
-            return dict(self._state)
-
-    def get_gripper_load(self) -> float | None:
-        """Return the most recently received gripper effort, if any."""
-        with self._state_lock:
-            return self._effort
-
-    def set_gripper_torque_limit(self, value: int) -> None:
-        """Publish the gripper Torque_Limit; the server writes it on its next tick."""
-        msg = Int32()
-        msg.data = int(min(max(int(value), 0), 1000))
-        self._torque_pub.publish(msg)
-        self.gripper_torque_limit = msg.data
-
-    def close(self) -> None:
-        """Stop and join the spin thread, then shut down the executor and destroy the node."""
-        self._spin_stop.set()
-        self._spin_thread.join(timeout=2.0)
-        self._executor.shutdown()
-        self._node.destroy_node()
+        """Park the arm and put the twin's props back (:meth:`reset_twin`)."""
+        return self.reset_twin()
 
 
 # =============================================================================
@@ -532,11 +421,14 @@ class Ros2ArmClient(ArmClient):
 # =============================================================================
 
 
-def _run_server(cfg: dict, dry_run: bool) -> None:
+def _run_server(cfg: dict, dry_run: bool, ros_args: list[str]) -> None:
     """Spin up rclpy, run So101ServerNode until interrupted, and shut down cleanly."""
-    rclpy.init()
+    rclpy.init(args=ros_args)
     node = So101ServerNode(cfg, dry_run=dry_run)
-    executor = MultiThreadedExecutor(num_threads=2)
+    # One thread: the callbacks are short (the bus has its own thread), and
+    # rclpy's MultiThreadedExecutor rebuilds its wait set in a tight loop under
+    # the controllers' 60 Hz setpoints, which starves the control loop.
+    executor = SingleThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()
@@ -586,11 +478,11 @@ def main() -> None:
     parser.add_argument(
         "--dry-run", action="store_true", help="server without hardware"
     )
-    args = parser.parse_args()
+    args, ros_args = parser.parse_known_args()  # --ros-args ... (the launch's remaps) go to rclpy
 
     cfg = load_config(args.config)
     if args.server:
-        _run_server(cfg, args.dry_run)
+        _run_server(cfg, args.dry_run, ros_args)
     else:
         _run_client_test(cfg)
 

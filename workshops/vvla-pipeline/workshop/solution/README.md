@@ -19,8 +19,8 @@ you're stuck or done.)
 3. **Implement component 2** (`ros/camera_node.py`, `ros/camera_client.py`,
    `ros/arm_node.py`, `ros/arm_client.py`, `ros/intent_node.py`):
 
-       python -m ros.selftest            # offline - works without ROS 2/hardware
-       python -m ros.selftest --fake     # force the in-memory transport
+       python -m ros.selftest            # no hardware needed; the arm checks need ROS 2
+       python -m ros.selftest --fake     # the in-memory transport: the arm checks SKIP
 
 4. **Implement component 3** (`integration/dispatch.py`,
    `integration/mimic.py`, `integration/behaviors.py`), checking yourself

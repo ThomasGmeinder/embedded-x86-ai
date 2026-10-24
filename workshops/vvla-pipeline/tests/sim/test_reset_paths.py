@@ -13,8 +13,10 @@ The notebook button and the pytest helper are the same three lines:
 console, when the arm owns the world, calls that through
 ``TwinConsole._restore_twin``. ``run_pipeline.sh`` does not: ``use_ros2``
 makes the orchestrator a ``Ros2ArmClient``, so the console calls
-``reset_sim()`` and ``So101ServerNode._on_reset_scene`` resets the world the
-control loop is driving.
+``reset_sim()``: it parks the arm through the controllers, then the twin's
+``/sim/reset_scene`` resets the world the control loop is driving, through
+``So101ServerNode.reset_with`` (``tests/sim/test_pipeline_ros2_control.py``
+runs that path).
 """
 
 from __future__ import annotations
@@ -50,7 +52,9 @@ def _notebook_reset(arm) -> None:
 
 
 def _service_reset(arm) -> None:
-    """``So101ServerNode._on_reset_scene``, then the control loop's next send."""
+    """The twin's ``/sim/reset_scene`` (``so101_sim.node.TwinControl``) on the
+    pipeline server, then the control loop's next send."""
+    from common.motion import restore_twin
     from vla_pipeline.robot.robot_node import So101ServerNode
 
     node = SimpleNamespace(
@@ -58,17 +62,13 @@ def _service_reset(arm) -> None:
         _target_lock=threading.Lock(),
         _target={},
         _last_cmd_time=0.0,
-        _last_sent_target={"stale": 1.0},
         _target_gen=0,
     )
-    response = SimpleNamespace(success=False, message="")
-    So101ServerNode._on_reset_scene(node, None, response)
-    assert response.success is True
+    So101ServerNode.reset_with(node, lambda: restore_twin(arm))
     with node._target_lock:
         target = dict(node._target)
         fresh = (time.time() - node._last_cmd_time) < 1.0
-        sent = node._last_sent_target
-    if fresh and target != sent:
+    if fresh:
         arm.send_joints(target)
 
 

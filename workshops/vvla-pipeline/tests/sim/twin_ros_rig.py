@@ -92,38 +92,59 @@ def twin_log_report(path, dest: Path, lines: int = 60) -> str:
 
 
 class Probe:
-    """Reads the test domain's graph, the arm's joint state and the servos'
-    motion state (``motion``, a :class:`~common.motion.MotionMonitor`), sends nothing.
+    """Reads the test domain's graph, the arm server's own joint state (the
+    hardware side's ``/so101/hardware/joint_states``) and the setpoints it
+    receives (``/so101/hardware/joint_commands``), in calibrated units; sends
+    nothing.
 
     Every joint state is kept for five minutes, with the time it arrived and
     the time the twin stamped it, so a failed test can save the timeline.
     """
 
-    def __init__(self, state_topic: str):
+    def __init__(self, cfg: dict):
         from sensor_msgs.msg import JointState
 
-        from common.motion import MotionMonitor
-        from common.ros_helpers import parse_joint_state, subscribe_motion_state
-        from common.twin_ros import _sensor_qos, _Spinner
+        from common.motion import DEFAULT_CONTROL_HZ
+        from common.ros2_control_arm import HARDWARE_COMMANDS, HARDWARE_STATES
+        from common.ros_helpers import Spinner, parse_joint_state
+        from common.twin_ros import _sensor_qos
+        from so101_sim.config import load_sim_config
+        from so101_sim.mapping import JointMap
 
+        sim = load_sim_config(cfg)
+        self._jmap = JointMap(sim["joint_map"], sim["gripper_map"])
+        fps = float(cfg["robot"].get("control_fps", DEFAULT_CONTROL_HZ))
+        # The server's velocity is a position difference per tick: one encoder
+        # step of jitter reads as one step per tick; below one and a half of
+        # those a joint is still (as ControllerArm judges the jaw).
+        self._still = {m: 1.5 * self._jmap.steps_to_rad(m, 1.0) * fps for m in sim["joint_map"]}
+        self._velocity: dict = {}
+        self._commands: list = []  # (arrival, calibrated setpoint)
         self._parse = parse_joint_state
-        self._spin = _Spinner("twin_test_probe")
+        self._spin = Spinner("twin_test_probe")
         self.node = self._spin.node
         self._cond = threading.Condition()
         self._joints: dict | None = None
         self._joints_t = 0.0
         self._history: deque = deque(maxlen=60 * 300)
         self._listeners: list = []
-        self.node.create_subscription(JointState, state_topic, self._on_state, _sensor_qos())
-        self.motion = MotionMonitor()
-        subscribe_motion_state(self.node, self.motion)
+        self.node.create_subscription(JointState, HARDWARE_STATES, self._on_state, _sensor_qos())
+        self.node.create_subscription(JointState, HARDWARE_COMMANDS, self._on_command, _sensor_qos())
+
+    def _on_command(self, msg) -> None:
+        radians, _effort = self._parse(msg)
+        with self._cond:
+            self._commands.append((time.time(), {n: self._jmap.to_cal(n, v) for n, v in radians.items()}))
+            self._cond.notify_all()
 
     def _on_state(self, msg) -> None:
-        joints, _effort = self._parse(msg)
+        radians, _effort = self._parse(msg)
+        joints = {n: self._jmap.to_cal(n, v) for n, v in radians.items()}
+        velocity = dict(zip(msg.name, msg.velocity))
         now = time.time()
         stamp = msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec
         with self._cond:
-            self._joints, self._joints_t = joints, now
+            self._joints, self._joints_t, self._velocity = joints, now, velocity
             self._history.append((now, stamp, joints))
             self._cond.notify_all()
             for wake in self._listeners:  # under the lock: none runs after its unsubscribe returns
@@ -178,6 +199,34 @@ class Probe:
         with self._cond:
             self._cond.wait_for(lambda: self._joints is not None and (after is None or self._joints_t > after))
             return dict(self._joints)
+
+    def wait_command(self, pred, after: float, budget_s: float, what: str) -> list:
+        """The setpoints the server received after ``after``, once ``pred(them)``
+        holds; woken by each one. Fails when ``budget_s`` passes first."""
+        with self._cond:
+            ok = self._cond.wait_for(lambda: pred([c for t, c in self._commands if t > after]), budget_s)
+            got = [c for t, c in self._commands if t > after]
+        assert ok, f"no {what} within {budget_s:.2f} s ({len(got)} setpoints arrived)"
+        return got
+
+    def commands(self, after: float) -> list:
+        """Every setpoint the server received after ``after``."""
+        with self._cond:
+            return [c for t, c in self._commands if t > after]
+
+    def wait_still(self, after: float, budget_s: float) -> dict:
+        """The first joint state after ``after`` in which the server reports every
+        joint still (velocity), woken by each state. Fails when ``budget_s`` passes first."""
+
+        def still() -> bool:
+            v = self._velocity
+            return self._joints_t > after and bool(v) and all(abs(v[m]) < self._still[m] for m in self._still if m in v)
+
+        with self._cond:
+            ok = self._cond.wait_for(still, budget_s)
+            joints = dict(self._joints or {})
+        assert ok, f"the server did not report the arm still within {budget_s:.2f} s; last {joints}"
+        return joints
 
     def first_message(self, topic: str, msg_type) -> None:
         """Block until a message arrives on ``topic``."""

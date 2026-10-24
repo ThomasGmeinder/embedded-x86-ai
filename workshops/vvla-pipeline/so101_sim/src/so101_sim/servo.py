@@ -183,6 +183,28 @@ class CurrentModel:
         return np.round(self.load_frac() * 1000.0).astype(int)
 
 
+def current_to_torque_nm(counts: float, cm_cfg: dict) -> float:
+    """``Present_Current`` counts -> N·m along the datasheet line of a servo at
+    rest (:meth:`CurrentModel.amps` with the idle current).
+    :func:`torque_nm_to_current` inverts it exactly."""
+    m = CurrentModel(cm_cfg, n=1)
+    amps = float(counts) * m.ma_per_unit / 1000.0
+    if amps <= m.rated_a:
+        return max(amps - m.idle_a, 0.0) / (m.rated_a - m.idle_a) * m.rated_nm
+    return m.rated_nm + (amps - m.rated_a) / (m.stall_a - m.rated_a) * (m.stall_torque - m.rated_nm)
+
+
+def torque_nm_to_current(torque_nm: float, cm_cfg: dict) -> float:
+    """N·m -> ``Present_Current`` counts: the inverse of :func:`current_to_torque_nm`."""
+    m = CurrentModel(cm_cfg, n=1)
+    tau = float(torque_nm)
+    if tau <= m.rated_nm:
+        amps = m.idle_a + tau / m.rated_nm * (m.rated_a - m.idle_a)
+    else:
+        amps = m.rated_a + (tau - m.rated_nm) / (m.stall_torque - m.rated_nm) * (m.stall_a - m.rated_a)
+    return amps * 1000.0 / m.ma_per_unit
+
+
 class OverloadProtection:
     """Per-servo overload guard; ``cap()`` is the output fraction of stall torque.
 

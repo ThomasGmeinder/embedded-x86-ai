@@ -7,11 +7,11 @@
 
 """The workshop behaviors on the notebook twin, over ROS 2.
 
-The context is the section 5 console's (``TwinRig``): ``TwinArmClient``,
-the arm camera behind ``FanoutCamera``, the YOLO eyes, and the keyword
-parser through ``handle_transcript``. The checks mirror the in-process
-``test_workshop_scenarios.py``. Every reading of the twin comes from
-``/sim/scene`` and ``/so101/joint_state``.
+The context is the section 5 console's (``TwinRig``): ``ros.arm_client.Ros2ArmClient``
+on the controllers, the arm camera behind ``FanoutCamera``, the YOLO eyes,
+and the keyword parser through ``handle_transcript``. The checks mirror the
+in-process ``test_workshop_scenarios.py``. Every reading of the twin comes
+from ``/sim/scene`` and the arm server's ``/so101/hardware/*`` topics.
 
 Tier 2 (ROS 2): ``./run_sim_tests.sh``.
 """
@@ -41,7 +41,7 @@ pytest.importorskip("rclpy")
 @pytest.fixture(scope="module")
 def probe(workshop_cfg):
     join_test_domain()
-    p = Probe(workshop_cfg["robot"]["state_topic"])
+    p = Probe(workshop_cfg)
     yield p
     p.close()
 
@@ -189,45 +189,44 @@ def test_twin_dance_finishes_parked(rig, probe):
 
 
 def test_twin_mimic_drives_the_arm_then_stop_holds(rig, probe):
-    """Mimic commands reach the twin, the pinch drives the gripper even after a
-    grip was locked, and "stop" from another thread halts them.
+    """Mimic setpoints reach the arm server, the pinch drives the gripper even
+    after a grip was locked, and "stop" from another thread halts them: the
+    behavior parks the arm, it comes to rest there, and the server takes no
+    other setpoint.
 
     The scripted person moves the arm only a few degrees (in-process too), so
-    the check is that the server takes the commands, not how far they reach.
+    the check is that the server takes the setpoints, not how far they reach.
     The scripted wrist orbits and the pinch cycles once per
     ``SCRIPT_PERIOD_S``, so each check waits at most one cycle.
     """
     from common.fixtures import SCRIPT_PERIOD_S
-    from common.motion import DEFAULT_CONTROL_HZ, motion_budget
+    from common.motion import REST_POSE
+    from common.ros2_control_arm import REPLY_S
+    from common.servo_profile import shared_profiler
 
     rig.ctx.shared_state.update(grip_lock=True, grip_lock_pos=45.0)
     start = probe.joints()
     started = time.time()
     worker = rig.start("copy my movements")
 
-    def reach(s) -> float:
-        return max(abs(s["goal"].get(k, start[k]) - start[k]) for k in BODY_JOINTS)
+    def reach(setpoints) -> bool:
+        return any(max(abs(c[k] - start[k]) for k in BODY_JOINTS) > 2.0 for c in setpoints)
 
-    probe.motion.wait(
-        lambda s: s["cmd_time"] >= started and reach(s) > 2.0, SCRIPT_PERIOD_S,
-        "a mimic goal 2 deg from where the arm started",
-    )
+    probe.wait_command(reach, started, SCRIPT_PERIOD_S, "mimic setpoint 2 deg from where the arm started")
     assert "grip_lock" not in rig.ctx.shared_state, "mimic left the grip locked"
-    jaw: list[float] = []
 
-    def pinch_moved(s) -> bool:
-        if s["cmd_time"] >= started and "gripper" in s["goal"]:
-            jaw.append(float(s["goal"]["gripper"]))
+    def pinch_moved(setpoints) -> bool:
+        jaw = [c["gripper"] for c in setpoints]
         return bool(jaw) and max(jaw) - min(jaw) > 5.0
 
-    probe.motion.wait(pinch_moved, SCRIPT_PERIOD_S, "the pinch moving the gripper goal 5 deg")
+    probe.wait_command(pinch_moved, started, SCRIPT_PERIOD_S, "pinch moving the gripper setpoint 5 deg")
     rig.stop()
-    worker.join()
+    worker.join()  # mimic, then its park at the rest pose
     ended = time.time()
-    tick_s = 1.0 / float(rig.cfg["robot"].get("control_fps", DEFAULT_CONTROL_HZ))
-    last = probe.motion.latest()
-    rest = probe.motion.wait(
-        lambda s: s["stamp"] > ended and not any(s["moving"].values()),
-        motion_budget(float(last["eta_s"]), tick_s), "the servos finishing after stop",
-    )
-    assert rest["cmd_time"] <= ended, "the server took a command after mimic had stopped"
+    held = {k: REST_POSE[k] for k in BODY_JOINTS}
+    budget = shared_profiler().plan(probe.joints(), held).eta_s + rig.twin.arm._goal_time_s + REPLY_S
+    rest = probe.wait_still(ended, budget)
+    off = [c for c in probe.commands(ended) if max(abs(c[k] - held[k]) for k in BODY_JOINTS) > 0.5]
+    assert not off, f"the server took {len(off)} body setpoints other than the parked pose after mimic stopped"
+    gap = {k: round(rest[k] - held[k], 1) for k in BODY_JOINTS if abs(rest[k] - held[k]) > 2.5}
+    assert not gap, f"the arm came to rest off the parked pose (deg): {gap}"

@@ -19,60 +19,64 @@ substitute its in-memory ROS shim, ``common.fakeros``, before first use).
 
 from __future__ import annotations
 
-import json
 import math
-import time
 
 import numpy as np
 
-# Gripper Torque_Limit (std_msgs/Int32, 0-1000): written by the server node's
-# control loop, the only thread on the bus.
-GRIPPER_TORQUE_TOPIC = "/so101/gripper_torque_limit"
 
-# std_msgs/String JSON, one per control tick: the servos' own report of the
-# goal they run toward (see common.motion.MotionMonitor).
-MOTION_STATE_TOPIC = "/so101/motion_state"
+class Spinner:
+    """One rclpy node on its own executor thread, joined by :meth:`close`.
 
-
-def motion_state_msg(arm, cmd_time: float, joints: dict):
-    """The bus owner's motion state as ``std_msgs/String`` JSON.
-
-    ``cmd_time`` is when the owner last took a command; the servo flags come
-    from ``arm.read_motion_state()``, the goal and its predicted duration from
-    the transport that wrote it.
+    A thread still inside ``executor.spin()`` when Python exits aborts the
+    process ("terminate called without an active exception"), and
+    ``executor.shutdown()`` does not end it. So the thread runs one callback
+    at a time, and ``close()`` triggers a guard condition that wakes it to
+    see the stop, then joins it before shutting the executor down.
     """
-    from std_msgs.msg import String
 
-    return String(data=json.dumps({
-        "stamp": time.time(),
-        "cmd_time": float(cmd_time),
-        "goal": dict(arm.goal),
-        "eta_s": float(arm.last_eta_s),
-        **arm.read_motion_state(),
-        "joints": dict(joints),
-    }))
+    def __init__(self, name: str):
+        import threading
 
+        import rclpy
+        from rclpy.executors import SingleThreadedExecutor
 
-def _motion_state_qos():
-    from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+        if not rclpy.ok():
+            rclpy.init()
+        self.node = rclpy.create_node(name)
+        self._wake = self.node.create_guard_condition(lambda: None)
+        self._executor = SingleThreadedExecutor()
+        self._executor.add_node(self.node)
+        self._stop = threading.Event()
+        self._closed = False
+        self._thread = threading.Thread(target=self._loop, daemon=True, name=name)
+        self._thread.start()
 
-    return QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1)
+    def add_node(self, node) -> None:
+        """Spin ``node`` on this thread too; its owner still destroys it."""
+        self._executor.add_node(node)
+        self._wake.trigger()
 
+    def _loop(self) -> None:
+        from rclpy.executors import ExternalShutdownException
 
-def motion_state_publisher(node):
-    """The bus owner's publisher on ``MOTION_STATE_TOPIC``; publish :func:`motion_state_msg` on it."""
-    from std_msgs.msg import String
+        while not self._stop.is_set():
+            try:
+                self._executor.spin_once()
+            except ExternalShutdownException:
+                return
 
-    return node.create_publisher(String, MOTION_STATE_TOPIC, _motion_state_qos())
-
-
-def subscribe_motion_state(node, monitor):
-    """Feed every motion state on ``MOTION_STATE_TOPIC`` into ``monitor``."""
-    from std_msgs.msg import String
-
-    return node.create_subscription(
-        String, MOTION_STATE_TOPIC, lambda m: monitor.update(json.loads(m.data)), _motion_state_qos()
-    )
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._stop.set()
+        self._wake.trigger()
+        self._thread.join(timeout=2.0)
+        self._executor.shutdown()
+        try:
+            self.node.destroy_node()
+        except Exception:
+            pass
 
 
 def ros2_available() -> bool:
@@ -112,7 +116,7 @@ def from_image_msg(msg):
     return frame.copy()
 
 
-def joint_state_msg(names, positions, effort=None, node=None):
+def joint_state_msg(names, positions, effort=None, node=None, velocity=None):
     """Build a (optionally time-stamped) ``sensor_msgs/JointState``."""
     from sensor_msgs.msg import JointState
 
@@ -121,6 +125,8 @@ def joint_state_msg(names, positions, effort=None, node=None):
         msg.header.stamp = node.get_clock().now().to_msg()
     msg.name = list(names)
     msg.position = [float(p) for p in positions]
+    if velocity is not None:
+        msg.velocity = [float(v) for v in velocity]
     if effort is not None:
         msg.effort = [float(e) for e in effort]
     return msg
@@ -139,3 +145,11 @@ def parse_joint_state(msg):
             if n == "gripper" and not math.isnan(e):
                 effort = float(e)
     return positions, effort
+
+
+def joint_velocity(msg, name: str) -> float:
+    """``name``'s velocity in a JointState; 0.0 when it carries none (or NaN)."""
+    for n, v in zip(msg.name, msg.velocity):
+        if n == name and not math.isnan(v):
+            return float(v)
+    return 0.0

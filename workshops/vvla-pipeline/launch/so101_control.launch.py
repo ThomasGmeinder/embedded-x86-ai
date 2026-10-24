@@ -10,8 +10,9 @@
 robot_state_publisher publishes the description, ``ros2_control_node`` runs
 the controllers at ``robot.control_fps``, and ``topic_based_ros2_control``
 talks to the arm server (or the twin) on ``/so101/hardware/joint_commands`` and
-``/so101/hardware/joint_states``, in radians. Run it with the venv's Python,
-after sourcing ROS and ``ros_ws/install/setup.bash`` (bootstrap.sh builds it):
+``/so101/hardware/joint_states``, in radians; the controller manager finds it
+in ``ros_ws/`` (bootstrap.sh builds it). Run it with the venv's Python, after
+sourcing ROS:
 
     .venv/bin/python $(which ros2) launch launch/so101_control.launch.py
     ... launch/so101_control.launch.py gripper:=action
@@ -27,23 +28,20 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-HARDWARE_COMMANDS = "/so101/hardware/joint_commands"
-HARDWARE_STATES = "/so101/hardware/joint_states"
-GRIPPER_CONTROLLERS = {"forward": "gripper_forward_controller", "action": "gripper_action_controller"}
-# How long the hardware side waits, on activation, for the arm server's first
-# joint state. The twin's server published it 0.7-0.95 s after its process
-# started (scripts/ros2_control_poc.py); the real server also connects the bus.
-SERVER_START_S = 10.0
+
+
+def _ensure_paths() -> None:
+    """The pipeline and ``common`` importable: they own the topic and controller names."""
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from vla_pipeline.robot.arm_interface import ensure_common_path
+
+    ensure_common_path()
 
 
 def _joint_limits(stack: str) -> dict:
     """The host stack's ``JOINT_LIMITS``."""
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
     if stack == "workshop":
-        from vla_pipeline.robot.arm_interface import ensure_common_path
-
-        ensure_common_path()
         from common.motion import JOINT_LIMITS
     else:
         from vla_pipeline.robot.arm_interface import JOINT_LIMITS
@@ -53,6 +51,15 @@ def _joint_limits(stack: str) -> dict:
 def _nodes(context):
     import yaml
 
+    from common.ros2_control_arm import (
+        ARM_CONTROLLER,
+        GRIPPER_CONTROLLERS,
+        HARDWARE_COMMANDS,
+        HARDWARE_STATES,
+        SERVER_START_S,
+        STREAM_CONTROLLER,
+        bridge_prefix_path,
+    )
     from so101_sim.description import CONTROLLERS_FILE, robot_description
 
     config = LaunchConfiguration("config").perform(context)
@@ -66,7 +73,7 @@ def _nodes(context):
     )
     controllers = str(CONTROLLERS_FILE)
     spawn = ["--controller-manager", "/controller_manager", "--param-file", controllers]
-    inactive = [name for key, name in GRIPPER_CONTROLLERS.items() if key != gripper]
+    inactive = [STREAM_CONTROLLER, *(name for key, name in GRIPPER_CONTROLLERS.items() if key != gripper)]
     return [
         Node(
             package="robot_state_publisher",
@@ -79,12 +86,13 @@ def _nodes(context):
             executable="ros2_control_node",
             parameters=[controllers, {"update_rate": int(round(float(cfg["robot"]["control_fps"])))}],
             remappings=[("~/robot_description", "/robot_description")],
+            additional_env={"AMENT_PREFIX_PATH": bridge_prefix_path()},
             output="screen",
         ),
         Node(
             package="controller_manager",
             executable="spawner",
-            arguments=["joint_state_broadcaster", "arm_controller", GRIPPER_CONTROLLERS[gripper], *spawn],
+            arguments=["joint_state_broadcaster", ARM_CONTROLLER, GRIPPER_CONTROLLERS[gripper], *spawn],
             output="screen",
         ),
         Node(
@@ -98,6 +106,9 @@ def _nodes(context):
 
 def generate_launch_description() -> LaunchDescription:
     """robot_state_publisher, the controller manager, and its controllers."""
+    _ensure_paths()
+    from common.ros2_control_arm import GRIPPER_CONTROLLERS
+
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -115,7 +126,7 @@ def generate_launch_description() -> LaunchDescription:
                 "gripper",
                 default_value="forward",
                 choices=sorted(GRIPPER_CONTROLLERS),
-                description="the active gripper controller; the other is loaded inactive",
+                description="the active gripper controller; the other is loaded inactive, as is the streaming arm one",
             ),
             OpaqueFunction(function=_nodes),
         ]

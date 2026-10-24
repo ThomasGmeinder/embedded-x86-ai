@@ -418,7 +418,7 @@ def observers(workshop_cfg):
     from common.twin_ros import TwinScene
 
     join_test_domain()
-    probe = Probe(workshop_cfg["robot"]["state_topic"])
+    probe = Probe(workshop_cfg)
     scene = TwinScene()
     yield probe, scene
     scene.close()
@@ -470,12 +470,10 @@ def test_console_pickup(observers, kernel, text, body, spoken):
 def test_console_reset(observers, kernel, workshop_cfg):
     """The GUI sequence on the console's own widgets: pick up the toothbrush,
     drop it, press reset, and pick the toothbrush up again."""
-    from common.motion import ACK_TICKS, DEFAULT_CONTROL_HZ, REST_POSE, settled
-    from so101_sim import MOTOR_NAMES
+    from common.motion import REST_POSE
 
     probe, scene = observers
     home = xml_poses(workshop_cfg)
-    tick_s = 1.0 / float(workshop_cfg["robot"].get("control_fps", DEFAULT_CONTROL_HZ))
     seen = {}
 
     async def script(console):
@@ -486,18 +484,13 @@ def test_console_reset(observers, kernel, workshop_cfg):
         seen["drop"] = await console.record("drop it")
         seen["dropped"] = await asyncio.to_thread(scene.reading, "toothbrush", after=time.time(), timeout=None)
         seen["jaw"] = (await asyncio.to_thread(probe.joints, after=time.time()))["gripper"]
-        pressed = time.time()
         console.click("reset")
         await until(lambda: console.said(RESET_LINE), "the reset line", console.watcher)
-        # The reset puts the arm at rest at once: the server's next report shows it parked.
-        seen["parked"] = await asyncio.to_thread(
-            probe.motion.wait,
-            lambda s: s["cmd_time"] >= pressed and settled(s, MOTOR_NAMES), ACK_TICKS * tick_s,
-            "the parked report",
-        )
-        seen["scene"] = await asyncio.to_thread(
-            scene.latest, after=seen["parked"]["stamp"], timeout=None, settled=True,
-        )
+        # The reset parked the arm through the controllers, then put the props
+        # back, before the console said so: the server's next report shows it parked.
+        said_at = time.time()
+        seen["parked"] = await asyncio.to_thread(probe.joints, after=said_at)
+        seen["scene"] = await asyncio.to_thread(scene.latest, after=said_at, timeout=None, settled=True)
         again = console.watcher.mark()
         console.type("pick up the toothbrush")
         seen["again"] = await console.record("pick up the toothbrush", since=again)
@@ -507,7 +500,7 @@ def test_console_reset(observers, kernel, workshop_cfg):
     dropped = seen["dropped"]
     assert not dropped["grasped"], f"the toothbrush is still between the jaws after 'drop it': {dropped}"
     assert seen["jaw"] > 80.0, f"'drop it' opened the jaws only to {seen['jaw']:.0f}"
-    joints = seen["parked"]["joints"]
+    joints = seen["parked"]
     for k in BODY_JOINTS:
         assert joints[k] == pytest.approx(REST_POSE[k], abs=3.0), (k, joints)
     assert joints["gripper"] >= 70.0, joints

@@ -21,6 +21,11 @@ arm_controller:
     command_interfaces: [position]
     state_interfaces: [position]
     allow_partial_joints_goal: true
+    # A goal's own goal_tolerance says how close; this is how long after the
+    # trajectory's end the joints may take to get there. The streaming arm
+    # server settled within 53 ms on the twin (scripts/ros2_control_poc.py).
+    constraints:
+      goal_time: 0.1
 
 arm_forward_controller:
   ros__parameters:

@@ -400,13 +400,15 @@ def main() -> None:
     # hot before the user is ready and the first frames are usually room noise
     # that Whisper hallucinates into words. Voice ('stop' included) only starts
     # being honored once the window passes. Tunable via audio.startup_grace_s.
+    # Typed commands have no mic, so they get no window.
+    grace_s = 0.0 if args.text_commands else float((cfg.get("audio", {}) or {}).get("startup_grace_s", 1.5))
     dispatcher = Dispatcher(
         ctx,
         llm.parse,
         registry,
         is_stop=is_stop,
         is_noise=make_noise_gate(cfg),
-        startup_grace_s=float((cfg.get("audio", {}) or {}).get("startup_grace_s", 1.5)),
+        startup_grace_s=grace_s,
     )
     _on_transcript = dispatcher.on_transcript
     shutdown = threading.Event()

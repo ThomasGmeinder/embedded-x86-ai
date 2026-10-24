@@ -20,7 +20,9 @@ cannot tell the difference.
 
 Arm and arm camera must live in ONE process (they share the physics), which
 is why this replaces ``robot_node --server`` + ``camera_node --role arm``.
-Extra topic: ``/sim/view/image_raw`` (the free 3-D view, bgr8).
+Extra topic: ``/sim/view/image_raw`` (the free 3-D view, bgr8). Extra service:
+``/sim/reset_scene`` (``std_srvs/Trigger``): ``restore_twin`` in this process,
+with the parked pose made the server's target.
 
 ``--notebook-twin`` (workshop stack) is the twin ``02_digital_twin.ipynb``
 starts for its console, on a private ROS domain. It adds, on top of the
@@ -32,9 +34,7 @@ default launch:
 * the arm camera stamped with the time its scene was captured, not the time
   it was published;
 * ``/sim/scene`` (``std_msgs/String`` JSON: each prop's xyz, quat, grasped,
-  the gripper's torque limit and overload state, and how many command
-  publishers this process has discovered);
-* ``/sim/reset_scene`` (``std_srvs/Trigger``): ``restore_twin`` in this process.
+  and the gripper's torque limit and overload state).
 """
 
 from __future__ import annotations
@@ -92,17 +92,18 @@ def _stack_parts(stack: str, cfg: dict, config_path: str | None):
             if pkg not in sys.path:
                 sys.path.insert(0, pkg)
         from common.motion import SimArmClient, sim_world
+        from common.ros2_control_arm import server_transport_cfg
         from ros.arm_node import So101ServerNode
         from ros.camera_node import CameraNode
 
         world = sim_world(cfg)
-        return world, SimArmClient(cfg, world), So101ServerNode, CameraNode
-    from vla_pipeline.robot.robot_node import So101ServerNode
+        return world, SimArmClient(server_transport_cfg(cfg), world), So101ServerNode, CameraNode
+    from vla_pipeline.robot.robot_node import So101ServerNode, server_transport_cfg
     from vla_pipeline.robot.sim_arm import SimArmClient, sim_world
     from vla_pipeline.vision.camera_node import CameraNode
 
     world = sim_world(cfg)
-    return world, SimArmClient(cfg, world), So101ServerNode, CameraNode
+    return world, SimArmClient(server_transport_cfg(cfg), world), So101ServerNode, CameraNode
 
 
 class ViewPublisher:
@@ -189,19 +190,16 @@ class StampedCameraPublisher:
 
 class ScenePublisher:
     """``/sim/scene``: where each prop is, whether both fingers hold it,
-    ``settled``: every prop at rest (``SimWorld.props_settled``),
+    ``settled``: every prop at rest (``SimWorld.props_settled``), and
     ``gripper``: its ``Torque_Limit``, ``Overload_Torque`` and whether its
-    overload protection tripped, and ``command_publishers``: the publishers
-    on ``command_topic`` this process has discovered. The server drops a
-    command until it has discovered the publisher that sent it."""
+    overload protection tripped."""
 
-    def __init__(self, world, command_topic: str, topic: str = SCENE_TOPIC, hz: float = 20.0):
+    def __init__(self, world, topic: str = SCENE_TOPIC, hz: float = 20.0):
         from rclpy.node import Node
         from std_msgs.msg import String
 
         self._String = String
         self._world = world
-        self._command_topic = command_topic
         self.node = Node("so101_sim_scene")
         self._pub = self.node.create_publisher(String, topic, _sensor_qos())
         self.node.create_timer(1.0 / hz, self._tick)
@@ -226,10 +224,7 @@ class ScenePublisher:
                 "overload_torque": int(world.bus.read("Overload_Torque", "gripper", normalize=False)),
                 "tripped": bool(world.protection.tripped[MOTOR_NAMES.index("gripper")]),
             }
-        return {
-            "stamp": stamp, "bodies": bodies, "settled": settled, "gripper": gripper,
-            "command_publishers": self.node.count_publishers(self._command_topic),
-        }
+        return {"stamp": stamp, "bodies": bodies, "settled": settled, "gripper": gripper}
 
     def _tick(self) -> None:
         self._pub.publish(self._String(data=json.dumps(self.snapshot())))
@@ -239,11 +234,13 @@ class ScenePublisher:
 
 
 class TwinControl:
-    """``/sim/reset_scene``: the console's reset button, run inside the twin.
+    """``/sim/reset_scene``: the consoles' reset button, run inside the twin.
 
-    ``restore_twin`` parks the arm and puts the props back, under the
-    server's target lock, and the server's target becomes the parked pose so
-    its control loop does not drive the arm back to the pre-reset goal.
+    ``restore_twin`` parks the arm and puts the props back, through the
+    server's ``reset_with``: under its target lock, and with the parked pose
+    as its target, so its control loop does not drive the arm back to the
+    pre-reset goal. A client parks the arm through the controllers first
+    (``ControllerArm.reset_twin``), so they hold the parked pose too.
     """
 
     def __init__(self, server, arm):
@@ -258,38 +255,13 @@ class TwinControl:
     def _on_reset(self, _request, response):
         from common.motion import restore_twin
 
-        server = self._server
-        with server._lock:
-            parked = restore_twin(self._arm)
-            server._target = dict(parked)
-            server._last_cmd_time = time.time()
-            server._last_sent_target = None
+        self._server.reset_with(lambda: restore_twin(self._arm))
         response.success = True
         response.message = "arm parked, objects back on the table"
         return response
 
     def destroy(self) -> None:
         self.node.destroy_node()
-
-
-def _die_with_parent() -> None:
-    """Get SIGTERM when the process that started this twin exits (Linux).
-
-    Set here rather than through ``Popen(preexec_fn=...)``: the notebook
-    kernel that starts the twin runs threads, and ``preexec_fn`` is unsafe
-    in a threaded parent. rclpy turns the SIGTERM into a clean shutdown.
-    """
-    import ctypes
-    import os
-    import signal
-
-    parent = os.getppid()
-    try:
-        ctypes.CDLL(None, use_errno=True).prctl(1, int(signal.SIGTERM))  # PR_SET_PDEATHSIG
-    except (OSError, AttributeError):
-        return
-    if os.getppid() != parent:  # the parent exited before prctl took effect
-        os._exit(0)
 
 
 def _use_grasp_envelope() -> None:
@@ -355,11 +327,13 @@ def build_nodes(
         vp = ViewPublisher(world)
         nodes.append(vp.node)
         closers.append(vp.destroy)
+    control = TwinControl(server, arm)
+    nodes.append(control.node)
+    closers.append(control.destroy)
     if notebook_twin:
-        scene = ScenePublisher(world, cfg["robot"]["command_topic"])
-        control = TwinControl(server, arm)
-        nodes.extend((scene.node, control.node))
-        closers.extend((scene.destroy, control.destroy))
+        scene = ScenePublisher(world)
+        nodes.append(scene.node)
+        closers.append(scene.destroy)
     return world, nodes, closers
 
 
@@ -381,14 +355,17 @@ def main() -> None:
     ap.add_argument("--viewer", action="store_true", help="open the MuJoCo viewer window")
     ap.add_argument("--notebook-twin", action="store_true",
                     help="the 02_digital_twin.ipynb console twin (workshop stack): grasp "
-                    f"envelope, capture-stamped arm camera, {SCENE_TOPIC}, {RESET_SERVICE}")
+                    f"envelope, capture-stamped arm camera, {SCENE_TOPIC}")
     ap.add_argument("--scene", default=None,
                     help="with --notebook-twin: JSON from SimWorld.snapshot_scene to start from")
     args, ros_args = ap.parse_known_args()
     if args.scene and not args.notebook_twin:
         ap.error("--scene needs --notebook-twin")
     if args.notebook_twin:
-        _die_with_parent()
+        # rclpy turns the SIGTERM into a clean shutdown.
+        from so101_sim.parent_death import die_with_parent
+
+        die_with_parent()
 
     from so101_sim.domain_lock import DomainTaken, acquire
 

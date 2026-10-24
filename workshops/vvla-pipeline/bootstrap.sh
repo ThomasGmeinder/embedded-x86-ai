@@ -783,7 +783,6 @@ cat <<EOF
  Activate the environment (every new shell):
 
      source /opt/ros/jazzy/setup.bash      # if using the ROS 2 transport
-     source ros_ws/install/setup.bash      # ros2_control's topic_based_ros2_control
      source .venv/bin/activate
      source scripts/ryzen_ai_env.sh        # NPU runtime environment
 
@@ -802,7 +801,7 @@ cat <<EOF
 
      python -m vla_pipeline.vision.mediapipe_hands
      python -m vla_pipeline.robot.arm_interface --dry-run
-     python -m vla_pipeline.robot.robot_node --server --dry-run   # + --client-test
+     python \$(which ros2) launch launch/strix_vla.launch.py dry_run:=true   # + robot_node --client-test
      python -m vla_pipeline.robot.test_ros2_arm_motion
      python -m vla_pipeline.behaviors.gesture_mimic --dry-run
      python -m vla_pipeline.behaviors.fetch_block --dry-run

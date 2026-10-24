@@ -56,6 +56,7 @@ class Sample:
     in_hand: dict = field(default_factory=dict)  # body -> position in the gripper frame (m)
     hand_z: float = 0.0  # gripper body height (m)
     overload: bool = False  # the gripper's overload protection has cut its torque
+    sim_t: float = 0.0  # physics seconds the trace has seen; ``t`` is the scenario's wall clock
 
 
 class Trace:
@@ -67,6 +68,8 @@ class Trace:
         self.samples: list[Sample] = []
         self._run = False
         self._thread = None
+        self._sim_t = 0.0
+        self._sim_last: float | None = None  # a twin reset rewinds MuJoCo's clock
 
     def start(self) -> None:
         if self._run:
@@ -92,9 +95,13 @@ class Trace:
         in_hand = {b: w.in_gripper(b) for b in self.watch}
         hand_z = float(w.body_pos("gripper")[2])
         overload = bool(w.protection.tripped[_GRIPPER])
+        now = float(w.data.time)
+        if self._sim_last is not None and now >= self._sim_last:
+            self._sim_t += now - self._sim_last
+        self._sim_last = now
         self.samples.append(
             Sample(self.clock() if t is None else t, snap["joints"], snap["goal"], cur, grasped, heights,
-                   in_hand, hand_z, overload)
+                   in_hand, hand_z, overload, self._sim_t)
         )
 
     def _loop(self) -> None:
@@ -118,13 +125,20 @@ class Trace:
         key = "goal" if goal else "joints"
         return np.array([s.t for s in win]), np.array([getattr(s, key)[joint] for s in win])
 
+    def after(self, t: float, seconds: float) -> float:
+        """The stamp of the first sample ``seconds`` of physics after the one at ``t``."""
+        start = next((s.sim_t for s in self.samples if s.t >= t), None)
+        if start is None:
+            return float("inf")
+        return next((s.t for s in self.samples if s.sim_t >= start + seconds), float("inf"))
+
     def held_current(self, hold_s: float = 0.3) -> float:
-        """Highest gripper current held for ``hold_s``: a squeeze keeps it up,
-        the jaw's own moves only spike it."""
+        """Highest gripper current held for ``hold_s`` of physics: a squeeze
+        keeps it up, the jaw's own moves only spike it."""
         best = 0.0
         for i, s in enumerate(self.samples):
-            win = [x.current for x in self.samples[i:] if x.t <= s.t + hold_s]
-            if self.samples[-1].t - s.t >= hold_s:
+            win = [x.current for x in self.samples[i:] if x.sim_t <= s.sim_t + hold_s]
+            if self.samples[-1].sim_t - s.sim_t >= hold_s:
                 best = max(best, min(win))
         return best
 
@@ -132,16 +146,16 @@ class Trace:
         return np.array([s.heights[body] for s in self.samples])
 
     def grasped_seconds(self, body: str) -> float:
-        """Longest continuous stretch with ``body`` held between both jaws."""
+        """Longest continuous stretch of physics with ``body`` held between both jaws."""
         best = run = 0.0
         prev = None
         for s in self.samples:
             if s.grasped.get(body):
-                run += 0.0 if prev is None else s.t - prev
+                run += 0.0 if prev is None else s.sim_t - prev
                 best = max(best, run)
             else:
                 run = 0.0
-            prev = s.t
+            prev = s.sim_t
         return best
 
     def lift_off(self, body: str, z0: float, dz: float = 0.005) -> float | None:
@@ -189,15 +203,15 @@ class Trace:
         return max(float(np.linalg.norm(s.in_hand[body] - ref)) for s in win)
 
     def longest_release(self, body: str, t0: float, t1: float = float("inf")) -> float:
-        """Longest stretch (s) in the window with ``body`` not between both fingers."""
+        """Longest stretch of physics (s) in the window with ``body`` not between both fingers."""
         best = 0.0
         since = None
         for s in self.window(t0, t1):
             if s.grasped.get(body):
                 since = None
             else:
-                since = s.t if since is None else since
-                best = max(best, s.t - since)
+                since = s.sim_t if since is None else since
+                best = max(best, s.sim_t - since)
         return best
 
 
@@ -273,7 +287,7 @@ def hold_problem(rig, body: str, z0: float, watch_s: float | None = None,
     if grip is None:
         return f"{body} was not between both fingers when it left the table"
     rise = tr.hand_rise(grip, lift)
-    t0 = lift + _LIFT_SETTLE_S
+    t0 = tr.after(lift, _LIFT_SETTLE_S)
     seated = tr.drift(body, rise, t0)
     gap = tr.longest_release(body, rise, end)
     moved = tr.drift(body, t0, end)

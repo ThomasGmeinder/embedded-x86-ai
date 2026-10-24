@@ -26,7 +26,6 @@ from __future__ import annotations
 import logging
 import math
 import sys
-import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -148,95 +147,15 @@ def clamp_joints(joints: dict, limits: dict | None = None) -> dict:
 
 # STS3215 Status register (address 65): bit 5 is the overload protection.
 OVERLOAD_BIT = 0x20
-# A goal's wait is bounded by its servo profile's predicted duration times
-# this: the twin's Moving flag drops when its profile ends; a real servo may
-# hold Moving until the joint itself arrives, which lags under load.
-SETTLE_MARGIN = 1.5
-# The bus owner takes a command on its next control tick; this many ticks
-# also cover the transport and a loaded host's scheduling.
-ACK_TICKS = 10
 
 
 class MotionTimeout(RuntimeError):
-    """The servo bus owner never reported a goal finished within its budget."""
-
-
-class MotionMonitor:
-    """The newest motion state from the servo bus owner, with a condition that wakes on each.
-
-    A state is a dict: ``stamp``, ``cmd_time`` (when the owner last took a
-    command), ``goal`` (what the servos run toward), ``eta_s`` (that goal's
-    predicted profile duration), per-joint ``moving`` and ``overload`` flags
-    read from the servos, and ``joints``.
-    """
-
-    def __init__(self):
-        self._cond = threading.Condition()
-        self._state: dict | None = None
-
-    def update(self, state: dict) -> None:
-        with self._cond:
-            self._state = state
-            self._cond.notify_all()
-
-    def latest(self) -> dict | None:
-        with self._cond:
-            return self._state
-
-    def wait(self, predicate, budget_s: float, what: str, stop_check=None) -> dict | None:
-        """The first state for which ``predicate`` holds, or None once ``stop_check`` fires.
-
-        Woken by each new state, so ``stop_check`` is evaluated once per owner
-        tick. Raises :class:`MotionTimeout` when ``budget_s`` passes first.
-        """
-        deadline = time.monotonic() + budget_s
-        with self._cond:
-            while True:
-                if stop_check is not None and stop_check():
-                    return None
-                if self._state is not None and predicate(self._state):
-                    return self._state
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise MotionTimeout(f"no {what} within {budget_s:.2f} s; last state: {self._state}")
-                self._cond.wait(remaining)
+    """The arm's owner (the servos, or the controllers) never reported a goal finished within its budget."""
 
 
 def settled(state: dict, joints: list) -> bool:
     """True when no servo in ``joints`` reports its profile still running."""
     return not any(state["moving"].get(j, False) for j in joints)
-
-
-def motion_budget(eta_s: float, tick_s: float) -> float:
-    """How long a goal may take: its servo profile times :data:`SETTLE_MARGIN`
-    plus :data:`ACK_TICKS` control ticks of the bus owner."""
-    return eta_s * SETTLE_MARGIN + ACK_TICKS * tick_s
-
-
-def await_reported_motion(monitor: MotionMonitor, joints: list, sent_at: float, tick_s: float,
-                          stop_check, current_joints) -> tuple[str, dict]:
-    """A client's wait on the servo bus owner for the goal it sent at ``sent_at``.
-
-    First the owner's report that it took a command at or after ``sent_at``
-    (``cmd_time``), then its report that the servos in ``joints`` finished,
-    within :func:`motion_budget`. ``tick_s`` is the owner's control period.
-    Both clocks are this host's.
-    """
-    ack = monitor.wait(lambda s: s["cmd_time"] >= sent_at, ACK_TICKS * tick_s, "acknowledgement of the goal", stop_check)
-    if ack is not None:
-        acked_s = time.time() - sent_at
-        budget = motion_budget(float(ack["eta_s"]), tick_s)
-        done = monitor.wait(
-            lambda s: s["cmd_time"] >= sent_at and settled(s, joints), budget, "end of the move", stop_check,
-        )
-        if done is not None:
-            logger.info("servo report: goal taken after %.3f s (budget %.3f s), move budget %.3f s",
-                        acked_s, ACK_TICKS * tick_s, budget)
-            return "settled", done
-    latest = monitor.latest()
-    if latest is None:
-        latest = {"joints": current_joints(), "moving": {}, "overload": {}, "eta_s": 0.0}
-    return "stopped", latest
 
 
 # ----------------------------------------------------------------------------
@@ -474,7 +393,6 @@ class LeRobotArm(ArmClient):
     def _init_transport(self, max_relative_target) -> None:
         """State shared by this transport and the twin's (``SimArmClient``)."""
         self._effort_register = False  # False = not probed yet
-        self._lockstep = False
         self.goal: dict = {}
         self.last_eta_s = 0.0
         # Direct-goal mode (config: max_relative_target: null): LeRobot's
@@ -522,18 +440,6 @@ class LeRobotArm(ArmClient):
         logger.warning("Could not set per-joint %s - coordination may be off.", what)
         return False
 
-    def set_joint_speeds(self, speeds: dict | None = None) -> None:
-        """Per-joint onboard speed. ``None`` ends lockstep: each joint again runs
-        at its own planned profile from the next goal on."""
-        if speeds is None:
-            self._lockstep = False
-            return
-        self._sync_write_guarded(_SPEED_REGISTERS, speeds, "speed")
-
-    def set_coordinated_speeds(self, travels: dict) -> None:
-        """Run the next goals in lockstep: every joint finishes with the slowest one."""
-        self._lockstep = bool(travels)
-
     def _plan_start(self) -> dict:
         """Where the servos' next profile starts: their measured position."""
         return self.get_joints()
@@ -542,7 +448,7 @@ class LeRobotArm(ArmClient):
         joints = clamp_joints(joints, self._send_limits)
         if self._direct_goal:
             # From where the servos are now: another caller may have moved them since our last read.
-            plan = self._profiler.plan(self._plan_start(), joints, lockstep=self._lockstep)
+            plan = self._profiler.plan(self._plan_start(), joints)
             self._sync_write_guarded(_SPEED_REGISTERS, plan.speed_raw, "speed")
             self._sync_write_guarded(_ACCEL_REGISTERS, plan.accel_raw, "acceleration")
             self.last_eta_s = plan.eta_s
@@ -633,16 +539,21 @@ def sim_world(cfg: dict):
     return shared_world({"sim": sim}, rest_pose=REST_POSE)
 
 
+def parked_pose(rest_pose: dict | None = None) -> dict:
+    """Where a twin reset parks the arm: ``rest_pose`` (default :data:`REST_POSE`) with the jaws open."""
+    from so101_sim.kinematics import OPEN_GRIPPER
+
+    return {**(REST_POSE if rest_pose is None else rest_pose), "gripper": OPEN_GRIPPER}
+
+
 def restore_twin(arm, world=None) -> dict:
     """Park ``arm`` at its rest pose with the jaws open and restore the props.
 
     Returns the parked joint dict. Callers that also track a command target
     (the ROS control loop) copy that dict into the target under their lock.
     """
-    from so101_sim.kinematics import OPEN_GRIPPER
-
     world = arm.world if world is None else world
-    parked = {**world.rest_pose, "gripper": OPEN_GRIPPER}
+    parked = parked_pose(world.rest_pose)
     world.reset(parked)
     arm.send_joints(parked)
     return parked

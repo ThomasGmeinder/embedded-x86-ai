@@ -135,14 +135,14 @@ def _build_arm(cfg, args):
             from ros.arm_client import Ros2ArmClient
 
             arm = Ros2ArmClient(cfg)
-            print("arm: ROS 2 client → " + cfg["robot"]["command_topic"])
+            print("arm: ROS 2 client → the ros2_control controllers")
             return arm
         except Exception as e:
             _die(
                 "arm",
                 f"ROS 2 client would not come up ({e}).",
-                "Is the arm server node running? "
-                "python -m ros.arm_node   (add --dry-run to simulate the arm).",
+                "Are the arm server node and its controllers running? "
+                "python -m ros.node_supervisor --only arm   (add --dry-run to simulate the arm).",
             )
     else:
         try:
@@ -381,7 +381,7 @@ def _preflight(cfg, args) -> bool:
     print("Check your progress without the rig:")
     print("    python selftest.py                 # whole suite + solution parity")
     print("    python -m models.selftest          # component 1 only")
-    print("    python -m ros.selftest --fake      # component 2 (no ROS 2 needed)")
+    print("    python -m ros.selftest --fake      # component 2 (no ROS 2 needed; the arm checks SKIP)")
     print("    python -m integration.selftest     # component 3 only")
     print("\nOr shrink what THIS run needs with the laptop/CI flags:")
     print("    python app.py --dry-run --synthetic --no-llm")
@@ -550,6 +550,7 @@ def main() -> int:
             # A behavior (or the gauntlet itself) isn't implemented yet - say so
             # and keep the UI alive instead of dropping a traceback mid-session.
             ctx.say(f"(not wired up yet: {e})")
+        logger.info("=== %r handled ===", text)
         # Seamless switching: drain queued commands except the newest, so a
         # backlog typed during a behavior doesn't replay stale ones.
         newest = None

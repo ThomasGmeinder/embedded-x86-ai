@@ -10,7 +10,7 @@
 
 ``launch/so101_control.launch.py`` runs robot_state_publisher, the controller
 manager and the controllers against the twin's arm server (pipeline stack,
-``joint_units:=rad``, its topics remapped onto the hardware side). Then:
+its topics remapped onto the hardware side). Then:
 
 1. moves - the twin in its own process, as in production. Each keyframe move
    is a one-point FollowJointTrajectory timed by ``servo_profile``'s plan:
@@ -22,7 +22,7 @@ manager and the controllers against the twin's arm server (pipeline stack,
    jaw stopped, and what the action controller reported and when. The report
    gives this process's sim time per wall second beside it.
 
-Source ROS and ros_ws/install/setup.bash, then:
+Source ROS, then:
 
     .venv/bin/python scripts/ros2_control_poc.py [--domain 88] [--out FILE]
 """
@@ -32,7 +32,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import signal
 import statistics
 import subprocess
@@ -44,13 +43,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-LAUNCH = ROOT / "launch" / "so101_control.launch.py"
 CONFIG = ROOT / "config" / "pipeline.yaml"
 BODY = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
 SETTLED_DEG = 0.5
-# The launch's spawners need the controller manager up first; on this
-# machine the whole bring-up has taken under 10 s.
-BRING_UP_S = 60.0
 # Jaws low over the table, closing axis horizontal: how the pickup grasps the ball.
 GRASP_POSE = {"shoulder_pan": 0.0, "shoulder_lift": 9.0, "elbow_flex": 20.0, "wrist_flex": 54.0, "wrist_roll": 0.0}
 
@@ -259,6 +254,14 @@ def grasp_action(probe: Probe, world, closed: float, opened: float) -> dict:
             "grasped": bool(world.is_grasped("sports_ball"))}
 
 
+def _control():
+    """``common.ros2_control_arm``, once the pipeline has put ``common`` on the path."""
+    import vla_pipeline.robot.arm_interface  # noqa: F401 - ensure_common_path()
+    from common import ros2_control_arm
+
+    return ros2_control_arm
+
+
 def _stop(proc: subprocess.Popen) -> None:
     os.killpg(proc.pid, signal.SIGINT)
     proc.wait()
@@ -282,27 +285,24 @@ def _wait_exit(pid: int, budget_s: float) -> None:
 class Session:
     """The probe on its own executor, plus the launch; ``extra`` nodes join the executor."""
 
-    def __init__(self, jmap, launch_file, cfg_path: Path, extra=()):
+    def __init__(self, jmap, cfg_path: Path, extra=()):
         import rclpy
         from rclpy.executors import SingleThreadedExecutor
 
         if not rclpy.ok():
-            rclpy.init(args=["--ros-args", "-p", "joint_units:=rad"])
-        self.probe = Probe(jmap, launch_file.HARDWARE_COMMANDS, launch_file.HARDWARE_STATES)
+            rclpy.init()
+        control = _control()
+        self.probe = Probe(jmap, control.HARDWARE_COMMANDS, control.HARDWARE_STATES)
         self.executor = SingleThreadedExecutor()
         for n in (*extra, self.probe.node):
             self.executor.add_node(n)
         threading.Thread(target=self.executor.spin, daemon=True).start()
-        self.launch = subprocess.Popen(
-            [sys.executable, shutil.which("ros2"), "launch", str(LAUNCH), f"config:={cfg_path}",
-             "stack:=pipeline", "gripper:=forward"],
-            cwd=str(ROOT), start_new_session=True,
-        )
+        self.launch = control.start_controllers(cfg_path, "pipeline")
         self.probe.wait(
             lambda: self.probe.state is not None
             and self.probe.controllers.get("arm_controller") == "active"
             and self.probe.controllers.get("gripper_forward_controller") == "active",
-            BRING_UP_S, "controllers active",
+            control.BRING_UP_S, "controllers active",
         )
 
     def controller_manager(self):
@@ -314,13 +314,13 @@ class Session:
     def close(self) -> None:
         import rclpy
 
-        _stop(self.launch)
+        _control().stop_controllers(self.launch)
         self.executor.shutdown()
         self.probe.close()
         rclpy.try_shutdown()
 
 
-def measure_moves(cfg: dict, cfg_path: Path, jmap, launch_file, profile_server: bool = False,
+def measure_moves(cfg: dict, cfg_path: Path, jmap, profile_server: bool = False,
                   py_spy: str | None = None) -> dict:
     """The twin in its own process, as in production; its server's topics remapped onto the hardware side."""
     import psutil
@@ -330,15 +330,15 @@ def measure_moves(cfg: dict, cfg_path: Path, jmap, launch_file, profile_server: 
     started = time.monotonic()
     twin = subprocess.Popen(
         [*sampler, sys.executable, "-m", "so101_sim.node", "--config", str(cfg_path), "--stack", "pipeline",
-         "--no-view", "--ros-args", "-p", "joint_units:=rad",
-         "-r", f"{cfg['robot']['command_topic']}:={launch_file.HARDWARE_COMMANDS}",
-         "-r", f"{cfg['robot']['state_topic']}:={launch_file.HARDWARE_STATES}"],
+         "--no-view", "--ros-args",
+         "-r", f"{cfg['robot']['command_topic']}:={_control().HARDWARE_COMMANDS}",
+         "-r", f"{cfg['robot']['state_topic']}:={_control().HARDWARE_STATES}"],
         cwd=str(ROOT), start_new_session=True, env=env,
     )
     session = None
     twin_pid = twin.pid
     try:
-        session = Session(jmap, launch_file, cfg_path)
+        session = Session(jmap, cfg_path)
         probe = session.probe
         twin_proc = psutil.Process(twin.pid)
         if py_spy:
@@ -366,39 +366,7 @@ def measure_moves(cfg: dict, cfg_path: Path, jmap, launch_file, profile_server: 
         _wait_exit(twin_pid, 10.0)
 
 
-def measure_baseline(cfg: dict, cfg_path: Path) -> dict:
-    """The same moves without ros2_control: the twin in its own process, its server
-    on the degree topics, and the pipeline's Ros2ArmClient sending one goal per move."""
-    import psutil
-
-    from common.servo_profile import shared_profiler
-    from vla_pipeline.robot.robot_node import Ros2ArmClient
-
-    twin = subprocess.Popen(
-        [sys.executable, "-m", "so101_sim.node", "--config", str(cfg_path), "--stack", "pipeline", "--no-view"],
-        cwd=str(ROOT), start_new_session=True,
-    )
-    arm = None
-    try:
-        arm = Ros2ArmClient(cfg, state_timeout_s=BRING_UP_S)
-        twin_proc = psutil.Process(twin.pid)
-        twin_proc.cpu_percent(None)
-        moves = []
-        for name, goal in _moves(cfg):
-            eta = float(shared_profiler().plan(arm.get_joints(), goal).eta_s)
-            sent = time.monotonic()
-            how = arm.move_to(goal)
-            took = time.monotonic() - sent
-            moves.append({"move": name, "planned_s": round(eta, 3), "move_to_s": round(took, 3), "how": how,
-                          "final_error_deg": round(_error_deg(arm.get_joints(), goal), 2)})
-        return {"cpu_percent_of_one_core": {"twin": round(twin_proc.cpu_percent(None), 1)}, "moves": moves}
-    finally:
-        if arm is not None:
-            arm.close()
-        _stop(twin)
-
-
-def measure_grasp(cfg: dict, cfg_path: Path, jmap, launch_file, domain: int) -> dict:
+def measure_grasp(cfg: dict, cfg_path: Path, jmap, domain: int) -> dict:
     """The twin in this process, so a ball can be staged between the jaws."""
     from so101_sim.domain_lock import acquire
     from so101_sim.kinematics import OPEN_GRIPPER
@@ -408,13 +376,14 @@ def measure_grasp(cfg: dict, cfg_path: Path, jmap, launch_file, domain: int) -> 
     lock = acquire(domain)
     import rclpy
 
-    rclpy.init(args=["--ros-args", "-p", "joint_units:=rad"])
-    in_process = dict(cfg, robot={**cfg["robot"], "command_topic": launch_file.HARDWARE_COMMANDS,
-                                  "state_topic": launch_file.HARDWARE_STATES})
+    rclpy.init()
+    control = _control()
+    in_process = dict(cfg, robot={**cfg["robot"], "command_topic": control.HARDWARE_COMMANDS,
+                                  "state_topic": control.HARDWARE_STATES})
     world, nodes, closers = build_nodes(in_process, stack="pipeline", config_path=str(cfg_path), view=False)
     session = None
     try:
-        session = Session(jmap, launch_file, cfg_path, extra=nodes)
+        session = Session(jmap, cfg_path, extra=nodes)
         sim0, wall0 = float(world.data.time), time.monotonic()
         reached = run_move(session.probe, "to the grasp pose", GRASP_POSE)
         if reached["settled_s"] is None:
@@ -437,11 +406,6 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--domain", type=int, default=88, help="private ROS domain for the measurement")
     ap.add_argument("--out", default=str(ROOT / "_artifacts" / "ros2_control_poc" / "report.json"))
-    ap.add_argument("--server-mode", choices=["direct", "streaming"], default="direct",
-                    help="direct: one servo goal per change, with its planned profile (config/pipeline.yaml); "
-                    "streaming: every tick written at the servo's full speed (main's 8 deg per-tick clamp)")
-    ap.add_argument("--baseline", action="store_true",
-                    help="the same moves without ros2_control, through the pipeline's Ros2ArmClient")
     ap.add_argument("--profile-server", action="store_true",
                     help="SO101_PROFILE=1 in the twin: its server logs loop rate and bus timing once a second")
     ap.add_argument("--py-spy", default=None, metavar="FILE",
@@ -449,21 +413,14 @@ def main() -> int:
     args = ap.parse_args()
 
     os.environ["ROS_DOMAIN_ID"] = str(args.domain)
-    import importlib.util
-
     import yaml
 
     from so101_sim.config import load_sim_config
     from so101_sim.mapping import JointMap
 
-    spec = importlib.util.spec_from_file_location("so101_control_launch", LAUNCH)
-    launch_file = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(launch_file)
 
     cfg = yaml.safe_load(CONFIG.read_text())
     cfg["robot"]["backend"] = "sim"
-    if args.server_mode == "streaming":
-        cfg["robot"]["max_relative_target"] = 8.0
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     cfg_path = out.with_suffix(".config.yaml")
@@ -471,15 +428,10 @@ def main() -> int:
     sim = load_sim_config(cfg)
     jmap = JointMap(sim["joint_map"], sim["gripper_map"])
 
-    report = {"control_fps": cfg["robot"]["control_fps"], "server_mode": args.server_mode}
-    if args.baseline:
-        report["baseline"] = measure_baseline(cfg, cfg_path)
-        out.write_text(json.dumps(report, indent=1))
-        print(json.dumps(report, indent=1))
-        return 0
-    report["moves_phase"] = measure_moves(cfg, cfg_path, jmap, launch_file, args.profile_server, args.py_spy)
+    report = {"control_fps": cfg["robot"]["control_fps"]}
+    report["moves_phase"] = measure_moves(cfg, cfg_path, jmap, args.profile_server, args.py_spy)
     out.write_text(json.dumps(report, indent=1))
-    report["grasp_phase"] = measure_grasp(cfg, cfg_path, jmap, launch_file, args.domain)
+    report["grasp_phase"] = measure_grasp(cfg, cfg_path, jmap, args.domain)
     out.write_text(json.dumps(report, indent=1))
     print(json.dumps(report, indent=1))
     print(f"report: {out}")

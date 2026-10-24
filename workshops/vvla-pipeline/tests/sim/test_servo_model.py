@@ -36,6 +36,24 @@ def test_current_follows_the_datasheet(torque_nm, moving, counts):
     assert int(cm.present_current()[GRIPPER]) == counts
 
 
+@pytest.mark.parametrize("amps, torque_nm", [
+    (0.006, 0.0),  # idle
+    (0.65, 0.49),  # the rated 5 kg·cm
+    (2.5, 1.91),  # the 19.5 kg·cm stall
+])
+def test_current_and_torque_convert_along_the_datasheet_line(amps, torque_nm):
+    """The arm server's effort in N·m and a behavior's current counts, through one line."""
+    from so101_sim.config import DEFAULTS
+    from so101_sim.servo import current_to_torque_nm, torque_nm_to_current
+
+    cm = DEFAULTS["current_model"]
+    counts = amps * 1000.0 / cm["ma_per_unit"]
+    assert current_to_torque_nm(counts, cm) == pytest.approx(torque_nm)
+    assert torque_nm_to_current(torque_nm, cm) == pytest.approx(counts)
+    for c in (counts, 120.0):
+        assert torque_nm_to_current(current_to_torque_nm(c, cm), cm) == pytest.approx(c)
+
+
 @pytest.fixture(scope="module")
 def world():
     from so101_sim.world import SimWorld

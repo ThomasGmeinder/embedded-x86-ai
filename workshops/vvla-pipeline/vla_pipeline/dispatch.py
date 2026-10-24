@@ -159,6 +159,7 @@ class Dispatcher:
             self.ctx.stop_event.clear()
             self.current = None
             self.busy.clear()
+            logger.info("=== %s ended (%s) ===", cmd.intent.value, "stopped" if stopped else "ok" if ok else "failed")
             self._emit("behavior_end", intent=cmd.intent.value, ok=ok, stopped=stopped)
         return cmd
 
