@@ -177,12 +177,8 @@ def test_grip_empty_jaws_reports_nothing(pipeline_rig):
 # pick and place / fetch (YOLO on the arm camera + scripted person)
 # ---------------------------------------------------------------------------
 PERSON_LEFT = Person(cx=0.3, wrist=(0.4, 0.45))
-
-
-def _descend_pose(cfg, pan: float = 0.0) -> dict:
-    pp = cfg["behaviors"]["pick_place"]
-    return {"shoulder_pan": pan, **pp["approach_pose"], "shoulder_lift": float(pp["descend_lift"]),
-            "wrist_roll": 0.0}
+# The open jaws low over the table, closing axis horizontal.
+_LOW_POSE = {"shoulder_pan": 0.0, "shoulder_lift": 9.0, "elbow_flex": 20.0, "wrist_flex": 54.0, "wrist_roll": 0.0}
 
 
 def _assert_others_in_place(rig, handled: str):
@@ -215,9 +211,9 @@ def _assert_held_out(rig, body: str, spoken: str, z0: float):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("spot", [
-    None,  # its default spot among the other props, in reach of the fixed poses too
-    (0.22, -0.04),  # closer than the fixed descend pose reaches
-    (0.32, 0.0),  # farther than the fixed descend pose reaches
+    None,  # its default spot among the other props
+    (0.22, -0.04),  # close to the base
+    (0.32, 0.0),  # far out in front
     (0.25, -0.10),
 ], ids=["default", "near", "far", "right"])
 def test_pick_up_the_ball(pipeline_rig, caplog, spot):
@@ -292,23 +288,6 @@ def test_bottle_that_slips_out_mid_carry_is_reported_dropped(pipeline_rig):
     assert rig.event_times("behavior_end", intent="pick_place", ok=False)
 
 
-@pytest.mark.slow
-def test_pick_ball_out_of_fixed_reach_says_so(pipeline_rig):
-    rig = pipeline_rig
-    rig.cfg["behaviors"]["pick_place"]["reach"] = "fixed"
-    rig.pose.keys = [(0.0, [PERSON_LEFT])]
-    # in view of the arm camera but past the taught descend pose: anywhere short
-    # of it the missed grab pushes the ball under the parked jaws
-    z0 = rig.put("sports_ball", [0.34, 0.0, 0.015])[2]
-    rig.run([(0.0, "pick up the ball")])
-
-    assert rig.said_any("couldn't get a grip on the sports ball"), rig.said
-    assert not rig.said_any("Got the"), rig.said
-    assert rig.trace.heights("sports_ball").max() - z0 < 0.03, "ball was lifted"
-    assert rig.event_times("behavior_end", intent="pick_place", ok=False)
-    _assert_at(rig, _rest())
-
-
 def _twin_camera_calibration() -> dict:
     """The twin's own wrist camera, in the format ``scripts/calibrate_arm_camera.py`` prints."""
     from so101_sim.kinematics import matrix_to_rpy, shared_kinematics
@@ -339,6 +318,21 @@ def test_pick_on_an_uncalibrated_real_arm_asks_for_calibration(pipeline_rig):
     _assert_at(rig, start, tol=1.0, joints=BODY + ("gripper",))
 
 
+def test_pick_with_the_arm_camera_offline_refuses(pipeline_rig):
+    """Only the arm camera can locate the object: without it the pick refuses before it moves."""
+    rig = pipeline_rig
+    rig.ctx.arm_camera = None
+    rig.default_scene()
+    start = rig.joints()
+    rig.run([(0.0, "pick up the ball")])
+
+    assert rig.said_any("The arm camera is offline"), rig.said
+    assert rig.event_times("behavior_end", intent="pick_place", ok=False)
+    assert rig.detector.calls == 0, "the arm looked for the ball"
+    assert not rig.disturbed(), f"the arm moved objects (m): {rig.disturbed()}"
+    _assert_at(rig, start, tol=1.0, joints=BODY + ("gripper",))
+
+
 @pytest.mark.slow
 def test_pick_on_a_calibrated_real_arm_uses_its_calibration(pipeline_rig, caplog):
     """A printed calibration (here the twin's own camera) is what the pick locates with."""
@@ -358,7 +352,7 @@ def test_pick_on_a_calibrated_real_arm_uses_its_calibration(pipeline_rig, caplog
 
 def test_pick_unknown_object_fails_safely(pipeline_rig):
     rig = pipeline_rig
-    rig.stage("toothbrush", _descend_pose(rig.cfg))
+    rig.stage("toothbrush", _LOW_POSE)
     rig.run([(0.0, "pick up the pen")])
     assert rig.said_any("don't know what a pen looks like"), rig.said
     assert not any(s.grasped.get("toothbrush") for s in rig.trace.samples)

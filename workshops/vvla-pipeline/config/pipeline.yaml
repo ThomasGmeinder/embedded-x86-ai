@@ -112,7 +112,7 @@ cameras:
     use_ros2: true
     topic: /cameras/arm/image_raw
     stale_after_s: 1.0
-    # Calibration for locating objects (pick_place reach: ik), printed by
+    # Calibration for locating objects (pick_place), printed by
     # scripts/calibrate_arm_camera.py. null: the twin uses its wrist_cam model;
     # a real arm (robot.backend: real) refuses to pick until both are set.
     intrinsics: null          # {fx, fy, cx, cy, dist: [k1, k2, p1, p2, k3], width, height}
@@ -220,18 +220,12 @@ behaviors:
     # Fallback view of the near-base table, normally hidden behind the jaws.
     scan_near_pose: {shoulder_pan: 0.0, shoulder_lift: -57.3, elbow_flex: 63.2, wrist_flex: 67.5, wrist_roll: 0.0, gripper: 70.0}
     scan_near_pans: [0.0, -14.0, 14.0]
-    # ik: locate the object on the table from its box (camera ray meets the
-    # table plane) and solve the reach; fixed: approach_pose + descend_lift.
-    # With ik, no fix or no solve means out of reach; fixed also runs when the arm camera is offline.
-    reach: ik
+    # The object is located on the table from its box (the camera ray meets the
+    # table plane) and reached with IK; no fix or no solve means out of reach.
     table_z: -0.005           # table surface height in the arm's base frame (m)
-    pregrasp_above_m: 0.06    # ik: jaws open this far above the grasp, then descend in joint space
-    max_grasp_height_m: 0.03  # ik: grasp tall objects no higher than this above the table
-    fixed_jaw_gap_m: 0.005    # ik: after the descent, the hand moves sideways until the fixed finger is this far from a lying object
-    # Fixed reach: jaws ~12 cm above the table; descend_lift brings them down
-    # to a ~4 cm object at ~28 cm range with the closing axis horizontal.
-    approach_pose: {shoulder_lift: -15.0, elbow_flex: 20.0, wrist_flex: 54.0}
-    descend_lift: 9.0         # shoulder_lift while descending onto the object
+    pregrasp_above_m: 0.06    # jaws open this far above the grasp, then descend in joint space
+    max_grasp_height_m: 0.03  # grasp tall objects no higher than this above the table
+    fixed_jaw_gap_m: 0.005    # after the descent, the hand moves sideways until the fixed finger is this far from a lying object
     wrist_align_classes: [toothbrush]
     wrist_align_pregrasp_above_m: 0.10  # pre-grasp height above a thin object
     wrist_align_grasp_width_m: 0.024     # toothbrush handle width across the jaws

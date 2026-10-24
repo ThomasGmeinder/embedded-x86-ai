@@ -20,7 +20,7 @@
             reports gripper current, contact and lift - the numbers the grip
             behavior's ``load_threshold`` is tuned against.
 ``framing`` renders the wrist camera with an object in the open jaws (the
-            arm-camera view the pick behavior servos on).
+            arm-camera view that grip checks the jaws in).
 ``mirror``  (rig attached) reads the REAL arm's joints with torque off and
             drives the twin to the same values, side by side, so a sign or
             offset error in ``sim.joint_map`` is obvious.
@@ -36,8 +36,7 @@ import numpy as np
 PIPELINE_POSES = {
     "rest": {},
     "scan": dict(shoulder_pan=0.0, shoulder_lift=-55.0, elbow_flex=65.0, wrist_flex=45.0, wrist_roll=0.0, gripper=70.0),
-    "approach": dict(shoulder_pan=0.0, shoulder_lift=-35.0, elbow_flex=45.0, wrist_flex=35.0, wrist_roll=0.0, gripper=75.0),
-    "descend": dict(shoulder_pan=0.0, shoulder_lift=-20.0, elbow_flex=45.0, wrist_flex=35.0, wrist_roll=0.0, gripper=75.0),
+    "low": dict(shoulder_pan=0.0, shoulder_lift=-20.0, elbow_flex=45.0, wrist_flex=35.0, wrist_roll=0.0, gripper=75.0),
     "block": dict(shoulder_pan=35.0, shoulder_lift=-45.0, elbow_flex=60.0, wrist_flex=40.0, wrist_roll=0.0, gripper=70.0),
     "present": dict(shoulder_pan=0.0, shoulder_lift=-35.0, elbow_flex=30.0, wrist_flex=10.0, wrist_roll=0.0, gripper=85.0),
 }
@@ -46,7 +45,7 @@ PIPELINE_POSES = {
 GRASPS = [
     ("toothbrush", "present", 85.0),  # grip: hand a thin object to the jaws
     ("book", "block", 70.0),  # fetch_block uses the prop at its taught spot
-    ("sports_ball", "descend", 75.0),  # pick_place
+    ("sports_ball", "low", 75.0),  # pick_place closes on a ball lying low
 ]
 
 
@@ -58,9 +57,6 @@ def _poses_from_config(cfg: dict | None) -> dict:
     pp = b.get("pick_place") or {}
     if pp.get("scan_pose"):
         poses["scan"] = dict(pp["scan_pose"])
-    if pp.get("approach_pose"):
-        poses["approach"] = {**poses["approach"], **pp["approach_pose"]}
-        poses["descend"] = {**poses["approach"], "shoulder_lift": float(pp.get("descend_lift", -20.0))}
     fb = b.get("fetch_block") or {}
     if fb.get("block_pose"):
         poses["block"] = {**fb["block_pose"], "gripper": 70.0}

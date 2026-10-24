@@ -98,7 +98,7 @@ cameras:
     use_ros2: true
     topic: /cameras/arm/image_raw
     stale_after_s: 1.0
-    # for locating objects (pick_place reach: ik); print with scripts/calibrate_arm_camera.py
+    # for locating objects (pick_place); print with scripts/calibrate_arm_camera.py
     # null: the twin uses its own camera model; a real arm refuses to pick until both are set
     intrinsics: null                # {fx, fy, cx, cy, dist, width, height}
     extrinsics: null                # {pos: [x, y, z] m, rpy: [r, p, y] deg} on the gripper
@@ -192,13 +192,10 @@ pick_place:                         # "pick up the ball": detect on the arm came
   scan_pans: [0.0, -14.0, 39.0, -52.0, 71.0]  # sweep workspace; tune for the real camera/FOV
   scan_near_pose: {shoulder_pan: 0.0, shoulder_lift: -57.3, elbow_flex: 63.2, wrist_flex: 67.5, wrist_roll: 0.0, gripper: 70.0}
   scan_near_pans: [0.0, -14.0, 14.0]  # fallback for near objects hidden behind the jaws
-  reach: ik                         # ik: locate on the table + IK (no solve = out of reach) | fixed
-  table_z: -0.005                   # table surface height in the arm's base frame (m)
-  pregrasp_above_m: 0.06            # ik: jaws open this far above the grasp, then descend in joint space
-  max_grasp_height_m: 0.03          # ik: grasp tall objects no higher than this
-  fixed_jaw_gap_m: 0.005            # ik: after the descent, the hand moves sideways until the fixed finger is this far from a lying object
-  approach_pose: {shoulder_lift: -15.0, elbow_flex: 20.0, wrist_flex: 54.0}  # fixed: jaws ~12 cm up
-  descend_lift: 9.0                 # down to a ~4 cm object, closing axis horizontal
+  table_z: -0.005                   # table surface height in the arm's base frame (m); located there, reached with IK
+  pregrasp_above_m: 0.06            # jaws open this far above the grasp, then descend in joint space
+  max_grasp_height_m: 0.03          # grasp tall objects no higher than this
+  fixed_jaw_gap_m: 0.005            # after the descent, the hand moves sideways until the fixed finger is this far from a lying object
   wrist_align_classes: [toothbrush]
   wrist_align_pregrasp_above_m: 0.10
   wrist_align_grasp_width_m: 0.024

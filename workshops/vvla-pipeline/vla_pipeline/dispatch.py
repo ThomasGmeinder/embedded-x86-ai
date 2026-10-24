@@ -12,7 +12,8 @@ the ``--text-commands`` stdin loop calls for every utterance:
 
 1. startup grace window (the mic's first noisy moments are ignored);
 2. stop fast path - a stop keyword sets ``ctx.stop_event`` immediately,
-   without an LLM round trip, interrupting whatever behavior is running;
+   without an LLM round trip, interrupting whatever behavior is running,
+   and cancels a command whose parse it overlaps;
 3. noise / hallucination gate;
 4. queue for the dispatch loop - and, if a behavior is running, set the stop
    event so it ends gracefully and the new command takes over (switch).
@@ -70,6 +71,7 @@ class Dispatcher:
         self.holding = threading.Event()  # set while the console is resetting the scene
         self._work = threading.Condition()
         self._pending = 0  # transcripts queued and not yet run or dropped, the running one included
+        self._stops = 0  # stops heard so far
 
     def _emit(self, event: str, **data) -> None:
         for fn in list(self.listeners):
@@ -88,8 +90,10 @@ class Dispatcher:
             self._emit("ignored", text=text, reason="grace")
             return
         if self.is_stop(text):
+            with self._work:
+                self._stops += 1
+                self.ctx.stop_event.set()
             self.ctx.say("Stopping.")
-            self.ctx.stop_event.set()
             self._emit("stop", text=text)
             return
         if self.is_noise(text):
@@ -109,7 +113,13 @@ class Dispatcher:
 
     # ------------------------------------------------------------- dispatch
     def dispatch(self, text: str) -> ParsedCommand | None:
-        """Parse and run one transcript on the calling thread."""
+        """Parse and run one transcript on the calling thread.
+
+        A stop heard while the LLM parses cancels the command it returns. The
+        check and the stop-event clear stay under the lock stops are counted under.
+        """
+        with self._work:
+            stops = self._stops
         cmd = self.parse(text)
         self._emit("parsed", text=text, intent=cmd.intent.value, params=dict(cmd.params or {}))
         if cmd.intent in (Intent.UNKNOWN, Intent.STOP):
@@ -120,7 +130,14 @@ class Dispatcher:
         if handler is None:
             self.ctx.say(f"No behavior registered for '{cmd.intent.value}'.")
             return cmd
-        self.ctx.stop_event.clear()
+        with self._work:
+            cancelled = self._stops != stops
+            if not cancelled:
+                self.ctx.stop_event.clear()
+        if cancelled:
+            logger.info("Stop heard while %r was parsed - %s not run.", text, cmd.intent.value)
+            self._emit("cancelled", text=text, intent=cmd.intent.value)
+            return cmd
         logger.info("=== %s %s ===", cmd.intent.value, cmd.params or "")
         self.current = cmd
         self.busy.set()

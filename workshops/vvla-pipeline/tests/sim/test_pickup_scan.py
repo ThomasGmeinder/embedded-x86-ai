@@ -111,7 +111,6 @@ def _pp():
         "scan_near_pose": dict(NEAR),
         "scan_near_pans": [0.0, -14.0],
         "ambiguous_ratio": 2.0,
-        "reach": "ik",
         "retries": 1,
         "wrist_align_classes": ["toothbrush"],
     }
@@ -195,16 +194,54 @@ def test_near_sweep_runs_only_when_the_high_sweep_stored_nothing(module, caplog)
     pp = _pp()
     empty = _Camera([_frame(0), _frame(0), _frame(0), _frame(1), _frame(0)])
     arm = _Arm()
-    views, status, _, _ = mod._search_views(arm, empty, _find, "ball", pp, None, empty)
+    views, status, _, _ = mod._search_views(arm, empty, _find, "ball", pp, None)
     assert status == "ok" and views
     assert "scan near pan 0.0" in caplog.text
     assert any(abs(item["joints"]["shoulder_lift"] - NEAR["shoulder_lift"]) < 1e-6 for item in views)
 
     caplog.clear()
     hit = _Camera([_frame(1), _frame(0), _frame(0)])
-    views, status, _, _ = mod._search_views(arm, hit, _find, "ball", pp, None, hit)
+    views, status, _, _ = mod._search_views(arm, hit, _find, "ball", pp, None)
     assert status == "ok" and views
     assert "scan near pan" not in caplog.text
+
+
+class _DeadCamera:
+    """An arm camera whose stream delivers no frame within its staleness window."""
+
+    def read_after(self, settled_at):
+        return False, None
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_an_arm_camera_without_frames_refuses_the_pick_at_the_first_pan(module):
+    mod = _mod(module)
+    arm, said = _Arm(), []
+
+    class _Finder:
+        find = staticmethod(_find)
+
+    class _Ctx:
+        cfg = {"robot": {"backend": "sim"}, "pick_place": _pp(), "grip": {}}
+        arm_camera = _DeadCamera()
+        shared_state = {}
+        detector = _Finder()
+
+        def __init__(self):
+            self.arm = arm
+
+        def say(self, message):
+            said.append(message)
+
+        def stop_check(self):
+            return False
+
+    class _Cmd:
+        object_name = "ball"
+
+    assert not mod.run_pick_place(_Ctx(), _Cmd())
+    assert said == ["Looking for a ball.", "The arm camera is offline - I can't pick anything up."]
+    assert len(arm.returned_at) == 1, "the scan panned on without frames"
 
 
 def test_ball_descent_stays_within_5_mm_of_the_vertical():

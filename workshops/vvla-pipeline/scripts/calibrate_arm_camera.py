@@ -6,7 +6,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Calibrate the SO-101 wrist camera so pick_place can locate objects (``reach: ik``).
+"""Calibrate the SO-101 wrist camera so pick_place can locate objects.
 
 pick_place turns the YOLO box of an object into a position on the table with
 the camera's intrinsics and its mount on the gripper. On a real arm it

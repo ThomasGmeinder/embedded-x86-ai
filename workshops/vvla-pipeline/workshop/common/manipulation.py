@@ -15,12 +15,10 @@ The pipeline's remaining voice commands, in the workshop's handler shape
   "open", or "drop it" opens the jaws; gesture_mimic hands them to the pinch.
 - **pick_place** - ground the spoken object name to a COCO class, walk the
   scan until one settled frame holds a usable box, locate that frame once on
-  the table and reach it with IK
-  (``so101_sim.kinematics``; the taught poses only with ``reach: fixed`` or
-  the arm camera offline), grasp, lift it above the other objects, and hold
-  it out. The jaws stay
-  closed until "release", "open", or "drop it". A real arm whose camera is
-  not calibrated refuses the IK reach and says how to calibrate it.
+  the table and reach it with IK (``so101_sim.kinematics``), grasp, lift it
+  above the other objects, and hold it out. The jaws stay closed until
+  "release", "open", or "drop it". With the arm camera offline, or on a real
+  arm whose camera is not calibrated, it refuses and says why.
 - **fetch_block** - fetch the block from its taught pose, then hand it over.
 
 The handover finds you with YOLO-pose on the mount camera, aims the pan
@@ -643,7 +641,7 @@ def _sweep_views(arm, camera, find, name, pose, pans, pp, stop_check, *, near=Fa
             "scan near pan" if near else "scan pan", float(pan), seen, joints_text(joints),
         )
         if not ok or frame is None:
-            continue
+            return views, "offline", saw_small, saw_large
         dets, resolved = find(frame, name)
         if resolved is None:
             return views, "unknown", saw_small, saw_large
@@ -681,15 +679,14 @@ def _sweep_views(arm, camera, find, name, pose, pans, pp, stop_check, *, near=Fa
     return views, "ok", saw_small, saw_large
 
 
-def _search_views(arm, camera, find, name, pp, stop_check, arm_camera, cam=None, accept=None):
+def _search_views(arm, camera, find, name, pp, stop_check, cam=None, accept=None):
     """High sweep first. The near pose runs only when that sweep stored nothing."""
     base = dict(pp["scan_pose"])
-    pans = pp.get("scan_pans") if camera is arm_camera else None
-    pans = list(pans or [base.get("shoulder_pan", 0.0)])
+    pans = list(pp.get("scan_pans") or [base.get("shoulder_pan", 0.0)])
     views, status, saw_small, saw_large = _sweep_views(
         arm, camera, find, name, base, pans, pp, stop_check, cam=cam, accept=accept,
     )
-    if status != "ok" or views or camera is not arm_camera or not pp.get("scan_near_pose"):
+    if status != "ok" or views or not pp.get("scan_near_pose"):
         return views, status, saw_small, saw_large
     near = dict(pp["scan_near_pose"])
     near_pans = list(pp.get("scan_near_pans") or [near.get("shoulder_pan", 0.0)])
@@ -880,6 +877,9 @@ def _return_along(arm, plan, stop_check, limits) -> bool:
     return _follow(arm, back if plan.beside is not None else back[1:], stop_check, limits, 1.5)
 
 
+_ARM_CAMERA_OFFLINE = "The arm camera is offline - I can't pick anything up."
+
+
 def run_pick_place(ctx, cmd) -> bool:
     """Find the named object, grasp it, and hold it out. The jaws stay closed."""
     pp, g = ctx.cfg["pick_place"], ctx.cfg["grip"]
@@ -890,21 +890,12 @@ def run_pick_place(ctx, cmd) -> bool:
     if not name:
         ctx.say("What should I pick up? Try: pick up the ball.")
         return False
-    camera = ctx.arm_camera or ctx.camera
+    camera = ctx.arm_camera
     if camera is None:
-        ctx.say("I can't see anything - both cameras are offline.")
+        ctx.say(_ARM_CAMERA_OFFLINE)
         return False
-    if camera is not ctx.arm_camera:
-        ctx.say("Arm camera is offline - using the mount camera (coarser aim).")
-
-    cams = ctx.cfg.get("cameras") or {}
-    cam = cams.get("arm") if camera is ctx.arm_camera else cams.get("mount")
-    use_ik = (
-        pp.get("reach", "fixed") == "ik"
-        and ctx.arm_camera is not None
-        and camera is ctx.arm_camera
-    )
-    if use_ik and not _camera_model_known(ctx.cfg, cam):
+    cam = (ctx.cfg.get("cameras") or {}).get("arm") or {}
+    if not _camera_model_known(ctx.cfg, cam):
         logger.warning("[pick] robot.backend is not sim and cameras.arm has no intrinsics and extrinsics")
         ctx.say("The arm camera isn't calibrated: run scripts/calibrate_arm_camera.py.")
         return False
@@ -923,10 +914,13 @@ def run_pick_place(ctx, cmd) -> bool:
         return False
 
     views, status, saw_small, saw_large = _search_views(
-        ctx.arm, camera, ctx.detector.find, name, pp, ctx.stop_check, ctx.arm_camera, cam,
-        accept if use_ik else None,
+        ctx.arm, camera, ctx.detector.find, name, pp, ctx.stop_check, cam, accept,
     )
     if status == "stopped" or ctx.stop_check():
+        return False
+    if status == "offline":
+        ctx.say(_ARM_CAMERA_OFFLINE)
+        ctx.arm.go_to_rest()
         return False
     if status == "unknown":
         ctx.say(f"Sorry - I don't know what a {name} looks like.")
@@ -953,14 +947,11 @@ def run_pick_place(ctx, cmd) -> bool:
     for attempt in range(attempts):
         if ctx.stop_check():
             return False
-        if use_ik:
-            # The pipeline backstop, as the pipeline sends it. The workshop's
-            # 67.5° wrist cap holds even a ball's pre-grasp ~24° off vertical,
-            # and the fingers then swing in on the way down.
-            if not _execute_plan(ctx.arm, plan, ctx.stop_check, GRASP_LIMITS):
-                return False
-        else:
-            _reach_fixed(ctx)
+        # The pipeline backstop, as the pipeline sends it. The workshop's
+        # 67.5° wrist cap holds even a ball's pre-grasp ~24° off vertical,
+        # and the fingers then swing in on the way down.
+        if not _execute_plan(ctx.arm, plan, ctx.stop_check, GRASP_LIMITS):
+            return False
         if ctx.stop_check():
             return False
         gripped, hold = close_with_feedback(
@@ -975,7 +966,7 @@ def run_pick_place(ctx, cmd) -> bool:
         gripped = False
         ctx.arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
         ctx.arm.go_to({"gripper": OPEN_GRIPPER}, duration_s=0.6, stop_check=ctx.stop_check)
-        if attempt + 1 >= attempts or not use_ik:
+        if attempt + 1 >= attempts:
             continue
         ctx.say("The grasp slipped - trying once more.")
         if not _return_along(ctx.arm, plan, ctx.stop_check, GRASP_LIMITS):
@@ -1017,20 +1008,11 @@ def run_pick_place(ctx, cmd) -> bool:
     return True
 
 
-def _camera_model_known(cfg: dict, cam: dict | None) -> bool:
+def _camera_model_known(cfg: dict, cam: dict) -> bool:
     """The twin's camera model fits the twin only; a real arm locates with its own calibration."""
     if (cfg.get("robot") or {}).get("backend", "real") == "sim":
         return True
-    cam = cam or {}
     return camera_calibrated(cam.get("intrinsics"), cam.get("extrinsics"))
-
-
-def _reach_fixed(ctx) -> None:
-    """Jaws open over the object at the configured reach, then down onto it."""
-    pp = ctx.cfg["pick_place"]
-    above = {**pp["approach_pose"], "shoulder_pan": ctx.arm.get_joints()["shoulder_pan"]}
-    ctx.arm.go_to({**above, "gripper": OPEN_GRIPPER}, duration_s=1.5, stop_check=ctx.stop_check)
-    ctx.arm.go_to({"shoulder_lift": float(pp["descend_lift"])}, duration_s=1.5, stop_check=ctx.stop_check)
 
 
 def run_release(ctx, cmd=None) -> bool:

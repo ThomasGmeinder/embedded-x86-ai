@@ -203,16 +203,6 @@ def test_workshop_pick_up_the_bottle(workshop_rig, caplog):
     _assert_held_out(rig, "bottle", "bottle", z0)
 
 
-def test_workshop_pick_ball_out_of_fixed_reach_says_so(workshop_rig):
-    rig = workshop_rig
-    rig.cfg["pick_place"]["reach"] = "fixed"
-    z0 = _pick_ball(rig, [0.19, 0.0, 0.015])
-
-    assert rig.said_any("couldn't get a grip on the sports ball"), rig.said
-    assert not rig.said_any("Got the"), rig.said
-    assert rig.trace.heights("sports_ball").max() - z0 < 0.03, "ball was lifted"
-
-
 def test_workshop_pick_on_an_uncalibrated_real_arm_asks_for_calibration(workshop_rig):
     rig = workshop_rig
     rig.cfg["robot"]["backend"] = "real"

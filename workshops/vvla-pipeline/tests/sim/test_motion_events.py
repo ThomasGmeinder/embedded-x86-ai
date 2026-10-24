@@ -137,7 +137,7 @@ def test_moving_is_set_by_the_goal_write_before_physics_steps(world):
 
 
 def _keyframe_moves():
-    """Park, the pickup's scan sweep and fixed reach, the wave and every dance keyframe."""
+    """Park, the pickup's scan sweep, a reach down to the table, the wave and every dance keyframe."""
     from common.config import load_config
     from common.motion import DANCE_MOVES, REST_POSE, WAVE_UP, clamp_joints
 
@@ -150,9 +150,9 @@ def _keyframe_moves():
         goal = {**pose, "shoulder_pan": float(pan)}
         moves.append((f"scan pan {pan:+.0f}", pose, goal))
         pose = goal
-    approach = clamp_joints({**scan, **pp["approach_pose"]})
-    descend = clamp_joints({**approach, "shoulder_lift": float(pp["descend_lift"])})
-    moves += [("reach over", scan, approach), ("descend", approach, descend), ("park from the table", descend, dict(REST_POSE))]
+    over = clamp_joints({**scan, "shoulder_lift": -15.0, "elbow_flex": 20.0, "wrist_flex": 54.0})
+    low = clamp_joints({**over, "shoulder_lift": 9.0})
+    moves += [("reach over", scan, over), ("down to the table", over, low), ("park from the table", low, dict(REST_POSE))]
     for name, keyframes in DANCE_MOVES.items():
         pose = dict(REST_POSE)
         for i, keyframe in enumerate(keyframes):
