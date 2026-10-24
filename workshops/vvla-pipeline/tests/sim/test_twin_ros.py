@@ -10,7 +10,7 @@
 The context is the section 5 console's (``TwinRig``): ``ros.arm_client.Ros2ArmClient``
 on the controllers, the arm camera behind ``FanoutCamera``, the YOLO eyes,
 and the keyword parser through ``handle_transcript``. The checks mirror the
-in-process ``test_workshop_scenarios.py``. Every reading of the twin comes
+in-process workshop scenarios in ``test_scenarios.py``. Every reading of the twin comes
 from the twin's props (their TF frames and ``/diagnostics``) and the arm
 server's ``/so101/hardware/*`` topics.
 

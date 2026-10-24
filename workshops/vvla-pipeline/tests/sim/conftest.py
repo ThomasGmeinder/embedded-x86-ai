@@ -302,32 +302,23 @@ def eyes(request, pipeline_cfg, workshop_cfg):
 
 
 @pytest.fixture
-def pipeline_rig(request, twins, pipeline_cfg, mock_llm, eyes):
-    from rigs import PipelineRig
+def rig(request, stack, twins, mock_llm, eyes):
+    """The tier-1 rig of ``stack`` (``pipeline`` or ``workshop``) on that stack's twin."""
+    from rigs import PipelineRig, WorkshopRig
 
+    cls, title = {
+        "pipeline": (PipelineRig, "pipeline"),
+        "workshop": (WorkshopRig, f"workshop ({WORKSHOP_PROJECT.name})"),
+    }[stack]
+    cfg = request.getfixturevalue(f"{stack}_cfg")
     mock_llm.requests.clear()
-    rig = PipelineRig(
-        twins("pipeline", pipeline_cfg), pipeline_cfg, mock_llm.base_url,
-        recorder_path=_video_path(request, "tier1"), title=f"pipeline: {request.node.name}",
-        detector=eyes("pipeline"),
+    made = cls(
+        twins(stack, cfg), cfg, mock_llm.base_url,
+        recorder_path=_video_path(request, "tier1"), title=f"{title}: {request.node.name}",
+        detector=eyes(stack),
     )
-    yield rig
-    _finish(request, rig, "tier1")
-
-
-@pytest.fixture
-def workshop_rig(request, twins, workshop_cfg, mock_llm, eyes):
-    from rigs import WorkshopRig
-
-    mock_llm.requests.clear()
-    rig = WorkshopRig(
-        twins("workshop", workshop_cfg), workshop_cfg, mock_llm.base_url,
-        recorder_path=_video_path(request, "tier1"),
-        title=f"workshop ({WORKSHOP_PROJECT.name}): {request.node.name}",
-        detector=eyes("workshop"),
-    )
-    yield rig
-    _finish(request, rig, "tier1")
+    yield made
+    _finish(request, made, "tier1")
 
 
 @pytest.fixture
