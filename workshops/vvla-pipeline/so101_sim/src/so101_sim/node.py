@@ -399,7 +399,7 @@ def main() -> None:
 
     try:
         import rclpy
-        from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+        from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
     except ImportError:
         raise SystemExit("rclpy not importable - source /opt/ros/jazzy/setup.bash first") from None
 
@@ -426,7 +426,10 @@ def main() -> None:
         with open(args.scene, encoding="utf-8") as f:
             world.apply_scene(json.load(f))
         logger.info("scene loaded from %s", args.scene)
-    executor = MultiThreadedExecutor(num_threads=4)
+    # One thread: every callback here is short (the bus and the renderer run on
+    # their own threads), and rclpy's MultiThreadedExecutor rebuilt its wait set
+    # in a tight loop under a 60 Hz command stream, starving the physics.
+    executor = SingleThreadedExecutor()
     for n in nodes:
         executor.add_node(n)
     logger.info("digital twin up (%s stack): %d nodes", stack, len(nodes))

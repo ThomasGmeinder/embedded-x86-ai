@@ -190,6 +190,16 @@ class So101ServerNode(Node):
         self._direct_goal = r.get("max_relative_target", 8.0) is None
         self._last_sent_target: dict[str, float] | None = None
         self._torque_limit: int | None = None  # next gripper Torque_Limit to write
+        # joint_units:=rad puts radians on the joint topics for ros2_control's
+        # topic_based_ros2_control (the proof of concept), through the twin's joint map.
+        self._jmap = None
+        self._last_rad: tuple[float, list[float]] | None = None
+        if self.declare_parameter("joint_units", "deg").value == "rad":
+            from so101_sim.config import load_sim_config
+            from so101_sim.mapping import JointMap
+
+            sim = load_sim_config(cfg)
+            self._jmap = JointMap(sim["joint_map"], sim["gripper_map"])
 
         self.create_subscription(
             JointState, r["command_topic"], self._on_command, _best_effort_qos()
@@ -234,6 +244,8 @@ class So101ServerNode(Node):
         }
         if not joints:
             return
+        if self._jmap is not None:
+            joints = {n: self._jmap.to_cal(n, p) for n, p in joints.items()}
         with self._target_lock:
             self._target.update(clamp_joints(joints, GRASP_LIMITS))
             self._last_cmd_time = time.time()
@@ -306,15 +318,24 @@ class So101ServerNode(Node):
                     load = self._arm.get_gripper_load()
                     self._gripper_load = math.nan if load is None else float(load)
 
-                msg = _joint_state(
-                    self,
-                    MOTOR_NAMES,
-                    [joints[m] for m in MOTOR_NAMES],
-                    effort=[
-                        self._gripper_load if m == "gripper" else math.nan
-                        for m in MOTOR_NAMES
-                    ],
-                )
+                if self._jmap is None:
+                    msg = _joint_state(
+                        self,
+                        MOTOR_NAMES,
+                        [joints[m] for m in MOTOR_NAMES],
+                        effort=[
+                            self._gripper_load if m == "gripper" else math.nan
+                            for m in MOTOR_NAMES
+                        ],
+                    )
+                else:
+                    read_at = time.perf_counter()
+                    rad = [self._jmap.to_rad(m, joints[m]) for m in MOTOR_NAMES]
+                    msg = _joint_state(self, MOTOR_NAMES, rad)
+                    if self._last_rad is not None:
+                        then, before = self._last_rad
+                        msg.velocity = [(a - b) / (read_at - then) for a, b in zip(rad, before)]
+                    self._last_rad = (read_at, rad)
                 self._state_pub.publish(msg)
                 self._motion_pub.publish(motion_state_msg(self._arm, cmd_time, joints))
                 bus_errors = 0
@@ -330,13 +351,13 @@ class So101ServerNode(Node):
             if now - p_t0 >= 1.0:
                 if self._profile and not self._shutting_down:
                     self.get_logger().info(
-                        "PROFILE loop=%.1fHz (target %.0f)  send=%.1fms  read=%.1fms  "
-                        "worst_tick=%.0fms",
-                        p_n / (now - p_t0),
-                        self._control_fps,
-                        1000.0 * p_send_s / max(p_send, 1),
-                        1000.0 * p_read_s / max(p_read, 1),
-                        1000.0 * p_worst,
+                        "PROFILE loop=%.1fHz (target %.0f)  send=%.1fms  read=%.1fms  worst_tick=%.0fms" % (
+                            p_n / (now - p_t0),
+                            self._control_fps,
+                            1000.0 * p_send_s / max(p_send, 1),
+                            1000.0 * p_read_s / max(p_read, 1),
+                            1000.0 * p_worst,
+                        )
                     )
                 p_t0 = now
                 p_n = p_send = p_read = 0

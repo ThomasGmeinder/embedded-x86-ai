@@ -19,7 +19,8 @@
 #   1. apt build deps (skippable: --skip-apt)
 #      1b. Installs ROCm ${ROCM_VERSION} from repo.radeon.com if /opt/rocm is absent
 #      1c. Auto-detects the GPU arch (GFX_ARCH) via amdgpu-arch / rocminfo
-#      1d. Installs ROS 2 Jazzy from packages.ros.org if /opt/ros/jazzy is absent
+#      1d. Installs ROS 2 Jazzy from packages.ros.org if /opt/ros/jazzy is absent,
+#          then ros2_control, the controllers, xacro and the ROS build tools
 #   2. Installs uv (if missing) and creates a uv venv at ./.venv
 #      (--system-site-packages so the ROS 2 Jazzy python stack stays importable)
 #   3. Installs Python deps into the venv:
@@ -29,6 +30,8 @@
 #          LAST (section 4c) so nothing clobbers it; ROCm is never used for
 #          onnxruntime (llama.cpp + torch only)
 #   4. Builds llama.cpp with HIP/ROCm for the DETECTED arch into third_party/
+#      4e. Builds topic_based_ros2_control (the ros2_control hardware side that
+#          talks to the arm servers over topics) into the colcon workspace ros_ws/
 #   5. Downloads the models:
 #        - Whisper-base ONNX encoder/decoder
 #        - Whisper tokenizer + feature extractor (openai/whisper-base.en)
@@ -53,6 +56,7 @@ VENV_DIR="${REPO_ROOT}/.venv"
 THIRD_PARTY="${REPO_ROOT}/third_party"
 MODELS_DIR="${REPO_ROOT}/models"
 LLAMA_DIR="${THIRD_PARTY}/llama.cpp"
+ROS_WS="${REPO_ROOT}/ros_ws"
 
 # --- pinned versions / sources -----------------------------------------------
 # ROCm release installed by section 1b if /opt/rocm is absent (override with
@@ -69,6 +73,10 @@ TORCHAUDIO_SPEC='torchaudio==2.11.0+rocm7.13.0'
 LLAMA_GGUF_REPO="bartowski/Llama-3.2-3B-Instruct-GGUF"
 LLAMA_GGUF_FILE="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
 LLAMA_OUT_DIR="${MODELS_DIR}/llama-3.2-3b"
+# Not packaged for Jazzy, so section 4e builds it from this tag (BSD-3), with
+# the patches in patches/topic_based_ros2_control/.
+TOPIC_BRIDGE_REPO="https://github.com/PickNikRobotics/topic_based_ros2_control.git"
+TOPIC_BRIDGE_REF="0.3.0"
 # Installed Ryzen AI directory (wheels plus venv/). Keep it outside this
 # repository. Set before running, e.g.:
 #   export RYZEN_AI_WHEELS=$HOME/ryzen_ai-1.7.1
@@ -378,6 +386,11 @@ if [[ ! -f /opt/ros/jazzy/setup.bash ]]; then
       || die "ROS 2 Jazzy install failed - check packages.ros.org availability for ${UBUNTU_CODENAME}."
   fi
 fi
+if [[ "$SKIP_APT" -eq 0 && -f /opt/ros/jazzy/setup.bash ]]; then
+  log "Installing ros2_control, the controllers, xacro and the ROS build tools (sudo)"
+  sudo apt install -y ros-jazzy-ros2-control ros-jazzy-ros2-controllers ros-jazzy-xacro ros-dev-tools \
+    || die "ros2_control install failed - check packages.ros.org availability for ${UBUNTU_CODENAME}."
+fi
 
 # -----------------------------------------------------------------------------
 # 2. uv + venv (in repo root, layered over system/ROS python)
@@ -606,6 +619,35 @@ uv pip install 'opencv-contrib-python>=4.10' 'numpy<2' \
   || warn "GUI OpenCV install failed - cv2.imshow windows (yolo/mediapipe demos) may not open."
 
 # -----------------------------------------------------------------------------
+# 4e. ros2_control hardware side: topic_based_ros2_control into ros_ws/
+# -----------------------------------------------------------------------------
+# The venv stays out of this build: ament's CMake runs package.xml through
+# catkin_pkg, which only the system Python that ROS is built for has.
+if [[ -f /opt/ros/jazzy/setup.bash ]]; then
+  log "Building topic_based_ros2_control ${TOPIC_BRIDGE_REF} into ros_ws/"
+  if [[ ! -d "${ROS_WS}/src/topic_based_ros2_control/.git" ]]; then
+    git clone "$TOPIC_BRIDGE_REPO" "${ROS_WS}/src/topic_based_ros2_control"
+  fi
+  git -C "${ROS_WS}/src/topic_based_ros2_control" fetch --tags --quiet
+  git -C "${ROS_WS}/src/topic_based_ros2_control" checkout --quiet --force "$TOPIC_BRIDGE_REF"
+  for patch in "${REPO_ROOT}"/patches/topic_based_ros2_control/*.patch; do
+    git -C "${ROS_WS}/src/topic_based_ros2_control" apply "$patch" \
+      || die "Could not apply $(basename "$patch") to topic_based_ros2_control ${TOPIC_BRIDGE_REF}."
+  done
+  (
+    deactivate
+    set +u
+    # shellcheck disable=SC1091
+    source /opt/ros/jazzy/setup.bash
+    set -u
+    cd "$ROS_WS"
+    colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DPython3_EXECUTABLE=/usr/bin/python3
+  ) || die "topic_based_ros2_control build failed - see ${ROS_WS}/log/latest_build."
+else
+  warn "ROS 2 Jazzy not found - skipping the ros2_control hardware side (the ROS 2 arm transport needs it)."
+fi
+
+# -----------------------------------------------------------------------------
 # 5. Models
 # -----------------------------------------------------------------------------
 if [[ "$SKIP_MODELS" -eq 0 ]]; then
@@ -741,6 +783,7 @@ cat <<EOF
  Activate the environment (every new shell):
 
      source /opt/ros/jazzy/setup.bash      # if using the ROS 2 transport
+     source ros_ws/install/setup.bash      # ros2_control's topic_based_ros2_control
      source .venv/bin/activate
      source scripts/ryzen_ai_env.sh        # NPU runtime environment
 

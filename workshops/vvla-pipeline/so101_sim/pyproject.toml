@@ -29,4 +29,7 @@ so101_sim = [
     "models/props/*.obj",
     "models/props/*.png",
     "models/props/*.md",
+    "description/*.xacro",
+    "description/*.yaml",
+    "description/LICENSE.*",
 ]
