@@ -144,7 +144,7 @@ Llama is constrained by `config/intent.gbnf` so it can only ever emit `{"command
 | OS | Ubuntu 24.04 |
 | ROCm | 7.2.4 |
 | Ryzen AI SW | 1.7.1 (VitisAI ONNX Runtime EP) |
-| ROS 2 | Jazzy (optional — only for the ROS 2 transport) |
+| ROS 2 | Jazzy (required), with ros2_control and the controllers |
 | LeRobot | 0.5.2 (source install, `[feetech]`) |
 | PyTorch | 2.11.0+rocm7.13.0 from `repo.amd.com/rocm/whl/<detected gfx>`. The PyPI wheel is not used; it downloads the NVIDIA CUDA stack. |
 | Robot | LeRobot SO-101 follower arm |

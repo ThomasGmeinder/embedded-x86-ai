@@ -13,8 +13,7 @@ they are provided. The *wiring* (nodes, publishers, subscriptions, QoS,
 executors) is yours: see ``ros/``.
 
 All imports of ROS message types happen inside the functions so this module
-imports cleanly on machines without ROS 2 (and so the offline self-test can
-substitute its in-memory ROS shim, ``common.fakeros``, before first use).
+imports before ROS 2 is sourced (the model notebooks import it that way).
 """
 
 from __future__ import annotations
@@ -80,7 +79,7 @@ class Spinner:
 
 
 def ros2_available() -> bool:
-    """True when ``rclpy`` (real or shimmed) is importable."""
+    """True when ``rclpy`` is importable (ROS 2 is sourced)."""
     try:
         import rclpy  # noqa: F401
 
@@ -135,7 +134,7 @@ def joint_state_msg(names, positions, effort=None, node=None, velocity=None):
 def parse_joint_state(msg):
     """Unpack a JointState into ``(positions dict, gripper_effort or None)``.
 
-    The server publishes the gripper servo's current in ``effort`` aligned
+    The server publishes the gripper's torque in N·m in ``effort`` aligned
     with ``name``; NaN means "feedback unavailable" and maps to ``None``.
     """
     positions = {n: float(p) for n, p in zip(msg.name, msg.position)}

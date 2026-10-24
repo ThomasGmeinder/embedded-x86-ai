@@ -353,9 +353,8 @@ ROCM_WHL_INDEX="https://repo.amd.com/rocm/whl/${GFX_ARCH}/"
 # -----------------------------------------------------------------------------
 if [[ ! -f /opt/ros/jazzy/setup.bash ]]; then
   if [[ "$SKIP_APT" -eq 1 ]]; then
-    warn "ROS 2 Jazzy not found at /opt/ros/jazzy but --skip-apt given - cannot install it.
-       The ROS 2 transport will be unavailable (set robot.use_ros2: false), or
-       rerun without --skip-apt to install ros-jazzy-desktop."
+    die "ROS 2 Jazzy is required and is not at /opt/ros/jazzy, but --skip-apt was given.
+       Rerun without --skip-apt to install ros-jazzy-desktop."
   else
     log "Installing ROS 2 Jazzy (sudo; Ubuntu ${UBUNTU_CODENAME})"
     # ROS 2 requires a UTF-8 locale.
@@ -623,29 +622,25 @@ uv pip install 'opencv-contrib-python>=4.10' 'numpy<2' \
 # -----------------------------------------------------------------------------
 # The venv stays out of this build: ament's CMake runs package.xml through
 # catkin_pkg, which only the system Python that ROS is built for has.
-if [[ -f /opt/ros/jazzy/setup.bash ]]; then
-  log "Building topic_based_ros2_control ${TOPIC_BRIDGE_REF} into ros_ws/"
-  if [[ ! -d "${ROS_WS}/src/topic_based_ros2_control/.git" ]]; then
-    git clone "$TOPIC_BRIDGE_REPO" "${ROS_WS}/src/topic_based_ros2_control"
-  fi
-  git -C "${ROS_WS}/src/topic_based_ros2_control" fetch --tags --quiet
-  git -C "${ROS_WS}/src/topic_based_ros2_control" checkout --quiet --force "$TOPIC_BRIDGE_REF"
-  for patch in "${REPO_ROOT}"/patches/topic_based_ros2_control/*.patch; do
-    git -C "${ROS_WS}/src/topic_based_ros2_control" apply "$patch" \
-      || die "Could not apply $(basename "$patch") to topic_based_ros2_control ${TOPIC_BRIDGE_REF}."
-  done
-  (
-    deactivate
-    set +u
-    # shellcheck disable=SC1091
-    source /opt/ros/jazzy/setup.bash
-    set -u
-    cd "$ROS_WS"
-    colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DPython3_EXECUTABLE=/usr/bin/python3
-  ) || die "topic_based_ros2_control build failed - see ${ROS_WS}/log/latest_build."
-else
-  warn "ROS 2 Jazzy not found - skipping the ros2_control hardware side (the ROS 2 arm transport needs it)."
+log "Building topic_based_ros2_control ${TOPIC_BRIDGE_REF} into ros_ws/"
+if [[ ! -d "${ROS_WS}/src/topic_based_ros2_control/.git" ]]; then
+  git clone "$TOPIC_BRIDGE_REPO" "${ROS_WS}/src/topic_based_ros2_control"
 fi
+git -C "${ROS_WS}/src/topic_based_ros2_control" fetch --tags --quiet
+git -C "${ROS_WS}/src/topic_based_ros2_control" checkout --quiet --force "$TOPIC_BRIDGE_REF"
+for patch in "${REPO_ROOT}"/patches/topic_based_ros2_control/*.patch; do
+  git -C "${ROS_WS}/src/topic_based_ros2_control" apply "$patch" \
+    || die "Could not apply $(basename "$patch") to topic_based_ros2_control ${TOPIC_BRIDGE_REF}."
+done
+(
+  deactivate
+  set +u
+  # shellcheck disable=SC1091
+  source /opt/ros/jazzy/setup.bash
+  set -u
+  cd "$ROS_WS"
+  colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DPython3_EXECUTABLE=/usr/bin/python3
+) || die "topic_based_ros2_control build failed - see ${ROS_WS}/log/latest_build."
 
 # -----------------------------------------------------------------------------
 # 5. Models
@@ -782,7 +777,7 @@ cat <<EOF
 =============================================================================
  Activate the environment (every new shell):
 
-     source /opt/ros/jazzy/setup.bash      # if using the ROS 2 transport
+     source /opt/ros/jazzy/setup.bash      # ROS 2 (required)
      source .venv/bin/activate
      source scripts/ryzen_ai_env.sh        # NPU runtime environment
 

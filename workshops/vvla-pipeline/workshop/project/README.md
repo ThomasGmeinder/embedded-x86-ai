@@ -19,8 +19,7 @@ you're stuck or done.)
 3. **Implement component 2** (`ros/camera_node.py`, `ros/camera_client.py`,
    `ros/arm_node.py`, `ros/arm_client.py`, `ros/intent_node.py`):
 
-       python -m ros.selftest            # no hardware needed; the arm checks need ROS 2
-       python -m ros.selftest --fake     # the in-memory transport: the arm checks SKIP
+       python -m ros.selftest            # over ROS 2 (required); no hardware needed
 
 4. **Implement component 3** (`integration/dispatch.py`,
    `integration/mimic.py`, `integration/behaviors.py`), checking yourself
@@ -37,15 +36,15 @@ Run everything **from this directory** (the packages resolve from here).
 
     python selftest.py
 
-runs all three component harnesses against synthetic backends, tallies every
+runs all three component harnesses against synthetic backends (component 2
+over ROS 2, which the workshop requires), tallies every
 PASS / FAIL / TODO / SKIP into one scoreboard, and then re-runs them against
 `solution/` to prove the harness itself is trustworthy. Read the result as:
 **zero FAILs means nothing you've written so far conflicts with the solution -
 the only gap left is the TODOs it lists.** A FAIL is different from a TODO: it
 is code that ran and did the wrong thing, so fix it before moving on. Useful
 flags: `--strict` exits nonzero until every TODO is done (good for "am I
-finished?" and CI), `--quiet` prints just the scoreboards, `--real-ros` uses
-the real ROS 2 transport instead of the in-memory shim.
+finished?" and CI), `--quiet` prints just the scoreboards.
 
 `python app.py` is **fail-soft**: on a half-finished project it prints the
 TODOs *this* run still needs - and how to shrink that set with

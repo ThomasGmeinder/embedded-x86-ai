@@ -381,7 +381,7 @@ def _preflight(cfg, args) -> bool:
     print("Check your progress without the rig:")
     print("    python selftest.py                 # whole suite + solution parity")
     print("    python -m models.selftest          # component 1 only")
-    print("    python -m ros.selftest --fake      # component 2 (no ROS 2 needed; the arm checks SKIP)")
+    print("    python -m ros.selftest             # component 2 (over ROS 2)")
     print("    python -m integration.selftest     # component 3 only")
     print("\nOr shrink what THIS run needs with the laptop/CI flags:")
     print("    python app.py --dry-run --synthetic --no-llm")

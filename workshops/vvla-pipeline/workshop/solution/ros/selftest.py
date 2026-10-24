@@ -12,15 +12,9 @@ camera instead of V4L2, a dry-run arm instead of the Feetech bus, a keyword
 brain instead of llama-server - so every topic round-trip is real even with
 zero hardware attached.
 
-Transport:
-- With ROS 2 installed, the checks run over real rclpy/DDS in-process.
-- Without it, an in-memory ROS shim (``common.fakeros``) is installed first,
-  so the same student code runs unmodified. The shim even enforces DDS
-  reliability matching - a RELIABLE subscriber will not hear a BEST_EFFORT
-  publisher, exactly like the real rig.
-- The arm checks need real ROS 2: the arm runs under ros2_control (the
-  controllers start with ``launch/so101_control.launch.py``), which the shim
-  cannot host, so they SKIP on it.
+Transport: real rclpy/DDS in-process. ROS 2 is required (``source
+/opt/ros/jazzy/setup.bash``). The arm checks run the arm under ros2_control,
+as the rig does: the controllers start with ``launch/so101_control.launch.py``.
 
 The on-hardware equivalents (real cameras, real arm, ros2 CLI inspection)
 are listed at the end of each ROS notebook.
@@ -34,7 +28,6 @@ import sys
 import threading
 import time
 
-from common import fakeros
 from common.config import PROJECT_ROOT, load_config
 from common.feedback import Reporter
 
@@ -75,27 +68,11 @@ class _Runner:
 
 
 def _graph_feedback(topic: str) -> str:
-    """Explain (from the fake broker) why a topic round-trip went silent."""
-    if not fakeros.INSTALLED:
-        return (
-            f"nothing arrived on {topic} - check the topic names and QoS "
-            "on both ends (ros2 topic list / ros2 topic info -v)"
-        )
-    g = fakeros.BROKER.graph()
-    lines = [f"nothing arrived on {topic}."]
-    lines.append(f"publishers seen:  {g['publishers'] or '(none!)'}")
-    lines.append(f"subscribers seen: {g['subscribers'] or '(none!)'}")
-    if fakeros.BROKER.qos_drops:
-        t, p, s = fakeros.BROKER.qos_drops[-1]
-        lines.append(
-            f"QoS mismatch on {t}: publisher '{p}' is BEST_EFFORT but "
-            f"subscriber '{s}' asked for RELIABLE - they never match. "
-            "Use best-effort on the subscriber for sensor streams."
-        )
-    if fakeros.BROKER.errors:
-        t, n, e = fakeros.BROKER.errors[-1]
-        lines.append(f"callback error on {t} in '{n}': {e!r}")
-    return "\n".join(lines)
+    """Explain why a topic round-trip went silent."""
+    return (
+        f"nothing arrived on {topic} - check the topic names and QoS "
+        "on both ends (ros2 topic list / ros2 topic info -v)"
+    )
 
 
 def _wait_for(predicate, timeout_s: float, interval: float = 0.02):
@@ -222,14 +199,6 @@ def check_cameras(rep: Reporter, cfg: dict) -> None:
 def check_arm(rep: Reporter, cfg: dict) -> None:
     """Verify the arm server node and client wiring over ros2_control:
     construction, state, commands, clamping."""
-    if fakeros.INSTALLED:
-        for t in ("2.4", "2.5", "2.6", "2.7", "2.8", "2.9"):
-            rep.add(
-                t, "arm checks", "SKIP",
-                "the arm runs under ros2_control, which the in-memory shim cannot host - "
-                "run python -m ros.selftest where ROS 2 is installed",
-            )
-        return
     from common.config import DEFAULT_CONFIG
     from common.motion import JOINT_LIMITS, REST_POSE, DryRunArm
     from common.ros2_control_arm import (
@@ -468,29 +437,16 @@ def check_intent(rep: Reporter, cfg: dict) -> None:
 
 
 def main() -> int:
-    """CLI: run every component 2 check against real or shimmed ROS 2 and print a summary."""
-    parser = argparse.ArgumentParser(description="Component 2 self-test")
-    parser.add_argument(
-        "--fake",
-        action="store_true",
-        help="force the in-memory ROS shim even if ROS 2 exists",
-    )
-    args = parser.parse_args()
+    """CLI: run every component 2 check over ROS 2 and print a summary."""
+    argparse.ArgumentParser(description="Component 2 self-test (requires ROS 2)").parse_args()
+    try:
+        import rclpy
+    except ImportError as e:
+        raise SystemExit(f"ROS 2 is required: source /opt/ros/jazzy/setup.bash first ({e})") from e
 
     ARTIFACTS.mkdir(exist_ok=True)
-    used_fake = fakeros.install(force=args.fake)
-
     rep = Reporter("Component 2 - ROS 2 nodes & topics")
-    if used_fake:
-        print(
-            "  transport: in-memory ROS shim (no ROS 2 here - wiring checks "
-            "only; re-run on the rig for the real thing)"
-        )
-    else:
-        print("  transport: real ROS 2 (rclpy)")
-
-    import rclpy
-
+    print("  transport: ROS 2 (rclpy)")
     if not rclpy.ok():
         rclpy.init()
 
@@ -500,14 +456,13 @@ def main() -> int:
     check_intent(rep, cfg)
 
     code = rep.summary()
-    if not used_fake:
-        print("\nOn-hardware next steps (each in its own terminal):")
-        print("  python -m ros.camera_node --role mount")
-        print("  python -m ros.node_supervisor --only arm --dry-run   (drop --dry-run for the real arm)")
-        print("  python -m ros.intent_node --mock")
-        print(
-            "  ros2 topic hz /cameras/mount/image_raw && ros2 topic echo /joint_states"
-        )
+    print("\nOn-hardware next steps (each in its own terminal):")
+    print("  python -m ros.camera_node --role mount")
+    print("  python -m ros.node_supervisor --only arm --dry-run   (drop --dry-run for the real arm)")
+    print("  python -m ros.intent_node --mock")
+    print(
+        "  ros2 topic hz /cameras/mount/image_raw && ros2 topic echo /joint_states"
+    )
     try:
         rclpy.shutdown()
     except Exception:

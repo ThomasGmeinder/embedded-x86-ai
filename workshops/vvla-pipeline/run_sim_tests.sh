@@ -35,15 +35,12 @@ VIRTUAL_ENV="${REPO_ROOT}/.venv" source "${REPO_ROOT}/scripts/ryzen_ai_env.sh" \
   || warn "ryzen_ai_env.sh returned nonzero - continuing"
 
 ROS_SETUP="${ROS_SETUP:-/opt/ros/jazzy/setup.bash}"
-if [[ -f "$ROS_SETUP" ]]; then
-  say "Sourcing ROS 2 ($ROS_SETUP)"
-  set +u +e
-  # shellcheck disable=SC1090
-  source "$ROS_SETUP" || warn "ROS 2 source returned nonzero - continuing"
-  set -e -u
-else
-  warn "ROS 2 not found at $ROS_SETUP - the ROS twin tests will not run"
-fi
+[[ -f "$ROS_SETUP" ]] || die "ROS 2 is required and is not at $ROS_SETUP - run ./bootstrap.sh"
+say "Sourcing ROS 2 ($ROS_SETUP)"
+set +u +e
+# shellcheck disable=SC1090
+source "$ROS_SETUP" || warn "ROS 2 source returned nonzero - continuing"
+set -e -u
 
 say "Installing so101_sim from this clone"
 "$PY" -m pip install --quiet --no-deps --upgrade --force-reinstall -e "${REPO_ROOT}/so101_sim"

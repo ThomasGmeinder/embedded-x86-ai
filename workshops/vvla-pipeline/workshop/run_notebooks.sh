@@ -20,9 +20,7 @@
 #      notably mediapipe 0.10.21 and numpy<2).
 #   3. Registers the "vvla-workshop" Jupyter kernel if it doesn't exist
 #      (the notebooks select it automatically).
-#   4. Sources ROS 2 (if installed) so the notebook kernel gets real
-#      rclpy + DDS. The ROS 2 notebooks need this; they tell you how to
-#      install ROS 2 if it's missing.
+#   4. Sources ROS 2 (required) so the notebook kernel gets rclpy + DDS.
 #   5. Starts the llama-server on the iGPU (if the binary and the GGUF
 #      model are present and nothing is already listening on the port).
 #      It logs to workshop/logs/llama-server.log and shuts down when you
@@ -101,23 +99,17 @@ if [[ -f "$RYZEN_ENV_SCRIPT" ]]; then
   VIRTUAL_ENV="$VENV_DIR" source "$RYZEN_ENV_SCRIPT" || warn "ryzen_ai_env.sh returned nonzero - continuing"
 fi
 
-# Source ROS 2 (if installed) so the notebook kernel gets real rclpy + DDS.
-# The ROS 2 notebooks require it; without it they stop and print install
-# instructions instead of running.
+# Source ROS 2 (required) so the notebook kernel gets rclpy + DDS.
 ROS_SETUP="${ROS_SETUP:-/opt/ros/jazzy/setup.bash}"
-if [[ -f "$ROS_SETUP" ]]; then
-  say "Sourcing ROS 2 ($ROS_SETUP)"
-  # ROS's setup.bash dereferences unbound vars (AMENT_TRACE_SETUP_FILES, ...) and
-  # can return nonzero on benign conditions. Relax nounset/errexit across the
-  # source, then restore our strict mode.
-  set +u +e
-  # shellcheck disable=SC1090
-  source "$ROS_SETUP" || warn "ROS 2 source returned nonzero - continuing"
-  set -e -u
-else
-  warn "ROS 2 not found at $ROS_SETUP - the 02_ros2 notebooks will not run."
-  warn "Install ROS 2 Jazzy, then relaunch this script so the kernel sees rclpy."
-fi
+[[ -f "$ROS_SETUP" ]] || die "ROS 2 is required and is not at $ROS_SETUP - run ./bootstrap.sh from the repo root"
+say "Sourcing ROS 2 ($ROS_SETUP)"
+# ROS's setup.bash dereferences unbound vars (AMENT_TRACE_SETUP_FILES, ...) and
+# can return nonzero on benign conditions. Relax nounset/errexit across the
+# source, then restore our strict mode.
+set +u +e
+# shellcheck disable=SC1090
+source "$ROS_SETUP" || warn "ROS 2 source returned nonzero - continuing"
+set -e -u
 
 # --- 2. Ensure pip, then install ONLY what's missing ------------------------
 "$PY" -m pip --version >/dev/null 2>&1 || {
