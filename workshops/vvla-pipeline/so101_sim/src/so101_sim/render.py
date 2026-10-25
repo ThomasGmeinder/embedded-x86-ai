@@ -69,8 +69,13 @@ class View:
         self._stamp = 0.0  # time.time() when the newest frame's scene was captured
         self._segs: collections.deque = collections.deque(maxlen=8)
         self._cond = threading.Condition()
+        self._failed: BaseException | None = None
         self.next_due = 0.0
         self.refs = 0
+
+    def _raise_if_failed(self) -> None:
+        if self._failed is not None:
+            raise RuntimeError("render thread failed") from self._failed
 
     def _set_camera(self, model, camera) -> None:
         mj = self._mj
@@ -91,25 +96,39 @@ class View:
     # -- consumer side ------------------------------------------------------
     def latest(self) -> tuple[int, np.ndarray | None]:
         with self._cond:
+            self._raise_if_failed()
             return self.seq, self._frame
 
     def wait(self, after_seq: int, timeout: float) -> tuple[int, np.ndarray | None]:
-        """Block until a frame newer than ``after_seq`` (or timeout); newest wins."""
+        """Block until a frame newer than ``after_seq`` (or timeout); newest wins.
+
+        A renderer that has died raises, instead of returning the last frame.
+        """
         with self._cond:
-            self._cond.wait_for(lambda: self.seq > after_seq, timeout=timeout)
+            self._cond.wait_for(
+                lambda: self.seq > after_seq or self._failed is not None, timeout=timeout
+            )
+            self._raise_if_failed()
             return self.seq, self._frame
 
     def latest_stamped(self) -> tuple[int, np.ndarray | None, float]:
         """``latest()`` plus the wall-clock time the frame's scene was captured."""
         with self._cond:
+            self._raise_if_failed()
             return self.seq, self._frame, self._stamp
 
     def wait_stamped(
         self, after_seq: int, timeout: float
     ) -> tuple[int, np.ndarray | None, float]:
-        """``wait()`` plus the wall-clock time the frame's scene was captured."""
+        """``wait()`` plus the wall-clock time the frame's scene was captured.
+
+        A renderer that has died raises, instead of returning the last frame.
+        """
         with self._cond:
-            self._cond.wait_for(lambda: self.seq > after_seq, timeout=timeout)
+            self._cond.wait_for(
+                lambda: self.seq > after_seq or self._failed is not None, timeout=timeout
+            )
+            self._raise_if_failed()
             return self.seq, self._frame, self._stamp
 
     def segmentation_for(self, seq: int | None = None) -> np.ndarray | None:
@@ -217,7 +236,7 @@ class RenderService:
     def close(self) -> None:
         self._running = False
         if self._thread is not None:
-            self._thread.join(timeout=5.0)
+            self._thread.join()
             self._thread = None
 
     def _layout(self, tiles: list[_Tile]) -> tuple[int, int]:
@@ -317,6 +336,16 @@ class RenderService:
                         fn(self, due, t_sim)
                     except Exception as e:
                         logger.warning("render hook failed: %s", e)
+        except BaseException as exc:  # surface a dead renderer to every view consumer
+            self._error = exc
+            self._running = False
+            logger.exception("render thread failed")
+            with self._lock:
+                views = list(self._views.values())
+            for view in views:
+                with view._cond:
+                    view._failed = exc
+                    view._cond.notify_all()
         finally:
             try:
                 if con is not None:

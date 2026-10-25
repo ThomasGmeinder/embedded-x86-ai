@@ -37,11 +37,13 @@ def die_with_parent(sig: int = signal.SIGTERM) -> None:
 
     parent = os.getppid()
     try:
-        ctypes.CDLL(None, use_errno=True).prctl(1, int(sig))  # PR_SET_PDEATHSIG
-    except (OSError, AttributeError):
-        return
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(1, int(sig)) != 0:  # PR_SET_PDEATHSIG
+            raise OSError(ctypes.get_errno(), "prctl(PR_SET_PDEATHSIG)")
+    except AttributeError as exc:
+        raise RuntimeError("PR_SET_PDEATHSIG is unavailable on this platform") from exc
     if os.getppid() != parent:  # the parent exited before prctl took effect
-        os._exit(0)
+        os._exit(1)
 
 
 def _group_members(pgid: int) -> list[int]:

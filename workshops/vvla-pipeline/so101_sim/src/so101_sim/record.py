@@ -84,6 +84,7 @@ class SimRecorder:
         self._frames = 0
         self._timeline = None
         self._running = False
+        self._error: BaseException | None = None
         SimRecorder._ids += 1
         self._tag = f"rec{SimRecorder._ids}"
         self._views = []
@@ -146,7 +147,7 @@ class SimRecorder:
             cv2.putText(frame, line[:110], (140, 20 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         self.event("result", status=status, message=str(message)[:500])
         for _ in range(max(1, int(seconds * self.fps))):
-            self._q.put(frame)
+            self._enqueue(frame)
 
     def stop(self, keep: bool = True) -> Path | None:
         """Finish the file; ``keep=False`` deletes it (passing test, --sim-video failed)."""
@@ -156,9 +157,9 @@ class SimRecorder:
         rs = self._renderer
         rs.remove_hook(self._on_pass)
         self._running = False
-        self._q.put(None)
+        self._enqueue(None)
         if self._thread is not None:
-            self._thread.join(timeout=10.0)
+            self._thread.join()
         if self._proc is not None:
             try:
                 self._proc.stdin.close()
@@ -224,8 +225,23 @@ class SimRecorder:
                 elif self._cv_writer is not None:
                     self._cv_writer.write(item)
             except (BrokenPipeError, ValueError, OSError) as e:
-                logger.warning("recorder: encoder stopped (%s)", e)
+                self._error = e
+                self._running = False
+                logger.error("recorder: encoder stopped (%s)", e)
                 return
+
+    def _enqueue(self, frame) -> None:
+        """Bounded writer handoff: retain the newest frame and fail loudly."""
+        if self._error is not None:
+            raise RuntimeError("recorder encoder failed") from self._error
+        try:
+            self._q.put_nowait(frame)
+        except queue.Full:
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                pass
+            self._q.put_nowait(frame)
 
     # ------------------------------------------------------------ compose
     def _on_pass(self, service, due, t_sim) -> None:
@@ -238,12 +254,16 @@ class SimRecorder:
         # keep wall-clock timing honest: repeat frames if the renderer lagged
         target = int((time.perf_counter() - self._t0) * self.fps) + 1
         n = max(1, min(target - self._frames, 4))
-        for _ in range(n):
-            try:
-                self._q.put_nowait(frame)
+        try:
+            for _ in range(n):
+                self._enqueue(frame)
                 self._frames += 1
-            except queue.Full:
-                break
+        except queue.Full:
+            return
+        except RuntimeError:
+            self._running = False
+            logger.error("recorder: encoder failed; recording stopped")
+            return
 
     def _sample(self) -> None:
         snap = self.world.snapshot()

@@ -46,6 +46,10 @@ def test_frames_carry_the_time_their_scene_was_captured(world):
         assert ok and cam.stamp_of(second) > cam.stamp_of(first)
         seq, frame = cam.view.latest()  # the unstamped API is unchanged
         assert isinstance(seq, int) and frame is not None
+        with cam.view._cond:
+            cam.view._failed = RuntimeError("render thread failed")
+            cam.view._cond.notify_all()
+        assert cam.read(fresh=True) == (False, None)
     finally:
         cam.release()
         svc.close()

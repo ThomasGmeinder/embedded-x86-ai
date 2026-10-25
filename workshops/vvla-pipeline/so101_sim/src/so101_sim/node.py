@@ -72,8 +72,8 @@ def _sensor_qos():
 def _stamp_msg(stamp: float):
     from builtin_interfaces.msg import Time
 
-    sec = int(stamp)
-    return Time(sec=sec, nanosec=int(round((stamp - sec) * 1e9)) % 1_000_000_000)
+    nanoseconds = int(round(stamp * 1_000_000_000))
+    return Time(sec=nanoseconds // 1_000_000_000, nanosec=nanoseconds % 1_000_000_000)
 
 
 def detect_stack(config_path: str | None, cfg: dict) -> str:

@@ -78,17 +78,20 @@ class SimCamera:
         """
         if not self._open:
             return False, None
-        if fresh:
-            start, _ = self.view.latest()
-            seq, frame, stamp = self.view.wait_stamped(start + 1, timeout=max(3.0 / self.fps, 0.5))
-            if seq <= start + 1:  # timed out: the newest frame may predate this call
-                frame = None
-        elif self.blocking:
-            seq, frame, stamp = self.view.wait_stamped(
-                self._last_seq, timeout=max(3.0 / self.fps, 0.25)
-            )
-        else:
-            seq, frame, stamp = self.view.latest_stamped()
+        try:
+            if fresh:
+                start, _ = self.view.latest()
+                seq, frame, stamp = self.view.wait_stamped(start + 1, timeout=max(3.0 / self.fps, 0.5))
+                if seq <= start + 1:  # timed out: the newest frame may predate this call
+                    frame = None
+            elif self.blocking:
+                seq, frame, stamp = self.view.wait_stamped(
+                    self._last_seq, timeout=max(3.0 / self.fps, 0.25)
+                )
+            else:
+                seq, frame, stamp = self.view.latest_stamped()
+        except RuntimeError:
+            return False, None
         if frame is None:
             return False, None
         self._last_seq = seq

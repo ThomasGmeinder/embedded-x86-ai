@@ -129,11 +129,12 @@ class SimWorld:
             if m.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE:
                 body = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, m.jnt_bodyid[j])
                 self._free[body] = (int(m.jnt_qposadr[j]), int(m.jnt_dofadr[j]))
-        self._scratch = mujoco.MjData(m)  # FK without touching live state
+        self._fk = threading.local()  # one scratch MjData per calling thread
         self._fixed_finger = self._collision_geoms("gripper", _FIXED_FINGER)
         self._moving_finger = self._collision_geoms("moving_jaw_so101_v1")
 
         self._running = False
+        self._error: BaseException | None = None
         self._thread: threading.Thread | None = None
         self._viewer = None
         self._closed = False
@@ -210,6 +211,8 @@ class SimWorld:
     def start(self) -> None:
         if self._running:
             return
+        if self._error is not None:
+            raise RuntimeError("the twin physics thread previously failed") from self._error
         self._running = True
         self._sync_epoch()
         self._thread = threading.Thread(
@@ -222,7 +225,7 @@ class SimWorld:
     def stop(self) -> None:
         self._running = False
         if self._thread is not None:
-            self._thread.join(timeout=2.0)
+            self._thread.join()
             self._thread = None
 
     @property
@@ -271,8 +274,15 @@ class SimWorld:
     def _loop(self) -> None:
         try:
             self._run_loop()
+        except BaseException as exc:  # surfaced by next_step() to every caller
+            logger.exception("twin physics thread failed")
+            with self._stepped:
+                self._error = exc
+                self._running = False
+                self._stepped.notify_all()
         finally:
             with self._stepped:  # a waiter on next_step() sees the thread stop
+                self._running = False
                 self._stepped.notify_all()
 
     def _run_loop(self) -> None:
@@ -495,10 +505,17 @@ class SimWorld:
             self._mj.mj_forward(self.model, self.data)
 
     def fk(self, pose_cal: dict) -> "object":
-        """Forward kinematics of ``pose_cal`` (rest-pose defaults) on scratch data."""
+        """Forward kinematics of ``pose_cal`` (rest-pose defaults) on scratch data.
+
+        The returned ``MjData`` belongs to the calling thread until its next
+        ``fk()``. Another thread's call does not overwrite it.
+        """
         mj = self._mj
         pose = {**self.rest_pose, **pose_cal}
-        d = self._scratch
+        d = getattr(self._fk, "data", None)
+        if d is None:
+            d = mj.MjData(self.model)
+            self._fk.data = d
         with self.lock:
             d.qpos[:] = self.data.qpos
         for i, name in enumerate(MOTOR_NAMES):
@@ -691,6 +708,8 @@ class SimWorld:
         """
         with self._stepped:
             self._stepped.wait_for(lambda: self._passes != seen or not self._running)
+            if self._error is not None:
+                raise RuntimeError("the twin physics thread failed") from self._error
             if not self._running:
                 raise RuntimeError("the twin's physics thread is not running")
             return self._passes

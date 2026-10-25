@@ -322,3 +322,36 @@ def test_hand_eye_recovers_a_known_mount(kin):
     assert np.linalg.norm(t - t_true) < 0.002
     assert angle < 0.5
     assert spread < 0.003
+
+
+def test_forward_kinematics_on_two_threads_keep_their_poses():
+    """One thread's fk() result stays put while another thread calls fk()."""
+    import threading
+
+    from so101_sim import MOTOR_NAMES
+    from so101_sim.world import SimWorld
+
+    world = SimWorld(start=False)
+    release = threading.Event()
+    started = threading.Event()
+
+    def other() -> None:
+        started.set()
+        release.wait()
+        world.fk({"shoulder_pan": 50.0})
+
+    thread = threading.Thread(target=other)
+    thread.start()
+    started.wait()
+    try:
+        held = world.fk({"shoulder_pan": -40.0})
+        release.set()
+        thread.join()
+        index = MOTOR_NAMES.index("shoulder_pan")
+        assert held.qpos[world._qadr[index]] == pytest.approx(
+            world.jmap.to_rad("shoulder_pan", -40.0)
+        )
+    finally:
+        release.set()
+        thread.join()
+        world.close()
