@@ -421,9 +421,11 @@ def main() -> None:
 
     try:
         import rclpy
-        from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
+        from rclpy.executors import SingleThreadedExecutor
     except ImportError:
         raise SystemExit("rclpy not importable - source /opt/ros/jazzy/setup.bash first") from None
+
+    from so101_sim.spin import spin_until_shutdown
 
     cfg = _load_yaml(args.config)
     cfg.setdefault("robot", {})["backend"] = "sim"
@@ -456,9 +458,7 @@ def main() -> None:
         executor.add_node(n)
     logger.info("digital twin up (%s stack): %d nodes", stack, len(nodes))
     try:
-        executor.spin()
-    except (KeyboardInterrupt, ExternalShutdownException):
-        pass
+        spin_until_shutdown(executor)
     finally:
         for close in reversed(closers):
             try:

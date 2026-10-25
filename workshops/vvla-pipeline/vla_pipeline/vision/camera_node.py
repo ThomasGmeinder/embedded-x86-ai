@@ -141,10 +141,6 @@ class CameraNode(Node):
 
     def _tick(self) -> None:
         """Timer callback: publish one frame (and the health flag) if the device is open."""
-        # During shutdown (SIGINT from the launcher) a timer can fire once more
-        # after the context is torn down; skip rather than crash with RCLError.
-        if not rclpy.ok():
-            return
         healthy = False
         if self._cap is not None:
             ok, frame = self._cap.read()
@@ -166,10 +162,7 @@ class CameraNode(Node):
                 self.get_logger().warning(
                     f"camera '{self.role}' read failed - reopening"
                 )
-        try:
-            self._health_pub.publish(Bool(data=healthy))
-        except Exception:
-            pass  # context torn down mid-shutdown
+        self._health_pub.publish(Bool(data=healthy))
 
     def destroy_node(self) -> None:
         """Release the capture device before the base class teardown."""
@@ -190,18 +183,17 @@ def main() -> None:
     parser.add_argument("--config", default=None)
     args, ros_args = parser.parse_known_args()
 
+    from rclpy.executors import SingleThreadedExecutor
+
+    from so101_sim.spin import spin_until_shutdown
+
     defaults = (load_config(args.config).get("cameras") or {}).get(args.role, {})
     rclpy.init(args=ros_args)
     node = CameraNode(args.role, defaults)
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
-    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
-        pass
-    except Exception as e:
-        # RCLError on a publish during teardown is expected when the launcher
-        # SIGINTs us mid-tick; anything else is worth surfacing.
-        if "context is invalid" not in str(e) and "shutdown" not in str(e).lower():
-            raise
+        spin_until_shutdown(executor)
     finally:
         try:
             node.destroy_node()

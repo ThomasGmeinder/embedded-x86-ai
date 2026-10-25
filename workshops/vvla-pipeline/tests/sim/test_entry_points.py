@@ -81,13 +81,20 @@ def _close(child) -> int | None:
 
 @pytest.mark.docs
 def test_run_pipeline_drives_the_twin(twin_domain, tmp_path):
-    child = _spawn("./run_pipeline.sh --digital-twin --text-commands --headless", PIPE_ROOT,
-                   tmp_path / "run_pipeline.log")
+    """Every object picked up and dropped, the scripted behaviors, a stop, and
+    a clean shutdown: the launch reports no node that died."""
+    log = tmp_path / "run_pipeline.log"
+    child = _spawn("./run_pipeline.sh --digital-twin --text-commands --headless", PIPE_ROOT, log)
     try:
         child.expect(r"\[say\] Ready\.", timeout=START_S)
         for text, spoken in (
             ("pick up the ball", "Got the sports ball"),
             ("drop it", "Released"),
+            ("pick up the bottle", "Got the bottle"),
+            ("drop it", "Released"),
+            ("pick up the toothbrush", "Got the toothbrush"),
+            ("drop it", "Released"),
+            ("wave at me", None),
             ("hold this", "No object detected"),
             ("go home", None),
             ("dance", None),
@@ -107,7 +114,10 @@ def test_run_pipeline_drives_the_twin(twin_domain, tmp_path):
         child.expect(pexpect.EOF, timeout=BEHAVIOR_S)
     finally:
         status = _close(child)
+        child.logfile_read.close()
     assert status == 0, f"run_pipeline.sh exited {status}"
+    died = [line for line in log.read_text().splitlines() if "process has died" in line]
+    assert not died, "a node of the launch died on shutdown:\n" + "\n".join(died)
 
 
 def test_supervisor_starts_the_twin_and_its_controllers_for_the_client(twin_domain, tmp_path):
