@@ -337,3 +337,101 @@ def test_reset_service_restores_the_scene_and_parks_the_arm(workshop_cfg, probe,
         assert session.arm.get_joints()["shoulder_pan"] > 15.0, "the server drove back to a stale target"
     finally:
         session.close()
+
+
+def _line(proc: subprocess.Popen, prefix: str) -> str:
+    """The first stdout line starting with ``prefix``. The process exiting first is a failure."""
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        if line.startswith(prefix):
+            return line.rstrip()
+    pytest.fail(f"process exited before {prefix!r}")
+
+
+_DISCOVERY_SUB = """
+import os, sys
+os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"] = "LOCALHOST"
+os.environ["FASTDDS_BUILTIN_TRANSPORTS"] = "LARGE_DATA"
+sys.path.insert(0, sys.argv[1])
+from common.twin_ros import use_private_domain
+use_private_domain(int(sys.argv[2]))
+import rclpy
+from std_msgs.msg import String
+node = rclpy.create_node("twin_discovery_sub")
+def on_probe(msg):
+    print("SEEN", flush=True)
+node.create_subscription(String, "/twin_probe", on_probe, 10)
+print("READY", flush=True)
+rclpy.spin(node)
+"""
+
+_DISCOVERY_PUB = """
+import os, sys
+from pathlib import Path
+os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"] = "LOCALHOST"
+os.environ["FASTDDS_BUILTIN_TRANSPORTS"] = "LARGE_DATA"
+sys.path.insert(0, sys.argv[1])
+from common.twin_ros import use_private_domain
+use_private_domain(int(sys.argv[2]))
+assert os.environ.get("ROS_AUTOMATIC_DISCOVERY_RANGE") != "LOCALHOST"
+assert os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"].endswith("twin_localhost.xml")
+assert os.environ.get("FASTDDS_BUILTIN_TRANSPORTS") == "LARGE_DATA"
+import rclpy
+from std_msgs.msg import String
+node = rclpy.create_node("twin_discovery_pub")
+inodes = set()
+for entry in Path("/proc/self/fd").iterdir():
+    try:
+        target = os.readlink(entry)
+    except OSError:
+        continue
+    if target.startswith("socket:[") and target.endswith("]"):
+        inodes.add(target[len("socket:["):-1])
+listening = 0
+for name in ("tcp", "tcp6"):
+    table = Path(f"/proc/self/net/{name}")
+    if not table.exists():
+        continue
+    for row in table.read_text().splitlines()[1:]:
+        parts = row.split()
+        if len(parts) > 9 and parts[3] == "0A" and parts[9] in inodes:
+            listening += 1
+print(f"TCP {listening}", flush=True)
+pub = node.create_publisher(String, "/twin_probe", 10)
+def tick():
+    msg = String()
+    msg.data = "hi"
+    pub.publish(msg)
+node.create_timer(0.05, tick)
+rclpy.spin(node)
+"""
+
+
+def test_localhost_discovery_keeps_large_data_transports():
+    """Two processes on the private domain see each other, and LARGE_DATA stays on.
+
+    The publisher is started with ``ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST``.
+    That range would disable builtin transports, so the private-domain setup
+    clears it. A TCP listen socket is what ``FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA``
+    opens and that range does not.
+    """
+    domain = "94"
+    sub = subprocess.Popen(
+        [sys.executable, "-c", _DISCOVERY_SUB, str(SOLUTION), domain],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=os.environ.copy(),
+    )
+    pub = None
+    try:
+        assert _line(sub, "READY") == "READY"
+        pub = subprocess.Popen(
+            [sys.executable, "-c", _DISCOVERY_PUB, str(SOLUTION), domain],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=os.environ.copy(),
+        )
+        tcp = _line(pub, "TCP")
+        assert int(tcp.split()[1]) >= 1, tcp
+        assert _line(sub, "SEEN") == "SEEN"
+    finally:
+        for proc in (pub, sub):
+            if proc is not None and proc.poll() is None:
+                proc.send_signal(signal.SIGINT)
+                proc.wait()

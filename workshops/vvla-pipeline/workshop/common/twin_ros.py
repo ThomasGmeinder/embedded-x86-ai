@@ -46,6 +46,10 @@ from so101_sim.node import DIAGNOSTICS_TOPIC, GRIPPER_STATUS, PROPS_STATUS, VIEW
 logger = logging.getLogger(__name__)
 
 DEFAULT_DOMAIN_ID = 87  # override with TWIN_ROS_DOMAIN_ID
+# Discovery stays on this machine. The profile does not turn builtin transports
+# off, so FASTDDS_BUILTIN_TRANSPORTS from scripts/ryzen_ai_env.sh still applies.
+_LOCALHOST_PROFILE = Path(__file__).with_name("twin_localhost.xml")
+_domain_node = None  # kept so the DDS participant outlives the call
 
 
 def twin_domain_id() -> int:
@@ -56,10 +60,24 @@ def twin_domain_id() -> int:
 def use_private_domain(domain_id: int) -> None:
     """Put this process's ROS 2 on ``domain_id``, discovery on this machine only.
 
-    ROS reads both variables when ``rclpy.init()`` runs, so they must be set
-    before anything in this kernel starts ROS. A kernel already running ROS
-    on another domain has to be restarted.
+    ROS reads the domain when ``rclpy.init()`` runs, so this must run before
+    anything in this kernel starts ROS. A kernel already running ROS on
+    another domain has to be restarted.
+
+    ``twin_localhost.xml`` keeps discovery on this host (no multicast, peers
+    at 127.0.0.1, other hosts ignored). ``ROS_AUTOMATIC_DISCOVERY_RANGE`` is
+    not set to ``LOCALHOST``: that range disables Fast DDS builtin transports,
+    and ``FASTDDS_BUILTIN_TRANSPORTS`` would no longer apply.
+
+    Call this before the first Vitis AI session in the process. ``LARGE_DATA``
+    does not discover peers if that session is opened before the DDS
+    participant. ``rclpy.init`` alone does not create one; this function
+    holds a node so the participant exists when it returns. The localhost
+    discovery range used to hide the order, because it builds its own UDP
+    transport afterwards. The pipeline's arm and camera clients start DDS
+    before the models for the same reason.
     """
+    global _domain_node
     import rclpy
 
     if rclpy.ok():
@@ -69,10 +87,14 @@ def use_private_domain(domain_id: int) -> None:
                 f"ROS 2 already runs in this kernel on domain {current}; the twin needs "
                 f"domain {domain_id}. Restart the kernel and run the notebook from the top."
             )
-        return
-    os.environ["ROS_DOMAIN_ID"] = str(domain_id)
-    os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"] = "LOCALHOST"
-    rclpy.init()
+    else:
+        os.environ["ROS_DOMAIN_ID"] = str(domain_id)
+        if os.environ.get("ROS_AUTOMATIC_DISCOVERY_RANGE") == "LOCALHOST":
+            del os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"]
+        os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = str(_LOCALHOST_PROFILE)
+        rclpy.init()
+    if _domain_node is None:
+        _domain_node = rclpy.create_node("twin_domain")
 
 
 def _sensor_qos():
