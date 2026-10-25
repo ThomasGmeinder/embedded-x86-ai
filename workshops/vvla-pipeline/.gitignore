@@ -6,6 +6,9 @@ logs
 ryzenai-compile/
 ryzen_ai-*/
 cache/
+cache_backup/
+.codex/
+*.log
 models/
 !/so101_sim/src/so101_sim/models/
 /so101_sim/src/so101_sim/models/assets/

@@ -32,22 +32,22 @@ PY="${REPO_ROOT}/.venv/bin/python"
 say "Sourcing scripts/ryzen_ai_env.sh"
 # shellcheck disable=SC1091
 VIRTUAL_ENV="${REPO_ROOT}/.venv" source "${REPO_ROOT}/scripts/ryzen_ai_env.sh" \
-  || warn "ryzen_ai_env.sh returned nonzero - continuing"
+  || die "ryzen_ai_env.sh failed"
 
 ROS_SETUP="${ROS_SETUP:-/opt/ros/jazzy/setup.bash}"
 [[ -f "$ROS_SETUP" ]] || die "ROS 2 is required and is not at $ROS_SETUP - run ./bootstrap.sh"
 say "Sourcing ROS 2 ($ROS_SETUP)"
 set +u +e
 # shellcheck disable=SC1090
-source "$ROS_SETUP" || warn "ROS 2 source returned nonzero - continuing"
+source "$ROS_SETUP" || die "ROS 2 setup failed"
 set -e -u
 
 say "Installing so101_sim from this clone"
-"$PY" -m pip install --quiet --no-deps --upgrade --force-reinstall -e "${REPO_ROOT}/so101_sim"
-"$PY" -m so101_sim.assets || warn "could not fetch the SO-101 meshes - the digital twin will not load"
+"$PY" -m pip install --no-deps --upgrade --force-reinstall -e "${REPO_ROOT}/so101_sim"
+"$PY" -m so101_sim.assets || die "could not fetch the SO-101 meshes"
 
-"$PY" -c 'import pytest' 2>/dev/null || "$PY" -m pip install --quiet pytest
-"$PY" -c 'import pytest_timeout' 2>/dev/null || "$PY" -m pip install --quiet pytest-timeout
+"$PY" -c 'import pytest' || "$PY" -m pip install pytest
+"$PY" -c 'import pytest_timeout' || "$PY" -m pip install pytest-timeout
 
 export VVLA_TEST_STRICT=1
 RC=0
