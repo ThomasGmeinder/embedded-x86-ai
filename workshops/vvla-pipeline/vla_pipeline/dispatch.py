@@ -20,8 +20,8 @@ the ``--text-commands`` stdin loop calls for every utterance:
 
 ``Dispatcher.run`` (main thread) parses each queued transcript with the
 grammar-constrained LLM, looks the intent up in the registry, runs the
-behavior, parks the arm if it crashes, and drains the queue to the newest
-command so a backlog never replays stale behaviors. It blocks on the queue;
+behavior, and drains the queue to the newest command so a backlog never
+replays stale behaviors. It blocks on the queue;
 ``Dispatcher.stop`` wakes it to see its ``shutdown`` event.
 
 Every step is reported to ``listeners`` (``fn(event, **data)``) so the
@@ -64,7 +64,7 @@ class Dispatcher:
         self.startup_grace_s = float(startup_grace_s)
         self._clock = clock
         self.start_time = clock()
-        self.transcripts: queue.Queue = queue.Queue()
+        self.transcripts: queue.Queue[tuple[int, str] | object] = queue.Queue()
         self.listeners: list = []
         self.current: ParsedCommand | None = None
         self.busy = threading.Event()  # set while a behavior runs
@@ -102,7 +102,8 @@ class Dispatcher:
             return
         with self._work:
             self._pending += 1
-        self.transcripts.put(text)
+            generation = self._stops
+        self.transcripts.put((generation, text))
         self._emit("queued", text=text)
         if self.busy.is_set():
             # A new command switches behaviors: stop the running one gracefully;
@@ -112,15 +113,26 @@ class Dispatcher:
             self.ctx.stop_event.set()
 
     # ------------------------------------------------------------- dispatch
-    def dispatch(self, text: str) -> ParsedCommand | None:
+    def dispatch(self, text: str, generation: int | None = None) -> ParsedCommand | None:
         """Parse and run one transcript on the calling thread.
 
         A stop heard while the LLM parses cancels the command it returns. The
         check and the stop-event clear stay under the lock stops are counted under.
         """
         with self._work:
-            stops = self._stops
-        cmd = self.parse(text)
+            stops = self._stops if generation is None else generation
+            cancelled = self._stops != stops
+        if cancelled:
+            logger.info("Stop heard before %r was dispatched - command not parsed.", text)
+            self._emit("cancelled", text=text)
+            return None
+        try:
+            cmd = self.parse(text)
+        except Exception:
+            logger.exception("Intent parse failed for %r.", text)
+            self.ctx.say("I couldn't understand that command because the language service is unavailable.")
+            self._emit("parse_error", text=text)
+            return None
         self._emit("parsed", text=text, intent=cmd.intent.value, params=dict(cmd.params or {}))
         if cmd.intent in (Intent.UNKNOWN, Intent.STOP):
             if cmd.intent is Intent.UNKNOWN:
@@ -148,12 +160,8 @@ class Dispatcher:
             ok = handler(self.ctx, cmd) is not False  # main thread (cv2 previews)
         except Exception as e:
             ok = False
-            logger.exception("Behavior %s crashed - arm to rest.", cmd.intent.value)
+            logger.exception("Behavior %s crashed - holding position.", cmd.intent.value)
             self._emit("behavior_crash", intent=cmd.intent.value, error=repr(e))
-            try:
-                self.ctx.arm.go_to_rest()
-            except Exception:
-                pass
         finally:
             stopped = self.ctx.stop_event.is_set()
             self.ctx.stop_event.clear()
@@ -163,7 +171,7 @@ class Dispatcher:
             self._emit("behavior_end", intent=cmd.intent.value, ok=ok, stopped=stopped)
         return cmd
 
-    def _take_all(self) -> list[str]:
+    def _take_all(self) -> list[tuple[int, str]]:
         """Every queued transcript, oldest first; a queued stop stays queued."""
         texts, stops = [], 0
         while True:
@@ -209,12 +217,13 @@ class Dispatcher:
     def run(self, shutdown: threading.Event) -> None:
         """Dispatch loop until ``shutdown`` is set and :meth:`stop` is called."""
         while not shutdown.is_set():
-            text = self.transcripts.get()
-            if text is _STOP:
+            item = self.transcripts.get()
+            if item is _STOP:
                 continue
+            generation, text = item
             try:
                 if not self.holding.is_set():
-                    self.dispatch(text)
+                    self.dispatch(text, generation)
             finally:
                 self._finished(1)
             if self.holding.is_set():

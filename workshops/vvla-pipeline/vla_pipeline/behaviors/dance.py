@@ -107,12 +107,15 @@ def run_dance(
             for keyframe in DANCE_MOVES[move] * 4:
                 if time.time() >= deadline or (stop_check and stop_check()):
                     break
-                arm.go_to(keyframe, duration_s=beat * 0.9, fps=30.0)
+                arm.go_to(keyframe, duration_s=beat * 0.9, fps=30.0, stop_check=stop_check)
     except KeyboardInterrupt:
         pass
     finally:
-        logger.info("Dance over - bowing out to rest pose.")
-        arm.go_to_rest()
+        if stop_check and stop_check():
+            logger.info("Dance stopped - holding position.")
+        else:
+            logger.info("Dance over - bowing out to rest pose.")
+            arm.go_to_rest(stop_check=stop_check)
 
 
 # =============================================================================

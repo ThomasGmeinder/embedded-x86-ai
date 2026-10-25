@@ -59,7 +59,7 @@ def run_home(cfg: dict, arm: ArmClient, stop_check=None) -> None:
     """Return to the rest pose. A locked grip stays locked: "release" opens
     it, and gesture-mimic hands the gripper to the pinch."""
     logger.info("[home] returning to rest pose")
-    arm.go_to_rest()
+    arm.go_to_rest(stop_check=stop_check)
 
 
 def main() -> None:

@@ -65,6 +65,33 @@ def test_a_stop_said_before_the_command_does_not_cancel_it():
     assert not ctx.stop_event.is_set()
 
 
+def test_a_stop_discards_a_command_already_queued():
+    from vla_pipeline.llm.intents import Intent, ParsedCommand
+
+    d, _ctx, ran, _said, events = _dispatcher(
+        lambda text: ParsedCommand(Intent.WAVE, transcript=text)
+    )
+    d.on_transcript("wave at me")
+    d.on_transcript("stop")
+
+    generation, text = d.transcripts.get_nowait()
+    d.dispatch(text, generation)
+
+    assert ran == [], "a command queued before stop ran anyway"
+    assert "cancelled" in events, events
+
+
+def test_a_parse_failure_does_not_kill_dispatch():
+    d, _ctx, ran, said, events = _dispatcher(
+        lambda _text: (_ for _ in ()).throw(RuntimeError("llama unavailable"))
+    )
+
+    assert d.dispatch("wave at me") is None
+    assert ran == []
+    assert "parse_error" in events
+    assert any("language service" in message for message in said)
+
+
 def _workshop():
     from common.intents import CommandRegistry, Intent
     from integration.dispatch import WorkshopContext

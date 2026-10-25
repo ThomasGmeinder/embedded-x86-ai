@@ -257,7 +257,6 @@ def run_grip(ctx, cmd=None, wait_s: float = 4.0) -> bool:
     for remaining in range(int(wait_s), 0, -1):
         logger.info("[grip] closing in %d...", remaining)
         if ctx.stop_event.wait(1.0):
-            ctx.arm.go_to_rest()
             return False
 
     if reference is not None:
@@ -266,6 +265,8 @@ def run_grip(ctx, cmd=None, wait_s: float = 4.0) -> bool:
             ctx.say("I don't see anything between the jaws yet - closing carefully.")
 
     gripped, hold = close_with_feedback(ctx.arm, g, stop_check=ctx.stop_check)
+    if ctx.stop_check():
+        return False
 
     if gripped and reference is not None:
         ok, now = cam.read()
@@ -282,7 +283,11 @@ def run_grip(ctx, cmd=None, wait_s: float = 4.0) -> bool:
         )
     else:
         ctx.say("No object detected.")
-        ctx.arm.go_to({"gripper": GRIPPER_CLOSED_FLOOR}, duration_s=0.8)
+        ctx.arm.go_to(
+            {"gripper": GRIPPER_CLOSED_FLOOR},
+            duration_s=0.8,
+            stop_check=ctx.stop_check,
+        )
     return gripped
 
 # ----------------------------------------------------------------------------
