@@ -44,6 +44,7 @@ from so101_sim.control import (
     ARM_CONTROLLER,
     BRING_UP_S,
     GRIPPER_CONTROLLER,
+    JOINT_STATE_STALE_S,
     SERVER_NODE,
     STREAM_CONTROLLER,
     TORQUE_PARAMETER,
@@ -59,8 +60,9 @@ logger = logging.getLogger(__name__)
 BODY = tuple(MOTOR_NAMES[:5])
 # A controller's or service's reply takes one controller update and a local DDS
 # hop (1.3 ms at most, scripts/ros2_control_poc.py): this bound only catches a
-# controller manager or arm server that is gone.
-REPLY_S = 2.0
+# controller manager or arm server that is gone. It is the hardware side's
+# joint-state silence bound, so the two cannot drift apart.
+REPLY_S = JOINT_STATE_STALE_S
 
 
 class Spinner:
@@ -171,6 +173,7 @@ class ControllerArm(ArmClient):
         self._controllers: dict[str, str] = {}  # name -> state label, from the controller manager
         self._streaming = False
         self._stream: dict | None = None  # the last streamed body setpoint
+        self._command_lock = threading.RLock()
         self._trajectory = self._stream_pub = self._gripper_pub = None
         self._spin = Spinner(node_name)
         node = self._spin.node
@@ -278,17 +281,18 @@ class ControllerArm(ArmClient):
 
     def _use_stream(self, streaming: bool) -> None:
         """Switch between the trajectory controller and the forward controller."""
-        if streaming == self._streaming:
-            return
-        on, off = (STREAM_CONTROLLER, ARM_CONTROLLER) if streaming else (ARM_CONTROLLER, STREAM_CONTROLLER)
-        request = self._SwitchController.Request(
-            activate_controllers=[on], deactivate_controllers=[off],
-            strictness=self._SwitchController.Request.STRICT, activate_asap=True,
-        )
-        if not self._call(self._switch.call_async(request), f"switching to {on}").ok:
-            raise RuntimeError(f"the controller manager refused to switch to {on}")
-        self._streaming = streaming
-        self._stream = None
+        with self._command_lock:
+            if streaming == self._streaming:
+                return
+            on, off = (STREAM_CONTROLLER, ARM_CONTROLLER) if streaming else (ARM_CONTROLLER, STREAM_CONTROLLER)
+            request = self._SwitchController.Request(
+                activate_controllers=[on], deactivate_controllers=[off],
+                strictness=self._SwitchController.Request.STRICT, activate_asap=True,
+            )
+            if not self._call(self._switch.call_async(request), f"switching to {on}").ok:
+                raise RuntimeError(f"the controller manager refused to switch to {on}")
+            self._streaming = streaming
+            self._stream = None
 
     def _command_gripper(self, cal: float) -> None:
         """Command the gripper's forward controller (calibrated units)."""
@@ -298,13 +302,14 @@ class ControllerArm(ArmClient):
         """The whole body setpoint, in :data:`BODY` order, that ``joints`` makes:
         the body joints it names, the last streamed (or measured) value for the
         rest; None when it names none. Switches the forward controller in."""
-        body = {k: v for k, v in joints.items() if k in BODY}
-        if not body:
-            return None
-        self._use_stream(True)
-        base = self._stream or self.get_joints()
-        self._stream = {k: body.get(k, base[k]) for k in BODY}
-        return dict(self._stream)
+        with self._command_lock:
+            body = {k: v for k, v in joints.items() if k in BODY}
+            if not body:
+                return None
+            self._use_stream(True)
+            base = self._stream or self.get_joints()
+            self._stream = {k: body.get(k, base[k]) for k in BODY}
+            return dict(self._stream)
 
     def move_to(
         self, target: dict, tolerance_deg: float = 2.5, stop_check=None, limits: dict | None = None,
@@ -319,44 +324,51 @@ class ControllerArm(ArmClient):
 
         from vla_pipeline.robot.servo_profile import shared_profiler
 
-        previous = self._send_limits
-        self._send_limits = limits
-        try:
-            target = clamp_joints(target, limits)
-            start = self.get_joints()
-            body = {k: v for k, v in target.items() if k in BODY}
-            eta_s = float(shared_profiler().plan(start, body or target).eta_s)
-            sent_at = time.time()
-            if "gripper" in target:
-                self._command_gripper(target["gripper"])
-            if body:
-                self._use_stream(False)
-                goal = self._FollowJointTrajectory.Goal()
-                goal.trajectory.joint_names = list(body)
-                point = JointTrajectoryPoint()
-                point.positions = [self._jmap.to_rad(k, v) for k, v in body.items()]
-                point.time_from_start = Duration(
-                    sec=int(eta_s), nanosec=int(round((eta_s - int(eta_s)) * 1e9)) % 1_000_000_000,
+        with self._command_lock:
+            previous = self._send_limits
+            self._send_limits = limits
+            try:
+                target = clamp_joints(target, limits)
+                start = self.get_joints()
+                body = {k: v for k, v in target.items() if k in BODY}
+                eta_s = float(shared_profiler().plan(start, body or target).eta_s)
+                sent_at = time.time()
+                if "gripper" in target:
+                    self._command_gripper(target["gripper"])
+                if body:
+                    self._use_stream(False)
+                    goal = self._FollowJointTrajectory.Goal()
+                    goal.trajectory.joint_names = list(body)
+                    point = JointTrajectoryPoint()
+                    point.positions = [self._jmap.to_rad(k, v) for k, v in body.items()]
+                    point.time_from_start = Duration(
+                        sec=int(eta_s),
+                        nanosec=int(round((eta_s - int(eta_s)) * 1e9)) % 1_000_000_000,
+                    )
+                    goal.trajectory.points = [point]
+                    goal.goal_tolerance = [
+                        JointTolerance(name=k, position=math.radians(tolerance_deg))
+                        for k in body
+                    ]
+                    how = self._run(goal, eta_s, stop_check)
+                else:
+                    how = self._settle_jaw(
+                        start["gripper"], target["gripper"], eta_s, tolerance_deg, stop_check
+                    )
+                # The controller judged the end on a state newer than ours: callers read the arm next.
+                self.wait_state(time.monotonic())
+                joints = self.get_joints()
+                worst = max(body or list(target), key=lambda k: abs(joints.get(k, target[k]) - target[k]))
+                logger.log(
+                    logging.WARNING if how == "blocked" else logging.INFO,
+                    "move_to %s in %.2f s (servo profile %.2f s): %.1f deg left on %s%s",
+                    how, time.time() - sent_at, eta_s,
+                    abs(joints.get(worst, target[worst]) - target[worst]), worst,
+                    "" if how == "arrived" else f" | at {joints_text(joints)} | goal {joints_text(target)}",
                 )
-                goal.trajectory.points = [point]
-                goal.goal_tolerance = [JointTolerance(name=k, position=math.radians(tolerance_deg)) for k in body]
-                how = self._run(goal, eta_s, stop_check)
-            else:
-                how = self._settle_jaw(start["gripper"], target["gripper"], eta_s, tolerance_deg, stop_check)
-            # The controller judged the end on a state newer than ours: callers read the arm next.
-            self.wait_state(time.monotonic())
-            joints = self.get_joints()
-            worst = max(body or list(target), key=lambda k: abs(joints.get(k, target[k]) - target[k]))
-            logger.log(
-                logging.WARNING if how == "blocked" else logging.INFO,
-                "move_to %s in %.2f s (servo profile %.2f s): %.1f deg left on %s%s",
-                how, time.time() - sent_at, eta_s,
-                abs(joints.get(worst, target[worst]) - target[worst]), worst,
-                "" if how == "arrived" else f" | at {joints_text(joints)} | goal {joints_text(target)}",
-            )
-            return how
-        finally:
-            self._send_limits = previous
+                return how
+            finally:
+                self._send_limits = previous
 
     def _run(self, goal, eta_s: float, stop_check) -> str:
         """Send ``goal`` and wait for the controller's result, cancelling it on a stop."""
@@ -375,15 +387,45 @@ class ControllerArm(ArmClient):
 
         result.add_done_callback(done)
         budget = eta_s + self._goal_time_s + REPLY_S
-        if not self._wait(finished.is_set, budget, "trajectory result", stop_check):
-            self._call(handle.cancel_goal_async(), "cancelling the trajectory")
+        try:
+            stopped = not self._wait(finished.is_set, budget, "trajectory result", stop_check)
+        except MotionTimeout:
+            self._cancel_goal(handle, "trajectory budget expired")
+            raise
+        if stopped:
+            self._cancel_goal(handle, "stop requested")
             return "stopped"
-        code = result.result().result.error_code
+        result_msg = result.result()
+        from action_msgs.msg import GoalStatus
+        status = result_msg.status
+        code = result_msg.result.error_code
+        # An unmet goal is aborted, with GOAL_TOLERANCE_VIOLATED. Succeeded is the
+        # only status whose SUCCESSFUL code means the arm arrived.
+        if status == GoalStatus.STATUS_CANCELED:
+            return "stopped"
+        if code == FollowJointTrajectory.Result.GOAL_TOLERANCE_VIOLATED and status in (
+            GoalStatus.STATUS_ABORTED, GoalStatus.STATUS_SUCCEEDED,
+        ):
+            return "blocked"
+        if status != GoalStatus.STATUS_SUCCEEDED:
+            raise RuntimeError(
+                f"arm_controller ended trajectory with action status {status} "
+                f"and error code {code}: {result_msg.result.error_string}"
+            )
         if code == FollowJointTrajectory.Result.SUCCESSFUL:
             return "arrived"
-        if code == FollowJointTrajectory.Result.GOAL_TOLERANCE_VIOLATED:
-            return "blocked"
-        raise RuntimeError(f"arm_controller ended the trajectory with error code {code}: {result.result().result.error_string}")
+        raise RuntimeError(
+            f"arm_controller ended the trajectory with error code {code}: {result_msg.result.error_string}"
+        )
+
+    def _cancel_goal(self, handle, reason: str) -> None:
+        """Cancel a live trajectory and reject an unsuccessful cancellation."""
+        response = self._call(handle.cancel_goal_async(), f"cancelling the trajectory ({reason})")
+        if response.return_code != response.ERROR_NONE:
+            raise RuntimeError(
+                f"arm_controller refused to cancel the trajectory ({reason}); "
+                f"return code {response.return_code}"
+            )
 
     def _settle_jaw(self, start: float, goal: float, eta_s: float, tolerance_deg: float, stop_check) -> str:
         """Wait until the jaw is within ``tolerance_deg`` of ``goal``, or has come

@@ -348,11 +348,15 @@ class So101ServerNode(Node):
             time.sleep(max(interval - elapsed, 0.0))
 
     def destroy_node(self) -> None:
-        """Stop the control loop, park the arm, and release the bus before the base class teardown."""
+        """Stop the control loop, park the arm, and release the bus.
+
+        Join that loop until it has left the bus. Closing on a timeout raced
+        the rest goal with a write the loop could still make.
+        """
         self._shutting_down = True
         self._running = False
         if self._control_thread.is_alive():
-            self._control_thread.join(timeout=2.0)
+            self._control_thread.join()
         try:
             self._arm.close()  # parks at REST_POSE, then closes the port
         except Exception as e:
