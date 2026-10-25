@@ -41,6 +41,11 @@ TORQUE_PARAMETER = "gripper_torque_limit_nm"
 # joint state. The twin's server published it 0.7-0.95 s after its process
 # started (scripts/ros2_control_poc.py); the real server also connects the bus.
 SERVER_START_S = 10.0
+# After that, a joint state this old means the arm server stopped publishing.
+# The controller manager then deactivates the controllers, so the last sample
+# is not republished as a live /joint_states. The arm clients use this same
+# bound for a reply from a controller that has gone.
+JOINT_STATE_STALE_S = 2.0
 # From the server's first state until every controller is loaded: 1.0 s with
 # strix_vla.launch.py on the twin, on an idle host. Five times that covers a
 # host that loads the pipeline's models at the same time.

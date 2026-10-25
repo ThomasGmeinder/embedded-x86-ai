@@ -10,6 +10,7 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="so101">
   <xacro:arg name="joint_commands_topic" default="/so101/joint_command"/>
   <xacro:arg name="joint_states_topic" default="/so101/joint_state"/>
+  <xacro:arg name="joint_state_timeout" default="0.0"/>
   <xacro:arg name="effort" default="1.91"/>
 
   <xacro:macro name="revolute" params="name parent child xyz rpy">
@@ -51,6 +52,8 @@
       <param name="joint_states_topic">$(arg joint_states_topic)</param>
       <!-- patches/topic_based_ros2_control: start the commands at the first joint state -->
       <param name="initial_state_timeout">$(arg initial_state_timeout)</param>
+      <!-- and stop republishing a joint state the arm server has stopped sending -->
+      <param name="joint_state_timeout">$(arg joint_state_timeout)</param>
       <param name="trigger_joint_command_threshold">$(arg trigger_joint_command_threshold)</param>
     </hardware>
     <xacro:macro name="arm_joint" params="name">

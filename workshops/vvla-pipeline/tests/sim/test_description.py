@@ -87,9 +87,15 @@ def test_limits_and_hardware_side_come_through_the_twin_joint_map(request, stack
         ends = sorted((jmap.to_rad(name, lower), jmap.to_rad(name, upper)))
         assert [float(limit.get("lower")), float(limit.get("upper"))] == pytest.approx(ends), name
         assert float(limit.get("effort")) == sim["current_model"]["stall_torque_nm"]
+    from so101_sim.control import JOINT_STATE_STALE_S
+
     hardware = {p.get("name"): p.text for p in root.findall("ros2_control/hardware/param")}
     threshold = float(hardware.pop("trigger_joint_command_threshold"))
-    assert hardware == {"joint_commands_topic": "/cmd", "joint_states_topic": "/state", "initial_state_timeout": "7.0"}
+    assert hardware == {
+        "joint_commands_topic": "/cmd", "joint_states_topic": "/state",
+        "initial_state_timeout": "7.0",
+        "joint_state_timeout": repr(float(JOINT_STATE_STALE_S)),
+    }
     assert threshold == pytest.approx(sum(jmap.steps_to_rad(name, 1.0) for name in module.JOINT_LIMITS))
 
 

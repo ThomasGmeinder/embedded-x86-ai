@@ -37,11 +37,13 @@ def robot_description(
     units, as ``JOINT_LIMITS`` does. ``cfg`` is the host config: its ``sim:``
     section holds the joint map, the servos' top speed and their stall torque.
     ``initial_state_timeout`` bounds how long the hardware side waits, on
-    activation, for the arm server's first joint state.
+    activation, for the arm server's first joint state. After that, a joint
+    state older than :data:`so101_sim.control.JOINT_STATE_STALE_S` is rejected.
     """
     import xacro
 
     from so101_sim.config import load_sim_config
+    from so101_sim.control import JOINT_STATE_STALE_S
     from so101_sim.mapping import JointMap
 
     sim = load_sim_config(cfg)
@@ -52,6 +54,7 @@ def robot_description(
         "joint_states_topic": joint_states_topic,
         "effort": repr(float(sim["current_model"]["stall_torque_nm"])),
         "initial_state_timeout": repr(float(initial_state_timeout)),
+        "joint_state_timeout": repr(float(JOINT_STATE_STALE_S)),
         # The hardware side republishes the commands while the summed
         # |state - command| exceeds this: one encoder step on every joint.
         "trigger_joint_command_threshold": repr(sum(jmap.steps_to_rad(name, 1.0) for name in joint_limits)),
