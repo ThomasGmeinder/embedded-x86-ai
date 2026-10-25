@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The shared look-then-move pickup, without a full scene.
+"""Both stacks' copies of the look-then-move pickup, without a full scene.
 
 A settled frame is stored with the joints that took it. A clipped box loses
 to a smaller one the table locate will accept. One empty frame does not end
@@ -23,7 +23,7 @@ import pytest
 
 pytestmark = pytest.mark.sim
 
-MODULES = ["common.manipulation"]
+MODULES = ["common.manipulation", "vla_pipeline.behaviors.manipulation"]
 POSE = {
     "shoulder_pan": 0.0,
     "shoulder_lift": -30.0,
@@ -292,40 +292,29 @@ def test_a_slipped_grasp_grasps_from_the_fresh_fix(module, monkeypatch, second_x
     monkeypatch.setattr(mod, "holding", lambda arm, g, hold: len(plans) >= 2)
     monkeypatch.setattr(mod, "_offer", lambda *args, **kwargs: "offered")
 
-    if module.startswith("common"):
-        held_arm, held_camera = arm, camera
+    held_arm, held_camera = arm, camera
 
-        class _Finder:
-            find = staticmethod(_find)
+    class _Finder:
+        find = staticmethod(_find)
 
-        class _Ctx:
-            cfg = {"robot": {"backend": "sim"}, "pick_place": _pp(), "grip": {}}
-            arm = held_arm
-            arm_camera = held_camera
-            camera = held_camera
-            shared_state = {}
-            detector = _Finder()
+    class _Ctx:
+        cfg = {"robot": {"backend": "sim"}, "pick_place": _pp(), "grip": {}}
+        arm = held_arm
+        arm_camera = held_camera
+        camera = held_camera
+        shared_state = {}
+        detector = _Finder()
 
-            def say(self, message):
-                events.append(message)
+        def say(self, message):
+            events.append(message)
 
-            def stop_check(self):
-                return False
+        def stop_check(self):
+            return False
 
-        class _Cmd:
-            object_name = "ball"
+    class _Cmd:
+        object_name = "ball"
 
-        assert mod.run_pick_place(_Ctx(), _Cmd())
-    else:
-        cfg = {"behaviors": {"pick_place": _pp(), "grip": {}}, "cameras": {"arm": {}}}
-
-        class _Detector:
-            find = staticmethod(_find)
-
-        assert mod.run_pick_place(
-            cfg, arm, _Detector(), None, camera, None, "ball", {}, None,
-            lambda message: events.append(message),
-        )
+    assert mod.run_pick_place(_Ctx(), _Cmd())
 
     assert events.index("plan") < events.index("The grasp slipped - trying once more.")
     assert events.index("The grasp slipped - trying once more.") < events.index("plan", events.index("plan") + 1)

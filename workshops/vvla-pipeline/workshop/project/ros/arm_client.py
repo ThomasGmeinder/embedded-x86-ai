@@ -36,15 +36,10 @@ from __future__ import annotations
 import argparse
 import logging
 
+from so101_sim.control import ARM_CONTROLLER, BRING_UP_S, GRIPPER_CONTROLLER, STREAM_CONTROLLER
+
 from common.motion import GRIPPER_CLOSED_FLOOR, MOTOR_NAMES, clamp_joints
-from common.ros2_control_arm import (
-    ARM_CONTROLLER,
-    BODY,
-    BRING_UP_S,
-    GRIPPER_CONTROLLER,
-    STREAM_CONTROLLER,
-    ControllerArm,
-)
+from common.ros2_control_arm import BODY, ControllerArm
 from common.ros_helpers import joint_velocity, parse_joint_state
 
 logger = logging.getLogger(__name__)

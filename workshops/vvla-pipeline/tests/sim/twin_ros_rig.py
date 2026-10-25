@@ -105,10 +105,10 @@ class Probe:
         from sensor_msgs.msg import JointState
 
         from common.motion import DEFAULT_CONTROL_HZ
-        from common.ros2_control_arm import HARDWARE_COMMANDS, HARDWARE_STATES
         from common.ros_helpers import Spinner, parse_joint_state
         from common.twin_ros import _sensor_qos
         from so101_sim.config import load_sim_config
+        from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES
         from so101_sim.mapping import JointMap
 
         sim = load_sim_config(cfg)

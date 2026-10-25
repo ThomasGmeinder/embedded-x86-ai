@@ -5,18 +5,14 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Pick and place. The body is :func:`common.manipulation.run_pick_place`."""
+"""Pick and place. The body is :func:`vla_pipeline.behaviors.manipulation.run_pick_place`."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
-from vla_pipeline.behaviors._from_workshop import Ctx, command, flatten_cfg
-from vla_pipeline.robot.arm_interface import ensure_common_path
-
-ensure_common_path()
-
-from common.manipulation import (  # noqa: E402
+from vla_pipeline.behaviors._ctx import Ctx, command, flatten_cfg
+from vla_pipeline.behaviors.manipulation import (
     _GraspPlan,
     _box_usable,
     _descent_poses,
@@ -45,12 +41,12 @@ __all__ = [
 
 
 def _plan_from_view(cfg, view):
-    """``cfg`` is a pipeline config dict or a workshop context."""
-    from common.manipulation import _plan_from_view as _workshop_plan
+    """``cfg`` is a pipeline config dict or a behavior context."""
+    from vla_pipeline.behaviors.manipulation import _plan_from_view as _ctx_plan
 
     if isinstance(cfg, dict):
         cfg = SimpleNamespace(cfg=flatten_cfg(cfg))
-    return _workshop_plan(cfg, view)
+    return _ctx_plan(cfg, view)
 
 
 def run_pick_place(
@@ -65,7 +61,7 @@ def run_pick_place(
     stop_check=None,
     feedback=None,
 ) -> bool:
-    """Pick the named object. Delegates to :func:`common.manipulation.run_pick_place`."""
+    """Pick the named object. Delegates to :func:`vla_pipeline.behaviors.manipulation.run_pick_place`."""
     ctx = Ctx(
         cfg,
         arm,

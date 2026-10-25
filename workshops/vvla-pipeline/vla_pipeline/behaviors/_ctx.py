@@ -5,10 +5,11 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Call :mod:`common.manipulation` from a pipeline ``(cfg, arm, ...)`` signature.
+"""Call :mod:`vla_pipeline.behaviors.manipulation` from a pipeline ``(cfg, arm, ...)`` signature.
 
-Pipeline configs nest behavior settings under ``behaviors``. The functions the
-notebook imports read those settings at the top level of ``ctx.cfg``.
+Pipeline configs nest behavior settings under ``behaviors``. The handlers in
+:mod:`~vla_pipeline.behaviors.manipulation` read them at the top level of
+``ctx.cfg``, as the workshop's copy does.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ def flatten_cfg(cfg: dict) -> dict:
 
 
 class Ctx:
-    """The ``(ctx, cmd)`` object :mod:`common.manipulation` calls."""
+    """The ``ctx`` the :mod:`~vla_pipeline.behaviors.manipulation` handlers take."""
 
     def __init__(
         self,

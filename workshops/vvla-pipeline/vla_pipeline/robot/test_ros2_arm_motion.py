@@ -43,7 +43,7 @@ so each joint sweeps exactly as far as it was calibrated to travel. The hard
 
 Full speed
 ----------
-Each move's duration is the servo profile planner's (``common.servo_profile``)
+Each move's duration is the servo profile planner's (``vla_pipeline.robot.servo_profile``)
 for the servos' full speed and acceleration; the trajectory controller
 interpolates it and reports when the joints got there.
 
@@ -232,7 +232,7 @@ def _start_stack(cfg: dict, config_path):
     import rclpy
     from rclpy.executors import SingleThreadedExecutor
 
-    from common.ros2_control_arm import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers
+    from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers
 
     if not rclpy.ok():
         rclpy.init()
@@ -352,7 +352,7 @@ def main() -> None:
 
     import rclpy
 
-    from common.ros2_control_arm import stop_controllers
+    from so101_sim.control import stop_controllers
 
     server = executor = launch = None
     arm = None

@@ -5,16 +5,12 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Fetch the taught block. The body is :func:`common.manipulation.run_fetch_block`."""
+"""Fetch the taught block. The body is :func:`vla_pipeline.behaviors.manipulation.run_fetch_block`."""
 
 from __future__ import annotations
 
-from vla_pipeline.behaviors._from_workshop import Ctx
-from vla_pipeline.robot.arm_interface import ensure_common_path
-
-ensure_common_path()
-
-from common.manipulation import park_open, run_fetch_block as _run_fetch_block  # noqa: E402
+from vla_pipeline.behaviors._ctx import Ctx
+from vla_pipeline.behaviors.manipulation import park_open, run_fetch_block as _run_fetch_block
 
 __all__ = ["park_open", "run_fetch_block"]
 

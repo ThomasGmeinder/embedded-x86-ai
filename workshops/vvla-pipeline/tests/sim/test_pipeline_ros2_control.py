@@ -39,12 +39,12 @@ def _until(world, pred) -> None:
 
 @pytest.fixture(scope="module")
 def twin(pipeline_cfg):
-    from common.ros2_control_arm import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
-    from common.ros_helpers import Spinner
     from conftest import PIPE_ROOT
+    from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
     from so101_sim.domain_lock import acquire
     from so101_sim.node import build_nodes
     from vla_pipeline.robot.robot_node import Ros2ArmClient
+    from vla_pipeline.robot.ros2_control_arm import Spinner
 
     join_test_domain()
     assert_domain_free("a twin already runs on the test domain")
@@ -125,10 +125,10 @@ def test_a_scene_reset_leaves_the_controller_holding_the_parked_pose(arm, pipeli
 
     from control_msgs.msg import JointTrajectoryControllerState
 
-    from common.ros2_control_arm import ARM_CONTROLLER, REPLY_S
-    from common.ros_helpers import Spinner
     from so101_sim.config import load_sim_config
+    from so101_sim.control import ARM_CONTROLLER
     from so101_sim.mapping import JointMap
+    from vla_pipeline.robot.ros2_control_arm import REPLY_S, Spinner
 
     world, client = arm
     assert client.move_to({"shoulder_pan": 30.0, "elbow_flex": 60.0}) == "arrived"

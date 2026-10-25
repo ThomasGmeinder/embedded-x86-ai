@@ -30,17 +30,11 @@ from launch_ros.actions import Node
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _ensure_paths() -> None:
-    """The pipeline and ``common`` importable: they own the topic and controller names."""
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-    from vla_pipeline.robot.arm_interface import ensure_common_path
-
-    ensure_common_path()
-
-
 def _joint_limits(stack: str) -> dict:
-    """The host stack's ``JOINT_LIMITS``."""
+    """The host stack's ``JOINT_LIMITS``, from its own copy of the arm layer."""
+    root = REPO_ROOT / "workshop" / "solution" if stack == "workshop" else REPO_ROOT
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
     if stack == "workshop":
         from common.motion import JOINT_LIMITS
     else:
@@ -51,7 +45,7 @@ def _joint_limits(stack: str) -> dict:
 def _nodes(context):
     import yaml
 
-    from common.ros2_control_arm import (
+    from so101_sim.control import (
         ARM_CONTROLLER,
         GRIPPER_CONTROLLERS,
         HARDWARE_COMMANDS,
@@ -106,8 +100,7 @@ def _nodes(context):
 
 def generate_launch_description() -> LaunchDescription:
     """robot_state_publisher, the controller manager, and its controllers."""
-    _ensure_paths()
-    from common.ros2_control_arm import GRIPPER_CONTROLLERS
+    from so101_sim.control import GRIPPER_CONTROLLERS
 
     return LaunchDescription(
         [

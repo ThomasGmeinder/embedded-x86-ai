@@ -14,7 +14,6 @@ carry a ``sim:`` block; anything omitted there falls back to :data:`DEFAULTS`.
 from __future__ import annotations
 
 import copy
-import sys
 from pathlib import Path
 
 MODELS_DIR = Path(__file__).resolve().parent / "models"
@@ -50,7 +49,7 @@ DEFAULTS: dict = {
         "wrist_roll": dict(_IDENTITY),
     },
     "gripper_map": {
-        "closed_cal": None,  # filled from GRIPPER_CLOSED_FLOOR in load_sim_config
+        "closed_cal": 38.0,  # the jaws' physical closed point: both stacks' GRIPPER_CLOSED_FLOOR
         "open_cal": 95.0,
         "closed_rad": -0.15,
         "open_rad": 1.6,
@@ -71,7 +70,15 @@ DEFAULTS: dict = {
         "seed": 0,
     },
     "quantize_readback": True,  # encoder resolution on Present_Position
-    "rest_pose": None,  # None -> the host stack's REST_POSE (set by adapters)
+    # The SO-101's rest pose: both stacks' REST_POSE, which they pass as SimWorld's rest_pose.
+    "rest_pose": {
+        "shoulder_pan": 0.0,
+        "shoulder_lift": -96.5,
+        "elbow_flex": 95.9,
+        "wrist_flex": 22.5,
+        "wrist_roll": 86.8,
+        "gripper": 38.0,
+    },
     "cameras": {
         "arm": {"camera": "wrist_cam", "width": 640, "height": 480, "fps": 30},
         "mount": {"camera": "mount_cam", "width": 640, "height": 480, "fps": 30},
@@ -119,15 +126,7 @@ def load_sim_config(cfg: dict | None = None, **overrides) -> dict:
             k: ({"camera": v} if isinstance(v, str) else v) for k, v in cams.items()
         }
     out = _merge(DEFAULTS, section)
-    out = _merge(out, overrides)
-    root = Path(__file__).resolve().parents[3]
-    sol = str(root / "workshop" / "solution")
-    if sol not in sys.path:
-        sys.path.append(sol)
-    from common.motion import GRIPPER_CLOSED_FLOOR
-
-    out["gripper_map"]["closed_cal"] = GRIPPER_CLOSED_FLOOR
-    return out
+    return _merge(out, overrides)
 
 
 def scene_path(sim_cfg: dict, root: Path | None = None) -> Path:

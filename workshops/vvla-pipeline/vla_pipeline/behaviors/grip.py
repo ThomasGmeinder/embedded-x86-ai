@@ -5,16 +5,12 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Grip and release. The bodies are :mod:`common.manipulation`."""
+"""Grip and release. The bodies are :mod:`vla_pipeline.behaviors.manipulation`."""
 
 from __future__ import annotations
 
-from vla_pipeline.behaviors._from_workshop import Ctx
-from vla_pipeline.robot.arm_interface import ensure_common_path
-
-ensure_common_path()
-
-from common.manipulation import (  # noqa: E402
+from vla_pipeline.behaviors._ctx import Ctx
+from vla_pipeline.behaviors.manipulation import (
     PRESENT_POSE,
     close_with_feedback,
     ease_grip,
@@ -43,7 +39,7 @@ def run_grip(
     feedback=None,
     stop_event=None,
 ) -> bool:
-    """Take an object from the user. Delegates to :func:`common.manipulation.run_grip`."""
+    """Take an object from the user. Delegates to :func:`vla_pipeline.behaviors.manipulation.run_grip`."""
     ctx = Ctx(
         cfg,
         arm,
@@ -57,6 +53,6 @@ def run_grip(
 
 
 def run_release(arm, shared_state: dict | None = None, stop_check=None, feedback=None) -> bool:
-    """Open the jaws where they are. Delegates to :func:`common.manipulation.run_release`."""
+    """Open the jaws where they are. Delegates to :func:`vla_pipeline.behaviors.manipulation.run_release`."""
     ctx = Ctx({}, arm, say=feedback, stop_check=stop_check, shared_state=shared_state)
     return _run_release(ctx)

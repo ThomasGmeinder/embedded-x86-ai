@@ -48,11 +48,8 @@ def _arm(context):
         return []
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
-    from vla_pipeline.robot.arm_interface import ensure_common_path
+    from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, LAUNCH_FILE
     from vla_pipeline.utils.config import load_config
-
-    ensure_common_path()
-    from common.ros2_control_arm import HARDWARE_COMMANDS, HARDWARE_STATES, LAUNCH_FILE
 
     config = LaunchConfiguration("config").perform(context)
     dry_run = LaunchConfiguration("dry_run").perform(context) == "true"

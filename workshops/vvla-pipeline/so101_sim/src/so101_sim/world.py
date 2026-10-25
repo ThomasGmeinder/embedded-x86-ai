@@ -123,12 +123,7 @@ class SimWorld:
         self.current = CurrentModel(self.cfg["current_model"])
         self.protection = OverloadProtection(len(MOTOR_NAMES))
 
-        pose = rest_pose or self.cfg.get("rest_pose")
-        if not pose:
-            from vla_pipeline.robot.arm_interface import REST_POSE
-
-            pose = REST_POSE
-        self.rest_pose = dict(pose)
+        self.rest_pose = dict(rest_pose or self.cfg["rest_pose"])
         self._free = {}  # body name -> (qposadr, dofadr)
         for j in range(m.njnt):
             if m.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE:
@@ -745,6 +740,27 @@ class SimWorld:
 
     def __exit__(self, *exc):
         self.close()
+
+
+def parked_pose(rest_pose: dict) -> dict:
+    """Where a twin reset parks the arm: ``rest_pose`` with the jaws open."""
+    from so101_sim.kinematics import OPEN_GRIPPER
+
+    return {**rest_pose, "gripper": OPEN_GRIPPER}
+
+
+def restore_twin(arm, world: SimWorld | None = None) -> dict:
+    """Park ``arm`` (a transport on ``world``) at the world's rest pose with
+    the jaws open, and put the props back where the scene file has them.
+
+    Returns the parked joint dict. Callers that also track a command target
+    (an arm server's control loop) copy that dict into the target under their lock.
+    """
+    world = arm.world if world is None else world
+    parked = parked_pose(world.rest_pose)
+    world.reset(parked)
+    arm.send_joints(parked)
+    return parked
 
 
 # ----------------------------------------------------------------------

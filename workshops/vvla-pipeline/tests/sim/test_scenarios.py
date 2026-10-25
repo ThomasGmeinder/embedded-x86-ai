@@ -48,9 +48,9 @@ PIPELINE = pytest.mark.parametrize("stack", ["pipeline"])
 WORKSHOP = pytest.mark.parametrize("stack", [pytest.param("workshop", marks=pytest.mark.slow)])
 BOTH = pytest.mark.parametrize("stack", ["pipeline", pytest.param("workshop", marks=pytest.mark.slow)])
 
-# Each stack's copy of the arm constants and of the grasp check.
+# Each stack's copy of the arm constants and of the manipulation behaviors.
 _MOTION = {"pipeline": "vla_pipeline.robot.arm_interface", "workshop": "common.motion"}
-_GRASP = {"pipeline": "vla_pipeline.behaviors.grip", "workshop": "common.manipulation"}
+_GRASP = {"pipeline": "vla_pipeline.behaviors.manipulation", "workshop": "common.manipulation"}
 
 
 def _motion(stack: str):
@@ -175,7 +175,7 @@ def test_dance_visits_moves_and_parks(rig, stack, caplog):
     move_to judges it: the jaws' readback need not reach a gripper goal."""
     import re
 
-    from common.motion import DANCE_MOVES
+    from vla_pipeline.behaviors.dance import DANCE_MOVES
 
     motion = _motion(stack)
     rig.run([(0.0, "let's dance")])
@@ -483,11 +483,13 @@ def _said_since(rig, start: int, phrase: str) -> bool:
     return any(phrase.lower() in message.lower() for message in rig.said[start:])
 
 
-def _press_reset(rig, stack: str) -> None:
+def _press_reset(rig) -> None:
     """The notebook reset button, once the behavior has already stopped."""
+    from so101_sim.world import restore_twin
+
     rig.ctx.shared_state.pop("grip_lock", None)
     rig.ctx.shared_state.pop("grip_lock_pos", None)
-    _motion(stack).restore_twin(rig.arm)
+    restore_twin(rig.arm)
 
 
 @WORKSHOP
@@ -510,7 +512,7 @@ def test_reset_then_pick_the_toothbrush(rig, stack, caplog):
         spoken = len(rig.said)
         rig.run([(0.0, "drop it")])
         assert _said_since(rig, spoken, "Released"), _postmortem(caplog, rig.said)
-        _press_reset(rig, stack)
+        _press_reset(rig)
         spoken = len(rig.said)
         rig.run([(0.0, "pick up the toothbrush")]).watch_hold()
         report = f"after reset {n}\n{_postmortem(caplog, rig.said)}"

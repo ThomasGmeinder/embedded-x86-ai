@@ -90,8 +90,8 @@ def test_default_launch_is_unchanged(workshop_cfg, probe, no_twin):
     live-mimic clamp. The reset service is every twin's."""
     from common.config import DEFAULT_CONFIG
     from common.motion import GRASP_LIMITS
-    from common.ros2_control_arm import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
     from ros.arm_client import Ros2ArmClient
+    from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
     from so101_sim.node import PROPS_SETTLED_TOPIC, RESET_SERVICE
 
     from std_msgs.msg import Bool

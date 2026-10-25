@@ -106,7 +106,7 @@ def _node_specs(
     """
     import shutil
 
-    from common.ros2_control_arm import HARDWARE_COMMANDS, HARDWARE_STATES, LAUNCH_FILE
+    from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, LAUNCH_FILE
 
     cams = cfg.get("cameras") or {}
     robot = cfg.get("robot") or {}

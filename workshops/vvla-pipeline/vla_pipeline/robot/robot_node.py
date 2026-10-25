@@ -20,7 +20,7 @@ Two halves:
   threading model as the production node (subscriptions on executor
   threads, one sequential control loop, rest-pose parking on shutdown). The
   gripper's torque limit is the ``gripper_torque_limit_nm`` parameter.
-- :class:`Ros2ArmClient` - the :class:`~common.ros2_control_arm.ControllerArm`
+- :class:`Ros2ArmClient` - the :class:`~vla_pipeline.robot.ros2_control_arm.ControllerArm`
   behaviors drive the controllers with, so they stay transport-agnostic: the
   trajectory action, the forward controllers and ``/joint_states``.
 
@@ -55,21 +55,20 @@ from vla_pipeline.robot.arm_interface import (
     DryRunArm,
     clamp_joints,
 )
+from vla_pipeline.robot.ros2_control_arm import BODY, ControllerArm
 from vla_pipeline.utils.config import load_config
 
-from common.ros2_control_arm import (  # noqa: E402
+from so101_sim.control import (  # noqa: E402
     ARM_CONTROLLER,
-    BODY,
     BRING_UP_S,
     GRIPPER_CONTROLLER,
     STREAM_CONTROLLER,
     TORQUE_PARAMETER,
-    ControllerArm,
     server_transport_cfg,
 )
 from so101_sim.servo import current_to_torque_nm  # noqa: E402
 
-try:  # ROS 2 is optional at import time so non-ROS machines can run dry tests
+try:  # ROS 2 is required; without it sourced, _require_ros2() says how to fix that
     import rclpy
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.node import Node
@@ -372,7 +371,7 @@ class So101ServerNode(Node):
 
 
 class Ros2ArmClient(ControllerArm):
-    """The pipeline's arm over ros2_control (:class:`~common.ros2_control_arm.ControllerArm`)."""
+    """The pipeline's arm over ros2_control (:class:`~vla_pipeline.robot.ros2_control_arm.ControllerArm`)."""
 
     def __init__(self, cfg: dict, state_timeout_s: float = BRING_UP_S):
         _require_ros2()

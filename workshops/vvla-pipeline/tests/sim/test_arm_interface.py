@@ -6,21 +6,13 @@
 # content has been reviewed and validated by the authors.
 
 """The pipeline's arm layer keeps main's names: ``DirectArm`` owns the Feetech
-bus, and it is the same class the workshop calls ``LeRobotArm``."""
+bus. Its code is the workshop's ``LeRobotArm`` (``test_copies.py``)."""
 
 from __future__ import annotations
 
 import pytest
 
 pytestmark = pytest.mark.sim
-
-
-def test_direct_arm_is_the_workshop_bus_arm():
-    from common.motion import LeRobotArm
-    from vla_pipeline.robot import arm_interface
-
-    assert arm_interface.DirectArm is LeRobotArm
-    assert "DirectArm" in arm_interface.__all__
 
 
 def test_the_real_backend_builds_a_direct_arm_from_the_robot_config(monkeypatch):

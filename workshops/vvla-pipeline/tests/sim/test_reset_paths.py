@@ -41,7 +41,7 @@ _AWAY = {
 
 def _notebook_reset(arm) -> None:
     """The reset button in ``02_digital_twin.ipynb``, and the pytest helper."""
-    from common.motion import restore_twin
+    from so101_sim.world import restore_twin
 
     arm.world  # the notebook's world and the arm's world are the same object
     state = getattr(arm, "shared_state", None)
@@ -54,7 +54,7 @@ def _notebook_reset(arm) -> None:
 def _service_reset(arm) -> None:
     """The twin's ``/sim/reset_scene`` (``so101_sim.node.TwinControl``) on the
     pipeline server, then the control loop's next send."""
-    from common.motion import restore_twin
+    from so101_sim.world import restore_twin
     from vla_pipeline.robot.robot_node import So101ServerNode
 
     node = SimpleNamespace(
@@ -162,9 +162,10 @@ def test_run_pipeline_reset_calls_the_service_not_the_local_world():
 def test_notebook_test_and_pipeline_resets_leave_the_same_twin(workshop_cfg, pipeline_cfg):
     """One disturbed twin, reset the way each entry point resets it."""
     from common.motion import REST_POSE as workshop_pose
+    from so101_sim.config import DEFAULTS
     from vla_pipeline.robot.arm_interface import REST_POSE as pipeline_pose
 
-    assert workshop_pose is pipeline_pose
+    assert workshop_pose == pipeline_pose == DEFAULTS["rest_pose"]
     assert workshop_pose["wrist_flex"] == 22.5
     assert workshop_pose["gripper"] == 38.0
     made = []

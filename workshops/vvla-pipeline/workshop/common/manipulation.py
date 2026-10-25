@@ -22,10 +22,10 @@ The pipeline's remaining voice commands, in the workshop's handler shape
 - **fetch_block** - fetch the block from its taught pose, then hand it over.
 
 The handover finds you with YOLO-pose on the mount camera, aims the pan
-joint at you, extends, opens the jaws and parks. The same sequence the
-pipeline runs (``vla_pipeline/behaviors/``); the workshop is standalone, so
-it lives here rather than being imported. Settings: ``grip``, ``pick_place``
-and ``fetch_block`` in ``config/workshop.yaml``.
+joint at you, extends, opens the jaws and parks. Settings: ``grip``,
+``pick_place`` and ``fetch_block`` in ``config/workshop.yaml``. The pipeline
+keeps its own copy (``vla_pipeline/behaviors/manipulation.py``);
+``tests/sim/test_copies.py`` fails when the two drift apart.
 """
 
 from __future__ import annotations

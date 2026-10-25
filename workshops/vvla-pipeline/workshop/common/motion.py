@@ -25,11 +25,9 @@ from __future__ import annotations
 
 import logging
 import math
-import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from pathlib import Path
 
 from so101_sim import MOTOR_NAMES, MOTOR_SHORT
 
@@ -698,32 +696,72 @@ def sim_world(cfg: dict):
     return shared_world({"sim": sim}, rest_pose=REST_POSE)
 
 
-def parked_pose(rest_pose: dict | None = None) -> dict:
-    """Where a twin reset parks the arm: ``rest_pose`` (default :data:`REST_POSE`) with the jaws open."""
-    from so101_sim.kinematics import OPEN_GRIPPER
+class SimArmClient(LeRobotArm):
+    """:class:`LeRobotArm` driving the MuJoCo digital twin: a
+    :class:`so101_sim.SimFollower` in place of ``SO101Follower``. The slew
+    clamp, the per-move servo profile writes, the motion-state reads and the
+    effort probe are :class:`LeRobotArm`'s."""
 
-    return {**(REST_POSE if rest_pose is None else rest_pose), "gripper": OPEN_GRIPPER}
+    def __init__(self, cfg: dict, world=None):
+        from so101_sim import SimFollower
 
+        r = cfg.get("robot", {})
+        max_relative_target = r.get("max_relative_target", 8.0)
+        self.world = world or sim_world(cfg)
+        self._robot = SimFollower(
+            self.world,
+            max_relative_target=max_relative_target,
+            robot_id=r.get("robot_id", "sim"),
+        )
+        self._robot.config.disable_torque_on_disconnect = False
+        self._robot.connect()
+        logger.info("SO101 digital twin connected (MuJoCo, %s)", self.world.scene_path.name)
+        self._init_transport(max_relative_target)
 
-def restore_twin(arm, world=None) -> dict:
-    """Park ``arm`` at its rest pose with the jaws open and restore the props.
+    def _plan_start(self) -> dict:
+        """The twin's profile starts from its setpoint, which a squeezed jaw leaves past the object."""
+        return self.world.setpoint_cal()
 
-    Returns the parked joint dict. Callers that also track a command target
-    (the ROS control loop) copy that dict into the target under their lock.
-    """
-    world = arm.world if world is None else world
-    parked = parked_pose(world.rest_pose)
-    world.reset(parked)
-    arm.send_joints(parked)
-    return parked
+    def _await_motion(self, joints: list, sent_at: float, stop_check) -> tuple[str, dict]:
+        """The twin's physics owns the servo profiles: check them after each physics pass.
 
+        The twin computes how long its profiles still run (:meth:`SimWorld.profile_s`,
+        braking included after a goal written mid-move). That sim time, plus the
+        physics step the end shows in, bounds the wait.
+        """
+        w = self.world
+        budget = w.profile_s(joints) + w.dt
+        deadline = float(w.data.time) + budget
+        seen = w.passes
+        while True:
+            now = float(w.data.time)  # before the state: still moving after `now` is a real overrun
+            state = {"joints": self.get_joints(), **self.read_motion_state(), "eta_s": self.last_eta_s}
+            if stop_check is not None and stop_check():
+                return "stopped", state
+            if settled(state, joints):
+                return "settled", state
+            if now > deadline:
+                raise MotionTimeout(f"servos {joints} still moving {budget:.3f} s of sim time after the goal: {state}")
+            seen = w.next_step(seen)
 
-def _ensure_pipeline_path() -> None:
-    """``vla_pipeline`` sits next to ``workshop/``. The notebook only puts
-    ``workshop/solution`` on ``sys.path``."""
-    root = str(Path(__file__).resolve().parents[2])
-    if root not in sys.path:
-        sys.path.append(root)
+    def state_time(self) -> float:
+        """The twin's sim time."""
+        return float(self.world.data.time)
+
+    def wait_state(self, t: float, stop_check=None) -> float | None:
+        """The first physics pass at or after sim time ``t``."""
+        w = self.world
+        seen = w.passes
+        while float(w.data.time) < t:
+            if stop_check is not None and stop_check():
+                return None
+            seen = w.next_step(seen)
+        if stop_check is not None and stop_check():
+            return None
+        return float(w.data.time)
+
+    def grip_report(self) -> str:
+        return self.world.grip_report()
 
 
 def make_arm_backend(cfg: dict, dry_run: bool = False) -> ArmClient:
@@ -732,21 +770,8 @@ def make_arm_backend(cfg: dict, dry_run: bool = False) -> ArmClient:
     if dry_run or not r.get("enable_motors", True):
         return DryRunArm()
     if r.get("backend", "real") == "sim":
-        _ensure_pipeline_path()
-        from vla_pipeline.robot.sim_arm import SimArmClient
-
         return SimArmClient(cfg)
     return LeRobotArm(r["motor_port"], r["robot_id"], r.get("max_relative_target", 8.0))
-
-
-def __getattr__(name: str):
-    """``SimArmClient`` is defined once, in ``vla_pipeline.robot.sim_arm``."""
-    if name == "SimArmClient":
-        _ensure_pipeline_path()
-        from vla_pipeline.robot.sim_arm import SimArmClient
-
-        return SimArmClient
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ----------------------------------------------------------------------------

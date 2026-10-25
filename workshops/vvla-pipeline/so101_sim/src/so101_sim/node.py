@@ -91,7 +91,10 @@ def _load_yaml(path: str) -> dict:
 
 
 def _stack_parts(stack: str, cfg: dict, config_path: str | None):
-    """(world, arm, ServerNodeClass, CameraNodeClass) for the host stack."""
+    """(world, arm, ServerNodeClass, CameraNodeClass) for the host stack: its
+    own arm server and camera node, on its own bus transport over the twin."""
+    from so101_sim.control import server_transport_cfg
+
     if stack == "workshop":
         # workshop/<solution|project>/config/workshop.yaml -> host that variant's ros/
         if config_path:
@@ -99,13 +102,12 @@ def _stack_parts(stack: str, cfg: dict, config_path: str | None):
             if pkg not in sys.path:
                 sys.path.insert(0, pkg)
         from common.motion import SimArmClient, sim_world
-        from common.ros2_control_arm import server_transport_cfg
         from ros.arm_node import So101ServerNode
         from ros.camera_node import CameraNode
 
         world = sim_world(cfg)
         return world, SimArmClient(server_transport_cfg(cfg), world), So101ServerNode, CameraNode
-    from vla_pipeline.robot.robot_node import So101ServerNode, server_transport_cfg
+    from vla_pipeline.robot.robot_node import So101ServerNode
     from vla_pipeline.robot.sim_arm import SimArmClient, sim_world
     from vla_pipeline.vision.camera_node import CameraNode
 
@@ -296,7 +298,7 @@ class TwinControl:
         self.node.create_service(Trigger, RESET_SERVICE, self._on_reset)
 
     def _on_reset(self, _request, response):
-        from common.motion import restore_twin
+        from so101_sim.world import restore_twin
 
         self._server.reset_with(lambda: restore_twin(self._arm))
         response.success = True

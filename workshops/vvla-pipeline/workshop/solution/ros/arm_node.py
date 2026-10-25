@@ -50,6 +50,8 @@ import math
 import threading
 import time
 
+from so101_sim.control import TORQUE_PARAMETER, server_transport_cfg
+
 from common.config import load_config
 from common.motion import (
     DEFAULT_CONTROL_HZ,
@@ -62,7 +64,6 @@ from common.motion import (
     make_arm_backend,
     set_active_limits,
 )
-from common.ros2_control_arm import TORQUE_PARAMETER, server_transport_cfg
 from common.ros_helpers import joint_state_msg
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ class So101ServerNode(Node):
     """Bridges an ArmClient backend (real or dry-run) to ros2_control's hardware topics.
 
     An injected ``arm`` must stream: build it from
-    :func:`common.ros2_control_arm.server_transport_cfg`.
+    :func:`so101_sim.control.server_transport_cfg`.
     """
 
     def __init__(self, cfg: dict, arm=None):
@@ -286,10 +287,7 @@ def main() -> None:
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
     if not ROS2_AVAILABLE:
-        raise SystemExit(
-            "rclpy not importable - source ROS 2 before running "
-            "(offline checks: python -m ros.selftest)"
-        )
+        raise SystemExit("rclpy not importable - source /opt/ros/jazzy/setup.bash first")
     parser = argparse.ArgumentParser(description="SO-101 server node")
     parser.add_argument("--config", default=None)
     parser.add_argument(

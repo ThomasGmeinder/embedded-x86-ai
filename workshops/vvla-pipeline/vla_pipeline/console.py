@@ -1,3 +1,10 @@
+# Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Portions of this file consist of AI-generated content. AI-assisted
+# content has been reviewed and validated by the authors.
+
 """Twin console - one desktop window showing what the pipeline sees, hears and does.
 
 Layout (1200 x 1100)::
@@ -13,7 +20,9 @@ Layout (1200 x 1100)::
 The console only observes. Cameras are wrapped in :class:`FanoutCamera` so the
 console and a running behavior both get every frame; the models are tapped in
 place (:class:`ModelTap`) so the tiles show what the behavior computed, and
-the console runs a model itself only while no behavior is using it.
+the console runs a model itself only while no behavior is using it. The
+workshop keeps its own copy of the camera fan-out and the model tap
+(``workshop/common/twin_console.py``); ``tests/sim/test_copies.py`` fails when the two drift apart.
 
 All HighGUI calls happen on the thread that calls :meth:`TwinConsole.run`.
 """
@@ -29,10 +38,9 @@ from collections import deque
 import cv2
 import numpy as np
 
-from vla_pipeline.robot.arm_interface import GRIPPER_TORQUE_LIMIT
+from so101_sim import MOTOR_SHORT
 
-from common.twin_console import FanoutCamera, ModelTap, provider_name  # noqa: E402
-from so101_sim import MOTOR_SHORT  # noqa: E402
+from vla_pipeline.robot.arm_interface import GRIPPER_TORQUE_LIMIT
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +49,153 @@ TILE_W, TILE_H = 400, 300
 VIEW_W, VIEW_H = 800, 800  # tall enough for the raised arm (wave)
 LOG_LINES = (VIEW_H - 230) // 20  # what fits between the header and the arm HUD
 PANEL_W = 400
+IDLE_AFTER_S = 0.5  # a model untouched this long is run by the console itself
 FPS = 15.0
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 WHITE, GRAY, DIM = (235, 235, 235), (150, 150, 150), (90, 90, 90)
 GREEN, YELLOW, RED, CYAN = (80, 200, 80), (60, 200, 230), (60, 60, 230), (220, 200, 80)
+
+
+class FanoutCamera:
+    """One reader thread; every consumer thread gets each new frame once.
+
+    ``read()`` blocks for the next frame this thread hasn't seen, so behaviors
+    keep camera-like pacing while the console reads the same stream.
+
+    The reader blocks on the camera: a device or a paced stand-in in its
+    ``read()``, a latest-frame client (a ROS topic, the twin) in its
+    ``next_frame(after)``, which returns the first frame newer than ``after``.
+    A camera that stops giving frames ends the reader, unless it says when it
+    will try its device again (``retry_at()``, wall-clock seconds).
+    """
+
+    def __init__(self, inner, timeout_s: float = 1.0):
+        self.inner = inner
+        self.role = getattr(inner, "role", "?")
+        self._timeout = timeout_s
+        self._cond = threading.Condition()
+        self._frame: np.ndarray | None = None
+        self._seq = 0
+        self._stamp = 0.0
+        self._wall = 0.0
+        self._seen: dict[int, int] = {}
+        self.last_stamp: float | None = None  # capture time of the last read_after() frame
+        self._running = True
+        self._closed = threading.Event()
+        self._thread = threading.Thread(target=self._pump, daemon=True, name=f"fanout-{self.role}")
+        self._thread.start()
+
+    def _next(self, after: float):
+        """``(ok, frame, captured)``: the camera's next frame and when its scene was captured.
+
+        A camera that knows the capture time (the twin's) says so in
+        ``last_stamp``; otherwise it is the arrival time.
+        """
+        if callable(getattr(self.inner, "next_frame", None)):
+            return self.inner.next_frame(after)
+        ok, frame = self.inner.read()
+        captured = getattr(self.inner, "last_stamp", None)
+        return ok, frame, time.time() if captured is None else float(captured)
+
+    def _pump(self) -> None:
+        after = 0.0
+        while self._running:
+            try:
+                ok, frame, captured = self._next(after)
+            except Exception as e:
+                logger.warning("[console] %s camera read failed: %s", self.role, e)
+                ok, frame = False, None
+            if ok and frame is not None:
+                after = captured
+                with self._cond:
+                    self._frame, self._stamp, self._wall = frame, time.monotonic(), captured
+                    self._seq += 1
+                    self._cond.notify_all()
+                continue
+            retry = getattr(self.inner, "retry_at", None)
+            retry_at = retry() if callable(retry) else None
+            if retry_at is None:
+                return  # closed, or a camera that will not give frames again
+            self._closed.wait(max(retry_at - time.time(), 0.0))  # the camera's own reopen schedule
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        tid = threading.get_ident()
+        with self._cond:
+            if not self._cond.wait_for(
+                lambda: self._seq > self._seen.get(tid, 0), timeout=self._timeout
+            ):
+                return False, None
+            self._seen[tid] = self._seq
+            return True, self._frame
+
+    def read_after(self, settled_at: float):
+        """Next pumped frame captured (or, without a capture stamp, arrived) after ``settled_at``."""
+        deadline = time.monotonic() + max(self._timeout, 0.5)
+        with self._cond:
+            while self._frame is None or self._wall <= settled_at:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False, None
+                self._cond.wait(timeout=remaining)
+            self._seen[threading.get_ident()] = self._seq
+            self.last_stamp = self._wall
+            return True, self._frame
+
+    def latest(self) -> np.ndarray | None:
+        """Newest frame without blocking, or None if the stream is stale."""
+        with self._cond:
+            if self._frame is None or time.monotonic() - self._stamp > self._timeout:
+                return None
+            return self._frame
+
+    def ok(self) -> bool:
+        return self.latest() is not None
+
+    def close(self) -> None:
+        """Close the camera, which wakes the reader blocked on it, then join the reader."""
+        self._running = False
+        self._closed.set()
+        close = getattr(self.inner, "close", None) or getattr(self.inner, "release", None)
+        if close:
+            close()
+        self._thread.join(timeout=1.0)
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+class ModelTap:
+    """Wrap ``obj.method`` in place: serialise calls and keep the last result.
+
+    Patching the instance (not wrapping the object) also catches internal
+    calls such as ``detector.find`` -> ``self.infer``.
+    """
+
+    def __init__(self, obj, method: str):
+        self.obj = obj
+        self.last = None
+        self._stamp = 0.0
+        self._lock = threading.Lock()
+        self._inner = getattr(obj, method)
+
+        def tapped(*args, **kwargs):
+            result = self.call(*args, **kwargs)
+            self._stamp = time.monotonic()
+            return result
+
+        setattr(obj, method, tapped)
+
+    def call(self, *args, **kwargs):
+        """Run the model for the console; doesn't count as a behavior using it."""
+        with self._lock:
+            result = self._inner(*args, **kwargs)
+        self.last = result
+        return result
+
+    def idle(self) -> bool:
+        """True while no behavior has called the model recently."""
+        return time.monotonic() - self._stamp > IDLE_AFTER_S
+
 
 
 def _view_source(cfg: dict):
@@ -91,6 +242,23 @@ def _bar(img, x, y, w, h, frac, color, mark: float | None = None) -> None:
     if mark is not None:
         mx = x + int(np.clip(mark, 0.0, 1.0) * w)
         cv2.line(img, (mx, y - 3), (mx, y + h + 3), WHITE, 1)
+
+
+PROCESSOR = {"VitisAIExecutionProvider": "NPU", "CPUExecutionProvider": "CPU"}
+
+
+def provider_name(model, default: str = "CPU") -> str:
+    """The processor a model runs on, for a tile title: NPU, CPU, or the provider's name.
+
+    From the model's ``provider`` (the workshop's models), else its ONNX ``session``.
+    """
+    p = getattr(model, "provider", None)
+    session = getattr(model, "session", None)
+    if p is None and session is not None:
+        p = session.get_providers()[0]
+    p = str(p or default)
+    return PROCESSOR.get(p, p.replace("ExecutionProvider", ""))
+
 
 
 class TwinConsole:
@@ -144,7 +312,7 @@ class TwinConsole:
         arm = self.ctx.arm
         world = getattr(arm, "world", None)
         if world is not None:
-            from vla_pipeline.robot.arm_interface import restore_twin
+            from so101_sim.world import restore_twin
 
             restore_twin(arm, world)
             return True

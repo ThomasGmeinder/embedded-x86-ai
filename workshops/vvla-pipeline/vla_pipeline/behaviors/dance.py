@@ -25,14 +25,56 @@ import logging
 import random
 import time
 
-from vla_pipeline.robot.arm_interface import ArmClient, DryRunArm, ensure_common_path, make_arm
+from vla_pipeline.robot.arm_interface import ArmClient, DryRunArm, make_arm
 from vla_pipeline.utils.config import load_config
 
-ensure_common_path()
-
-from common.motion import DANCE_MOVES as MOVES  # noqa: E402
-
 logger = logging.getLogger(__name__)
+
+DANCE_MOVES = {
+    "sway": [
+        {
+            "shoulder_pan": -45.0,
+            "shoulder_lift": -60.0,
+            "elbow_flex": 60.0,
+            "wrist_roll": -40.0,
+        },
+        {
+            "shoulder_pan": 45.0,
+            "shoulder_lift": -60.0,
+            "elbow_flex": 60.0,
+            "wrist_roll": 40.0,
+        },
+    ],
+    "pump": [
+        # Folded any tighter (elbow 95, wrist 60) the wrist camera mount hits
+        # the shoulder and the jaws the table, and the servos trip on overload.
+        {"shoulder_lift": -90.0, "elbow_flex": 80.0, "wrist_flex": 50.0},
+        {"shoulder_lift": -20.0, "elbow_flex": 20.0, "wrist_flex": -20.0},
+    ],
+    "disco_point": [
+        {
+            "shoulder_pan": -60.0,
+            "shoulder_lift": -30.0,
+            "elbow_flex": 10.0,
+            "wrist_flex": 0.0,
+        },
+        {
+            "shoulder_pan": 60.0,
+            "shoulder_lift": -85.0,
+            "elbow_flex": 80.0,
+            "wrist_flex": 50.0,
+        },
+    ],
+    "wrist_spin": [
+        {"shoulder_lift": -55.0, "elbow_flex": 70.0, "wrist_roll": -90.0},
+        {"shoulder_lift": -55.0, "elbow_flex": 70.0, "wrist_roll": 90.0},
+    ],
+    "gripper_chomp": [
+        {"gripper": 80.0, "wrist_flex": 30.0},
+        {"gripper": 5.0, "wrist_flex": 50.0},
+    ],
+}
+
 
 
 def run_dance(
@@ -50,7 +92,7 @@ def run_dance(
     rng = random.Random(seed)
 
     logger.info("Dancing for %.0f s at %.0f BPM", duration_s, bpm)
-    order = list(MOVES)
+    order = list(DANCE_MOVES)
     rng.shuffle(order)
     move_cycle = itertools.cycle(order)
 
@@ -62,7 +104,7 @@ def run_dance(
             move = next(move_cycle)
             logger.info("[dance] move: %s", move)
             # Two bars of the move (4 beats each keyframe alternation).
-            for keyframe in MOVES[move] * 4:
+            for keyframe in DANCE_MOVES[move] * 4:
                 if time.time() >= deadline or (stop_check and stop_check()):
                     break
                 arm.go_to(keyframe, duration_s=beat * 0.9, fps=30.0)

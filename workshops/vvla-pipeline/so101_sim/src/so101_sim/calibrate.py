@@ -86,12 +86,9 @@ def run_grasp(cfg=None, verbose=True) -> list[dict]:
     from so101_sim.world import SimWorld
 
     poses = _poses_from_config(cfg)
-    from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR
-
-    mapped = ((cfg or {}).get("sim") or {}).get("gripper_map", {}).get("closed_cal")
-    floor = GRIPPER_CLOSED_FLOOR if mapped is None else float(mapped)
     results = []
     world = SimWorld(cfg, start=False)
+    floor = float(world.cfg["gripper_map"]["closed_cal"])
     try:
         for obj, pname, opened in GRASPS:
             world.reset()

@@ -38,9 +38,9 @@ import threading
 import time
 from pathlib import Path
 
-from common.ros2_control_arm import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
 from common.ros_helpers import Spinner, from_image_msg
 from ros.arm_client import Ros2ArmClient
+from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
 from so101_sim.node import DIAGNOSTICS_TOPIC, GRIPPER_STATUS, PROPS_STATUS, VIEW_TOPIC, WORLD_FRAME
 
 logger = logging.getLogger(__name__)

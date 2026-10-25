@@ -199,14 +199,10 @@ def check_cameras(rep: Reporter, cfg: dict) -> None:
 def check_arm(rep: Reporter, cfg: dict) -> None:
     """Verify the arm server node and client wiring over ros2_control:
     construction, state, commands, clamping."""
+    from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
+
     from common.config import DEFAULT_CONFIG
     from common.motion import JOINT_LIMITS, REST_POSE, DryRunArm
-    from common.ros2_control_arm import (
-        HARDWARE_COMMANDS,
-        HARDWARE_STATES,
-        start_controllers,
-        stop_controllers,
-    )
     from ros.arm_client import Ros2ArmClient
     from ros.arm_node import So101ServerNode
 

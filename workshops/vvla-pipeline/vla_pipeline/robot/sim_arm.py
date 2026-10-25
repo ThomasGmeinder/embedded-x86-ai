@@ -5,16 +5,17 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""``LeRobotArm`` on the MuJoCo digital twin instead of the Feetech bus.
+"""``DirectArm`` on the MuJoCo digital twin instead of the Feetech bus.
 
 :class:`SimArmClient` is that transport with a :class:`so101_sim.SimFollower`
 in place of ``SO101Follower``. The slew clamp, the per-move servo profile
-writes, the motion-state reads and the effort probe are the ones on
-:class:`common.motion.LeRobotArm`.
+writes, the motion-state reads and the effort probe are
+:class:`~vla_pipeline.robot.arm_interface.DirectArm`'s.
 
 Selected with ``robot.backend: sim`` (see ``make_arm`` and the ROS server
 node). The world is per process (``so101_sim.shared_world``) so the arm and
-an in-process sim arm camera see the same physics.
+an in-process sim arm camera see the same physics. The workshop keeps its
+own copy (``workshop/common/motion.py``); ``tests/sim/test_copies.py`` fails when the two drift apart.
 """
 
 from __future__ import annotations
@@ -22,20 +23,32 @@ from __future__ import annotations
 import logging
 
 from vla_pipeline.robot.arm_interface import (
+    GRIPPER_CLOSED_FLOOR,
     REST_POSE,
-    LeRobotArm,
-    sim_world,
+    DirectArm,
+    MotionTimeout,
+    settled,
 )
-
-from common.motion import MotionTimeout, settled  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["REST_POSE", "SimArmClient", "sim_world"]
+
+def sim_world(cfg: dict):
+    """The process-wide MuJoCo digital twin, set up for the pipeline's arm."""
+    from so101_sim import shared_world
+
+    sim = dict(cfg.get("sim") or {})
+    gm = dict(sim.get("gripper_map") or {})
+    gm["closed_cal"] = GRIPPER_CLOSED_FLOOR
+    sim["gripper_map"] = gm
+    return shared_world({"sim": sim}, rest_pose=REST_POSE)
 
 
-class SimArmClient(LeRobotArm):
-    """:class:`LeRobotArm` driving the MuJoCo digital twin."""
+class SimArmClient(DirectArm):
+    """:class:`DirectArm` driving the MuJoCo digital twin: a
+    :class:`so101_sim.SimFollower` in place of ``SO101Follower``. The slew
+    clamp, the per-move servo profile writes, the motion-state reads and the
+    effort probe are :class:`DirectArm`'s."""
 
     def __init__(self, cfg: dict, world=None):
         from so101_sim import SimFollower
@@ -97,3 +110,4 @@ class SimArmClient(LeRobotArm):
 
     def grip_report(self) -> str:
         return self.world.grip_report()
+

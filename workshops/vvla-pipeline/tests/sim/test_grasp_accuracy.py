@@ -380,7 +380,10 @@ def test_close_holds_the_object(twins, pipeline_cfg, workshop_cfg, stack, body, 
 def test_the_jaws_open_after_a_squeeze(twins, pipeline_cfg, workshop_cfg, stack):
     """A squeezed jaw stops at the object while its servo setpoint goes on past it.
     The release is planned from that setpoint, so it ends within its profile."""
-    from common.motion import JOINT_LIMITS
+    if stack == "pipeline":
+        from vla_pipeline.robot.arm_interface import JOINT_LIMITS
+    else:
+        from common.motion import JOINT_LIMITS
 
     cfg = pipeline_cfg if stack == "pipeline" else workshop_cfg
     twin = twins(stack, cfg)

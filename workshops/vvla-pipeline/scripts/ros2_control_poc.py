@@ -43,6 +43,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from so101_sim import control  # noqa: E402
+
 CONFIG = ROOT / "config" / "pipeline.yaml"
 BODY = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
 SETTLED_DEG = 0.5
@@ -52,9 +54,9 @@ GRASP_POSE = {"shoulder_pan": 0.0, "shoulder_lift": 9.0, "elbow_flex": 20.0, "wr
 
 def _moves(cfg: dict) -> list[tuple[str, dict]]:
     """Park, the scan sweep, a reach down to the table, the wave and the dance keyframes."""
+    from vla_pipeline.behaviors.dance import DANCE_MOVES
+    from vla_pipeline.behaviors.simple import WAVE_UP
     from vla_pipeline.robot.arm_interface import REST_POSE, clamp_joints
-
-    from common.motion import DANCE_MOVES, WAVE_UP
 
     def body(pose: dict) -> dict:
         return {k: v for k, v in pose.items() if k in BODY}
@@ -164,7 +166,7 @@ def run_move(probe: Probe, name: str, goal: dict) -> dict:
     from control_msgs.action import FollowJointTrajectory
     from trajectory_msgs.msg import JointTrajectoryPoint
 
-    from common.servo_profile import shared_profiler
+    from vla_pipeline.robot.servo_profile import shared_profiler
 
     start = probe.joints()
     plan = shared_profiler().plan(start, goal)
@@ -254,14 +256,6 @@ def grasp_action(probe: Probe, world, closed: float, opened: float) -> dict:
             "grasped": bool(world.is_grasped("sports_ball"))}
 
 
-def _control():
-    """``common.ros2_control_arm``, once the pipeline has put ``common`` on the path."""
-    import vla_pipeline.robot.arm_interface  # noqa: F401 - ensure_common_path()
-    from common import ros2_control_arm
-
-    return ros2_control_arm
-
-
 def _stop(proc: subprocess.Popen) -> None:
     os.killpg(proc.pid, signal.SIGINT)
     proc.wait()
@@ -291,7 +285,6 @@ class Session:
 
         if not rclpy.ok():
             rclpy.init()
-        control = _control()
         self.probe = Probe(jmap, control.HARDWARE_COMMANDS, control.HARDWARE_STATES)
         self.executor = SingleThreadedExecutor()
         for n in (*extra, self.probe.node):
@@ -314,7 +307,7 @@ class Session:
     def close(self) -> None:
         import rclpy
 
-        _control().stop_controllers(self.launch)
+        control.stop_controllers(self.launch)
         self.executor.shutdown()
         self.probe.close()
         rclpy.try_shutdown()
@@ -331,8 +324,8 @@ def measure_moves(cfg: dict, cfg_path: Path, jmap, profile_server: bool = False,
     twin = subprocess.Popen(
         [*sampler, sys.executable, "-m", "so101_sim.node", "--config", str(cfg_path), "--stack", "pipeline",
          "--no-view", "--ros-args",
-         "-r", f"{cfg['robot']['command_topic']}:={_control().HARDWARE_COMMANDS}",
-         "-r", f"{cfg['robot']['state_topic']}:={_control().HARDWARE_STATES}"],
+         "-r", f"{cfg['robot']['command_topic']}:={control.HARDWARE_COMMANDS}",
+         "-r", f"{cfg['robot']['state_topic']}:={control.HARDWARE_STATES}"],
         cwd=str(ROOT), start_new_session=True, env=env,
     )
     session = None
@@ -377,7 +370,6 @@ def measure_grasp(cfg: dict, cfg_path: Path, jmap, domain: int) -> dict:
     import rclpy
 
     rclpy.init()
-    control = _control()
     in_process = dict(cfg, robot={**cfg["robot"], "command_topic": control.HARDWARE_COMMANDS,
                                   "state_topic": control.HARDWARE_STATES})
     world, nodes, closers = build_nodes(in_process, stack="pipeline", config_path=str(cfg_path), view=False)
