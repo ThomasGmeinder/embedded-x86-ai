@@ -148,18 +148,24 @@ class LlamaIntentParser:
             ready.set()
 
         threading.Thread(target=relay, daemon=True, name="llama-server-log").start()
-        if not ready.wait(ready_timeout_s):
-            raise TimeoutError(
-                f"llama-server did not log {READY_LINE!r} within {ready_timeout_s:.0f} s "
-                f"(log: {self._server_log_path})"
-            )
-        if self._proc.poll() is not None:
-            tail = self._read_server_log_tail()
-            raise RuntimeError(
-                f"llama-server exited with code {self._proc.wait()} during "
-                f"startup. Last log lines:\n{tail}\n"
-                f"(full log: {self._server_log_path})"
-            )
+        try:
+            if not ready.wait(ready_timeout_s):
+                raise TimeoutError(
+                    f"llama-server did not log {READY_LINE!r} within {ready_timeout_s:.0f} s "
+                    f"(log: {self._server_log_path})"
+                )
+            if self._proc.poll() is not None:
+                tail = self._read_server_log_tail()
+                raise RuntimeError(
+                    f"llama-server exited with code {self._proc.wait()} during "
+                    f"startup. Last log lines:\n{tail}\n"
+                    f"(full log: {self._server_log_path})"
+                )
+            if not self._server_alive():
+                raise RuntimeError(f"llama-server logged readiness but {self.base}/health is not ready")
+        except BaseException:
+            self.close()
+            raise
         logger.info("llama-server ready at %s", self.base)
 
     def _read_server_log_tail(self, n: int = 20) -> str:
@@ -179,6 +185,9 @@ class LlamaIntentParser:
             except subprocess.TimeoutExpired:
                 self._proc.kill()
             self._proc = None
+        server_log = getattr(self, "_server_log", None)
+        if server_log is not None and not server_log.closed:
+            server_log.close()
 
     # ------------------------------------------------------------------
     # Intent parsing

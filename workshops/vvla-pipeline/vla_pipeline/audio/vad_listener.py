@@ -51,6 +51,8 @@ logger = logging.getLogger(__name__)
 
 SAMPLE_RATE = 16000
 BLOCK_SAMPLES = 480  # 30 ms - webrtcvad's preferred frame size
+_AUDIO_QUEUE_BLOCKS = 64
+_DECODE_QUEUE_UTTERANCES = 2
 
 
 @dataclass
@@ -208,13 +210,23 @@ class FastListener:
         """Open the microphone input stream and the queue its callback feeds."""
         import sounddevice as sd
 
-        q_audio: queue.Queue[np.ndarray] = queue.Queue()
+        q_audio: queue.Queue[np.ndarray] = queue.Queue(maxsize=_AUDIO_QUEUE_BLOCKS)
 
         def callback(indata, frames, t, status):
             """sounddevice callback: push each captured block onto q_audio."""
             if status:
                 logger.warning("sounddevice status: %s", status)
-            q_audio.put(indata.copy().squeeze())
+            try:
+                q_audio.put_nowait(indata.copy().squeeze())
+            except queue.Full:
+                try:
+                    q_audio.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    q_audio.put_nowait(indata.copy().squeeze())
+                except queue.Full:
+                    pass
 
         stream = sd.InputStream(
             samplerate=SAMPLE_RATE,
@@ -271,7 +283,7 @@ class FastListener:
         that decode.
         """
         seg = SpeechSegmenter(self.vcfg)
-        jobs: queue.Queue[np.ndarray] = queue.Queue()
+        jobs: queue.Queue[np.ndarray] = queue.Queue(maxsize=_DECODE_QUEUE_UTTERANCES)
 
         def _decode() -> None:
             while not (stop_check and stop_check()):
@@ -297,7 +309,10 @@ class FastListener:
                     if on_busy is not None:
                         on_busy(False)
                 if text:
-                    on_transcript(text)
+                    try:
+                        on_transcript(text)
+                    except Exception:
+                        logger.exception("transcript callback failed")
 
         threading.Thread(target=_decode, daemon=True, name="asr").start()
         try:
@@ -315,7 +330,17 @@ class FastListener:
                 if on_level is not None:
                     on_level(float(np.sqrt(np.mean(np.square(block)))), seg.in_speech)
                 if audio is not None:
-                    jobs.put(audio)
+                    try:
+                        jobs.put_nowait(audio)
+                    except queue.Full:
+                        try:
+                            jobs.get_nowait()
+                        except queue.Empty:
+                            pass
+                        try:
+                            jobs.put_nowait(audio)
+                        except queue.Full:
+                            pass
 
 
 # =============================================================================
