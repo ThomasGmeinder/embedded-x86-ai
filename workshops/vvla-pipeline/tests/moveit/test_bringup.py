@@ -18,26 +18,21 @@ from __future__ import annotations
 
 import json
 import math
-import queue
-import threading
 import xml.etree.ElementTree as ET
 
 import numpy as np
 import pytest
 
+import conftest
+from conftest import next_message as _next
+from so101_sim.mapping import BODY_JOINTS as BODY
+from vla_pipeline.robot.servo_profile import PROPS
+from vla_pipeline.utils.config import REPO_ROOT
+
 pytestmark = pytest.mark.sim
-launch_pytest = pytest.importorskip("launch_pytest")  # ROS 2 Jazzy
-
-from so101_sim.mapping import BODY_JOINTS as BODY  # noqa: E402
-from vla_pipeline.robot.servo_profile import PROPS  # noqa: E402
-from vla_pipeline.utils.config import REPO_ROOT, load_config  # noqa: E402
-
+# The session's one bringup, named through conftest: a fixture imported here would be a second one.
+LAUNCH = pytest.mark.launch(fixture=conftest.twin_bringup)
 MOVEIT_CONFIG = REPO_ROOT / "so_arm101_moveit_config" / "config"
-
-
-@pytest.fixture(scope="module")
-def pipeline_cfg():
-    return load_config()
 
 
 def _srdf_state(name: str) -> dict:
@@ -106,77 +101,13 @@ def test_the_planning_limits_are_the_servo_envelope():
 # ----------------------------------------------------------------------------
 # the bringup on the twin
 # ----------------------------------------------------------------------------
-@launch_pytest.fixture(scope="module")
-def twin_bringup():
-    from launch import LaunchDescription
-    from launch.actions import IncludeLaunchDescription
-    from launch.launch_description_sources import PythonLaunchDescriptionSource
-
-    from so101_sim.control import LAUNCH_FILE
-
-    return LaunchDescription([
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(str(LAUNCH_FILE)),
-            launch_arguments={"hardware_type": "mujoco"}.items(),
-        ),
-        launch_pytest.actions.ReadyToTest(),
-    ])
-
-
 @pytest.fixture(scope="module")
-def ros_node(twin_bringup):
-    """An rclpy node on the twin's clock, in its own context, spun on its own thread."""
-    import rclpy
-    from rclpy.executors import MultiThreadedExecutor
-    from rclpy.parameter import Parameter
-
-    context = rclpy.Context()
-    rclpy.init(context=context)
-    node = rclpy.create_node(
-        "moveit_bringup_test", context=context, parameter_overrides=[Parameter("use_sim_time", value=True)],
-    )
-    executor = MultiThreadedExecutor(context=context)
-    executor.add_node(node)
-    spinner = threading.Thread(target=executor.spin, name="moveit-bringup-test", daemon=True)
-    spinner.start()
-    yield node
-    executor.shutdown()
-    spinner.join()
-    node.destroy_node()
-    rclpy.shutdown(context=context)
+def moveit(arm):
+    """The session arm's MoveItPy, on the twin."""
+    return arm.robot
 
 
-@pytest.fixture(scope="module")
-def moveit(ros_node):
-    """MoveItPy on the twin, once its controllers' actions answer this process."""
-    from control_msgs.action import FollowJointTrajectory, ParallelGripperCommand
-    from rclpy.action import ActionClient
-
-    from vla_pipeline.robot import moveit_arm
-
-    robot = moveit_arm.moveit_py("moveit_bringup_test_py", sim=True)
-    types = {"joint_trajectory_controller": FollowJointTrajectory, "gripper_controller": ParallelGripperCommand}
-    for name, action in moveit_arm.controllers().items():
-        client = ActionClient(ros_node, types[name], action)
-        assert client.wait_for_server(timeout_sec=30.0), f"{action} does not answer"
-        client.destroy()
-    yield robot
-    robot.shutdown()
-
-
-def _next(node, msg_type, topic: str, accept=lambda _m: True, timeout_s: float = 30.0):
-    """The first message on ``topic`` that ``accept`` takes."""
-    got: queue.Queue = queue.Queue()
-    sub = node.create_subscription(msg_type, topic, lambda m: accept(m) and got.put(m), 10)
-    try:
-        return got.get(timeout=timeout_s)
-    except queue.Empty:
-        pytest.fail(f"nothing on {topic} within {timeout_s} s")
-    finally:
-        node.destroy_subscription(sub)
-
-
-@pytest.mark.launch(fixture=twin_bringup)
+@LAUNCH
 def test_the_twin_publishes_its_clock_joints_cameras_and_props(ros_node):
     from mujoco_ros2_control_msgs.msg import FreeJointStateArray
     from rosgraph_msgs.msg import Clock
@@ -195,7 +126,7 @@ def test_the_twin_publishes_its_clock_joints_cameras_and_props(ros_node):
     assert {p.name for p in props.free_joints} == set(PROPS)
 
 
-@pytest.mark.launch(fixture=twin_bringup)
+@LAUNCH
 def test_moveitpy_plans_and_executes_from_home_to_ready(ros_node, moveit):
     from vla_pipeline.robot import moveit_arm
 
@@ -213,7 +144,7 @@ def test_moveitpy_plans_and_executes_from_home_to_ready(ros_node, moveit):
         assert reached[joint] == pytest.approx(value, abs=0.01), joint
 
 
-@pytest.mark.launch(fixture=twin_bringup)
+@LAUNCH
 def test_reset_world_puts_the_arm_and_every_prop_back(ros_node, moveit):
     from control_msgs.msg import JointTrajectoryControllerState
     from mujoco_ros2_control_msgs.msg import FreeJointState, FreeJointStateArray
@@ -275,7 +206,7 @@ def _hand_built_grasp(kin, pp: dict, prop: str):
     return (None if found is None else found[1]), kw["width"]
 
 
-@pytest.mark.launch(fixture=twin_bringup)
+@LAUNCH
 def test_pick_ik_solves_the_top_down_grasps_on_the_default_objects(moveit, pipeline_cfg):
     """pick_ik from home on the grasps the hand-built IK finds for the default
     objects, and on each turned about the vertical through its grasp point.
@@ -331,7 +262,7 @@ def test_pick_ik_solves_the_top_down_grasps_on_the_default_objects(moveit, pipel
         assert 0 in rate["yaws_deg"], f"pick_ik does not reach the hand-built IK's own grasp of the {prop}"
 
 
-@pytest.mark.launch(fixture=twin_bringup)
+@LAUNCH
 def test_a_kernel_from_its_kernel_json_creates_moveitpy_on_the_twin(ros_node):
     """The notebooks' kernel, started the way VS Code starts it, reads the twin's arm state through MoveItPy."""
     from jupyter_client.manager import start_new_kernel
