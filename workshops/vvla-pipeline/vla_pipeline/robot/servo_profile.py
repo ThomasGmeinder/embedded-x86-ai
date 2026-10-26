@@ -39,7 +39,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from so101_sim import MOTOR_NAMES
+from so101_sim import MJCF_JOINTS, MOTOR_NAMES
 
 PROFILE_FILE = Path(__file__).resolve().parents[2] / "config" / "servo_profiles.json"
 # The slowest profile this code writes: a joint whose budget is used up by
@@ -111,12 +111,12 @@ class ServoProfiler:
         self.rad_per_step = {j: self._jmap.steps_to_rad(j, 1.0) for j in MOTOR_NAMES}
         self._mj = mujoco
         self._model = mujoco.MjModel.from_xml_path(str(DEFAULT_SCENE))
-        self._model.body_mass[self._model.jnt_bodyid[self._model.joint("wrist_roll").id]] += heaviest_prop(
-            self._model
-        )[1]
+        self._model.body_mass[self._model.jnt_bodyid[self._model.joint(MJCF_JOINTS["wrist_roll"]).id]] += (
+            heaviest_prop(self._model)[1]
+        )
         self._data = mujoco.MjData(self._model)
-        self._qadr = [int(self._model.joint(n).qposadr[0]) for n in MOTOR_NAMES]
-        self._dadr = [int(self._model.joint(n).dofadr[0]) for n in MOTOR_NAMES]
+        self._qadr = [int(self._model.joint(MJCF_JOINTS[n]).qposadr[0]) for n in MOTOR_NAMES]
+        self._dadr = [int(self._model.joint(MJCF_JOINTS[n]).dofadr[0]) for n in MOTOR_NAMES]
         self._full = None
         self._lock = threading.Lock()
 

@@ -45,6 +45,7 @@ __all__ = [
     "close_shared_world",
     "load_sim_config",
     "MOTOR_NAMES",
+    "MJCF_JOINTS",
     "MOTOR_SHORT",
 ]
 
@@ -56,6 +57,8 @@ MOTOR_NAMES = (
     "wrist_roll",
     "gripper",
 )
+# The MJCF joint and actuator each motor drives: ros2_so_arm's joint names.
+MJCF_JOINTS = {m: f"{m}_joint" for m in MOTOR_NAMES}
 # Labels for HUDs and log lines.
 MOTOR_SHORT = {
     "shoulder_pan": "pan",

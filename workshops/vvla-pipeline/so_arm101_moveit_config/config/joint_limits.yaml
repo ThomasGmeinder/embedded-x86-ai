@@ -1,0 +1,41 @@
+# joint_limits.yaml allows the dynamics properties specified in the URDF to be overwritten or augmented as needed
+
+# The limits below are the STS3215 envelope in config/servo_profiles.json (the
+# worst pose, the heaviest prop in the jaws), so full speed stays inside the
+# servos' torque budget.
+default_velocity_scaling_factor: 1.0
+default_acceleration_scaling_factor: 1.0
+
+# Specific joint properties can be changed with the keys [max_position, min_position, max_velocity, max_acceleration]
+# Joint limits can be turned off with [has_velocity_limits, has_acceleration_limits]
+joint_limits:
+  shoulder_pan_joint:
+    has_velocity_limits: true
+    max_velocity: 2.14152
+    has_acceleration_limits: true
+    max_acceleration: 7.05637
+  shoulder_lift_joint:
+    has_velocity_limits: true
+    max_velocity: 0.30543
+    has_acceleration_limits: true
+    max_acceleration: 7.97615
+  elbow_flex_joint:
+    has_velocity_limits: true
+    max_velocity: 1.12399
+    has_acceleration_limits: true
+    max_acceleration: 11.81239
+  wrist_flex_joint:
+    has_velocity_limits: true
+    max_velocity: 1.84307
+    has_acceleration_limits: true
+    max_acceleration: 16.10764
+  wrist_roll_joint:
+    has_velocity_limits: true
+    max_velocity: 2.13105
+    has_acceleration_limits: true
+    max_acceleration: 17.02743
+  gripper_joint:
+    has_velocity_limits: true
+    max_velocity: 2.13628
+    has_acceleration_limits: true
+    max_acceleration: 17.03441

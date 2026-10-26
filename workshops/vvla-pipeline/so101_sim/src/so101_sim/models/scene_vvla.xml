@@ -102,4 +102,12 @@
     <!-- the coarse link boxes overlap in the folded rest pose; the real links clear -->
     <exclude body1="shoulder" body2="lower_arm"/>
   </contact>
+
+  <!-- reset_world's scene: the arm at the SRDF's home with the jaws open, every prop where
+       its body is placed above (so_arm101_moveit_config/config/so_arm101.srdf) -->
+  <keyframe>
+    <key name="home"
+      qpos="0 -1.68424 1.67377 0.3919 1.46786 1.7 0.22 -0.15 0.001 0.992198 0 0 -0.124675 0.28 0.06 0.015 1 0 0 0 0.2 0.2 0.0375 1 0 0 0 0.12 -0.24 0.005 0.980067 0 0 0.198669"
+      ctrl="0 -1.68424 1.67377 0.3919 1.46786 1.7"/>
+  </keyframe>
 </mujoco>

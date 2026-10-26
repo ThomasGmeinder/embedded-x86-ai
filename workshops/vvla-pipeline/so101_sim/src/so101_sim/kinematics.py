@@ -33,6 +33,7 @@ import threading
 
 import numpy as np
 
+from so101_sim import MJCF_JOINTS
 from so101_sim.world import _FIXED_PAD_X, TABLE_Z
 
 __all__ = [
@@ -228,7 +229,7 @@ class Kinematics:
             self._limits[name] = (min(lo, hi), max(lo, hi))
         lo, hi = (world.jmap.to_cal("wrist_roll", v) for v in world._jrange[4])
         self._limits["wrist_roll"] = (min(lo, hi), max(lo, hi))
-        self._dofs = np.array([m.joint(name).dofadr[0] for name in IK5_JOINTS], int)
+        self._dofs = np.array([m.joint(MJCF_JOINTS[name]).dofadr[0] for name in IK5_JOINTS], int)
         self._bottle = self._bottle_silhouette()
         # MuJoCo Jacobians are per radian. Public poses are calibrated degrees.
         self._rad_per_cal = np.array(

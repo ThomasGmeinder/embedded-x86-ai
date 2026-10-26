@@ -292,13 +292,13 @@ sim:
   gl: auto                    # auto (EGL on the iGPU) | egl | osmesa
   require_hw_gl: false        # true: refuse llvmpipe software rendering
   viewer: false               # MuJoCo window (needs a display)
-  joint_map:                  # calibrated deg -> MJCF rad (LeRobot homing pose = MJCF zero)
+  joint_map:                  # calibrated deg -> MJCF rad (LeRobot homing pose = MJCF zero, the wrist within 2.7 deg)
     shoulder_pan:  {sign: 1, offset_deg: 0.0}
     shoulder_lift: {sign: 1, offset_deg: 0.0}
     elbow_flex:    {sign: 1, offset_deg: 0.0}
-    wrist_flex:    {sign: 1, offset_deg: 0.0}
-    wrist_roll:    {sign: 1, offset_deg: 0.0}
-  gripper_map: {open_cal: 95.0, closed_rad: -0.15, open_rad: 1.6}
+    wrist_flex:    {sign: 1, offset_deg: 0.0456}
+    wrist_roll:    {sign: 1, offset_deg: 2.6979}
+  gripper_map: {open_cal: 95.0, closed_rad: 0.030001, open_rad: 1.780001}
   current_model: {idle_a: 0.006, moving_a: 0.15, rated_nm: 0.49, rated_a: 0.65, stall_a: 2.5, stall_torque_nm: 1.91, ma_per_unit: 6.5, noise_units: 3, lpf_hz: 20}  # 7.4 V STS3215
   cameras:
     arm:  {camera: wrist_cam, width: 640, height: 480, fps: 30}

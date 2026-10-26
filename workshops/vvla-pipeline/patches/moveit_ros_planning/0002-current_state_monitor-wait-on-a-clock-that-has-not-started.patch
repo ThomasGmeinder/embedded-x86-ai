@@ -1,0 +1,43 @@
+From e1ae32f1c6d577d3af808bc43f2ce626f573ddb1 Mon Sep 17 00:00:00 2001
+From: tgmeinde <tgmeinde@amd.com>
+Date: Mon, 26 Oct 2026 18:55:23 +0100
+Subject: [PATCH] current_state_monitor: wait correctly on a simulation clock
+ that has not started
+
+On simulation time a wait that began before the first /clock message took
+start = 0, so the first state update made the elapsed time the whole
+simulation time and the wait failed although that state was new enough.
+Return as soon as the state is new enough, and time the wait from the
+clock's first tick.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ .../src/current_state_monitor.cpp                    | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/moveit_ros/planning/planning_scene_monitor/src/current_state_monitor.cpp b/moveit_ros/planning/planning_scene_monitor/src/current_state_monitor.cpp
+index eca1c47..32029cb 100644
+--- a/moveit_ros/planning/planning_scene_monitor/src/current_state_monitor.cpp
++++ b/moveit_ros/planning/planning_scene_monitor/src/current_state_monitor.cpp
+@@ -258,7 +258,17 @@ bool CurrentStateMonitor::waitForCurrentState(const rclcpp::Time& t, double wait
+     {
+       state_update_condition_.wait_for(lock, (timeout - elapsed).to_chrono<std::chrono::duration<double>>());
+     }
+-    elapsed = middleware_handle_->now() - start;
++    if (!(current_state_time_ < t))
++    {
++      break;
++    }
++    const rclcpp::Time now = middleware_handle_->now();
++    if (start.nanoseconds() == 0)
++    {
++      // Simulation time that had not started when the wait began: time the wait from its first tick.
++      start = now;
++    }
++    elapsed = now - start;
+     if (elapsed > timeout)
+     {
+       RCLCPP_INFO(logger_,
+-- 
+2.43.0
+

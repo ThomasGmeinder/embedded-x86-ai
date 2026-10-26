@@ -21,6 +21,8 @@ DEFAULT_SCENE = MODELS_DIR / "scene_vvla.xml"
 
 # LeRobot calibration "homing" pose (the L shape) is the MJCF zero, so body
 # joints map 1:1 (deg -> rad, sign +1, offset 0). See calibration/Image.jpg.
+# The wrist's MJCF zeros are ros2_so_arm's, a few hundredths of a degree
+# (flex) and 2.7 degrees (roll) from the homing pose.
 _IDENTITY = {"sign": 1.0, "offset_deg": 0.0}
 
 DEFAULTS: dict = {
@@ -45,14 +47,14 @@ DEFAULTS: dict = {
         "shoulder_pan": dict(_IDENTITY),
         "shoulder_lift": dict(_IDENTITY),
         "elbow_flex": dict(_IDENTITY),
-        "wrist_flex": dict(_IDENTITY),
-        "wrist_roll": dict(_IDENTITY),
+        "wrist_flex": {"sign": 1.0, "offset_deg": 0.0456},
+        "wrist_roll": {"sign": 1.0, "offset_deg": 2.6979},
     },
     "gripper_map": {
         "closed_cal": 38.0,  # the jaws' physical closed point: both stacks' GRIPPER_CLOSED_FLOOR
         "open_cal": 95.0,
-        "closed_rad": -0.15,
-        "open_rad": 1.6,
+        "closed_rad": 0.030001,
+        "open_rad": 1.780001,
         "counts_span": 2271,  # raw encoder span of the 0-100 gripper range
     },
     "current_model": {

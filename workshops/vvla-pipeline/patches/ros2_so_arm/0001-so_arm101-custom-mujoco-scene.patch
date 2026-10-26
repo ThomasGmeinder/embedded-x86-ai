@@ -1,0 +1,253 @@
+From a4315fa006443654be77c9ecb3882e3f2b82f93b Mon Sep 17 00:00:00 2001
+From: tgmeinde <tgmeinde@amd.com>
+Date: Mon, 26 Oct 2026 17:40:09 +0100
+Subject: [PATCH] so_arm101: run a custom MuJoCo scene through
+ controllers_bringup
+
+Add mujoco_model, mujoco_headless and mujoco_initial_keyframe launch and
+xacro arguments, and ros2_control_params_file, an extra parameter file for
+the ros2_control node (MuJoCo plugin configuration). With hardware_type
+mujoco, start mujoco_ros2_control's ros2_control_node, which waits for the
+simulation clock, and give robot_state_publisher simulation time.
+
+Raise the elbow's upper limit from 1.54 to 1.69 rad, the range of
+TheRobotStudio's SO-101 MJCF: the folded rest pose LeRobot parks the arm
+in puts the elbow at 1.67 rad.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ .../control/so_arm101.ros2_control.xacro      | 17 ++++-
+ .../launch/controllers_bringup.launch.py      | 73 +++++++++++++++----
+ so_arm101_description/mjcf/so_arm101.xml      |  4 +-
+ .../urdf/so_arm101.urdf.xacro                 |  6 ++
+ .../urdf/so_arm101_macro.xacro                |  2 +-
+ 5 files changed, 79 insertions(+), 23 deletions(-)
+
+diff --git a/so_arm101_description/control/so_arm101.ros2_control.xacro b/so_arm101_description/control/so_arm101.ros2_control.xacro
+index acab905..ec96c38 100644
+--- a/so_arm101_description/control/so_arm101.ros2_control.xacro
++++ b/so_arm101_description/control/so_arm101.ros2_control.xacro
+@@ -2,7 +2,7 @@
+ <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+   <xacro:macro
+     name="ros2_control"
+-    params="prefix ros2_control_hardware_type usb_port"
++    params="prefix ros2_control_hardware_type usb_port mujoco_model:='' mujoco_headless:=false mujoco_initial_keyframe:=''"
+   >
+     <ros2_control name="SO_ARM101" type="system">
+       <hardware>
+@@ -15,9 +15,18 @@
+         </xacro:if>
+         <xacro:if value="${ros2_control_hardware_type == 'mujoco'}">
+           <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
+-          <param name="mujoco_model">
+-            $(find so_arm101_description)/mjcf/scene.xml
+-          </param>
++          <xacro:if value="${mujoco_model == ''}">
++            <param name="mujoco_model">
++              $(find so_arm101_description)/mjcf/scene.xml
++            </param>
++          </xacro:if>
++          <xacro:unless value="${mujoco_model == ''}">
++            <param name="mujoco_model">${mujoco_model}</param>
++          </xacro:unless>
++          <param name="headless">${mujoco_headless}</param>
++          <xacro:unless value="${mujoco_initial_keyframe == ''}">
++            <param name="initial_keyframe">${mujoco_initial_keyframe}</param>
++          </xacro:unless>
+         </xacro:if>
+         <xacro:if value="${ros2_control_hardware_type == 'gazebo'}">
+           <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+diff --git a/so_arm101_description/launch/controllers_bringup.launch.py b/so_arm101_description/launch/controllers_bringup.launch.py
+index d756096..a7ebaed 100644
+--- a/so_arm101_description/launch/controllers_bringup.launch.py
++++ b/so_arm101_description/launch/controllers_bringup.launch.py
+@@ -3,7 +3,7 @@ from ament_index_python.packages import get_package_share_path
+ from launch import LaunchDescription
+ from launch.actions import DeclareLaunchArgument
+ from launch.conditions import IfCondition, UnlessCondition
+-from launch.substitutions import LaunchConfiguration, PythonExpression
++from launch.substitutions import LaunchConfiguration
+ from launch_ros.actions import Node
+ from launch_ros.descriptions import ParameterFile
+ from nav2_common.launch import ReplaceString, RewrittenYaml
+@@ -31,6 +31,9 @@ def make_robot_state_publisher_node(args):
+             "ros2_control_file": args.ros2_control_xacro_file,
+             "ros2_control_hardware_type": args.hardware_type,
+             "usb_port": args.usb_port,
++            "mujoco_model": args.mujoco_model,
++            "mujoco_headless": args.mujoco_headless,
++            "mujoco_initial_keyframe": args.mujoco_initial_keyframe,
+         },
+     )
+     return [
+@@ -40,11 +43,34 @@ def make_robot_state_publisher_node(args):
+             namespace=namespace,
+             parameters=[
+                 {"robot_description": robot_description},
++                {"use_sim_time": args.hardware_type == "mujoco"},
+             ],
+         ),
+     ]
+ 
+ 
++def make_ros2_control_node(controllers_file):
++    @launch_configurations
++    def make(args):
++        parameters = [{"use_sim_time": args.hardware_type == "mujoco"}, controllers_file]
++        if args.ros2_control_params_file:
++            parameters.append(ParameterFile(args.ros2_control_params_file, allow_substs=True))
++        return [
++            Node(
++                # MuJoCo needs its own build of the node until the next ros2_control release.
++                package="mujoco_ros2_control" if args.hardware_type == "mujoco" else "controller_manager",
++                executable="ros2_control_node",
++                namespace=args.namespace,
++                parameters=parameters,
++                remappings=[("~/robot_description", "/robot_description")],
++                output="screen",
++                emulate_tty=True,
++            ),
++        ]
++
++    return make()
++
++
+ def generate_launch_description():
+     bringup_dir = get_package_share_path("so_arm101_description")
+ 
+@@ -66,7 +92,31 @@ def generate_launch_description():
+     hardware_type_arg = DeclareLaunchArgument(
+         "hardware_type",
+         default_value="mock_components",
+-        description="Hardware type for the robot. Supported types [mock_components, real]",
++        description="Hardware type for the robot. Supported types [mock_components, real, mujoco]",
++    )
++
++    mujoco_model_arg = DeclareLaunchArgument(
++        "mujoco_model",
++        default_value="",
++        description="Full path to the MJCF scene (default: mjcf/scene.xml). Only used when hardware_type is mujoco",
++    )
++
++    mujoco_headless_arg = DeclareLaunchArgument(
++        "mujoco_headless",
++        default_value="false",
++        description="Run MuJoCo without its viewer window. Only used when hardware_type is mujoco",
++    )
++
++    mujoco_initial_keyframe_arg = DeclareLaunchArgument(
++        "mujoco_initial_keyframe",
++        default_value="",
++        description="MJCF keyframe to start from. Only used when hardware_type is mujoco",
++    )
++
++    ros2_control_params_file_arg = DeclareLaunchArgument(
++        "ros2_control_params_file",
++        default_value="",
++        description="Full path to an extra parameter file for the ros2_control node, e.g. MuJoCo plugins",
+     )
+ 
+     usb_port_arg = DeclareLaunchArgument(
+@@ -91,7 +141,6 @@ def generate_launch_description():
+     ros2_controllers_file = LaunchConfiguration("controller_config_file")
+     namespace = LaunchConfiguration("namespace")
+     use_namespace = LaunchConfiguration("use_namespace")
+-    hardware_type = LaunchConfiguration("hardware_type")
+ 
+     ros2_controllers_file = ReplaceString(
+         source_file=ros2_controllers_file,
+@@ -114,18 +163,6 @@ def generate_launch_description():
+         allow_substs=True,
+     )
+ 
+-    # ros2_control controller manager node
+-    use_sim_time = PythonExpression(["'", hardware_type, "' == 'mujoco'"])
+-    ros2_control_node = Node(
+-        package="controller_manager",
+-        executable="ros2_control_node",
+-        namespace=namespace,
+-        parameters=[{"use_sim_time": use_sim_time}, namespaced_ros2_controllers_file],
+-        remappings=[("~/robot_description", "/robot_description")],
+-        output="screen",
+-        emulate_tty=True,
+-    )
+-
+     # Controller spawners (same for all hardware types)
+     controller_spawners = [
+         Node(
+@@ -145,7 +182,11 @@ def generate_launch_description():
+             namespace_arg,
+             ros2_control_xacro_file_arg,
+             controller_config_file_arg,
+-            ros2_control_node,
++            mujoco_model_arg,
++            mujoco_headless_arg,
++            mujoco_initial_keyframe_arg,
++            ros2_control_params_file_arg,
++            *make_ros2_control_node(namespaced_ros2_controllers_file),
+             *make_robot_state_publisher_node(),
+         ]
+         + controller_spawners,
+diff --git a/so_arm101_description/mjcf/so_arm101.xml b/so_arm101_description/mjcf/so_arm101.xml
+index 7dab3b2..c8d4f18 100644
+--- a/so_arm101_description/mjcf/so_arm101.xml
++++ b/so_arm101_description/mjcf/so_arm101.xml
+@@ -217,7 +217,7 @@
+               axis="0 0 1"
+               name="elbow_flex_joint"
+               type="hinge"
+-              range="-1.69 1.54"
++              range="-1.69 1.69"
+               class="sts3215"
+             />
+             <inertial
+@@ -426,7 +426,7 @@
+       name="elbow_flex_joint"
+       joint="elbow_flex_joint"
+       forcerange="-3.35 3.35"
+-      ctrlrange="-1.69 1.54"
++      ctrlrange="-1.69 1.69"
+     />
+     <position
+       class="sts3215"
+diff --git a/so_arm101_description/urdf/so_arm101.urdf.xacro b/so_arm101_description/urdf/so_arm101.urdf.xacro
+index fdc3320..9f93365 100644
+--- a/so_arm101_description/urdf/so_arm101.urdf.xacro
++++ b/so_arm101_description/urdf/so_arm101.urdf.xacro
+@@ -10,6 +10,9 @@
+     default="$(find so_arm101_description)/urdf/so_arm101_macro.xacro"
+   />
+   <xacro:arg name="usb_port" default="/dev/LeRobotFollower" />
++  <xacro:arg name="mujoco_model" default="" />
++  <xacro:arg name="mujoco_headless" default="false" />
++  <xacro:arg name="mujoco_initial_keyframe" default="" />
+   <xacro:arg name="prefix" default="" />
+   <xacro:arg name="color" default="0.2 0.7 0.85 1.0" />
+ 
+@@ -28,6 +31,9 @@
+     prefix="$(arg prefix)"
+     ros2_control_hardware_type="$(arg ros2_control_hardware_type)"
+     usb_port="$(arg usb_port)"
++    mujoco_model="$(arg mujoco_model)"
++    mujoco_headless="$(arg mujoco_headless)"
++    mujoco_initial_keyframe="$(arg mujoco_initial_keyframe)"
+   />
+ 
+   <gazebo reference="world" />
+diff --git a/so_arm101_description/urdf/so_arm101_macro.xacro b/so_arm101_description/urdf/so_arm101_macro.xacro
+index 1116cbd..2a15587 100644
+--- a/so_arm101_description/urdf/so_arm101_macro.xacro
++++ b/so_arm101_description/urdf/so_arm101_macro.xacro
+@@ -589,7 +589,7 @@
+       <parent link="${prefix}upper_arm_link" />
+       <child link="${prefix}lower_arm_link" />
+       <axis xyz="0 0 1" />
+-      <limit effort="10" velocity="10" lower="-1.69" upper="1.54" />
++      <limit effort="10" velocity="10" lower="-1.69" upper="1.69" />
+     </joint>
+ 
+     <transmission name="${prefix}elbow_flex_trans">
+-- 
+2.43.0
+

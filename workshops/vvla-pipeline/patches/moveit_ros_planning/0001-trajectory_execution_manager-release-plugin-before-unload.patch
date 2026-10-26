@@ -1,0 +1,36 @@
+From 6e9582042f025cb93364a82ab8a2e0644d5f0199 Mon Sep 17 00:00:00 2001
+From: tgmeinde <tgmeinde@amd.com>
+Date: Mon, 26 Oct 2026 18:13:09 +0100
+Subject: [PATCH] trajectory_execution_manager: release the controller manager
+ before unloading it
+
+The destructor left controller_mgr_node_, the private executor, the active
+controller handles and the controller manager to member destruction, which
+destroys controller_manager_loader_ first: the plugin library was unloaded
+while the node's callback groups still referenced objects it created, and
+every MoveItCpp deletion segfaulted in CallbackGroup::~CallbackGroup (#3721).
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ .../src/trajectory_execution_manager.cpp                     | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/moveit_ros/planning/trajectory_execution_manager/src/trajectory_execution_manager.cpp b/moveit_ros/planning/trajectory_execution_manager/src/trajectory_execution_manager.cpp
+index 1264695..3e55d0b 100644
+--- a/moveit_ros/planning/trajectory_execution_manager/src/trajectory_execution_manager.cpp
++++ b/moveit_ros/planning/trajectory_execution_manager/src/trajectory_execution_manager.cpp
+@@ -90,6 +90,11 @@ TrajectoryExecutionManager::~TrajectoryExecutionManager()
+     private_executor_->cancel();
+   if (private_executor_thread_.joinable())
+     private_executor_thread_.join();
++  // Everything the controller manager plugin created must go before controller_manager_loader_ unloads its library.
++  private_executor_.reset();
++  active_handles_.clear();
++  controller_manager_.reset();
++  controller_mgr_node_.reset();
+ }
+ 
+ void TrajectoryExecutionManager::initialize()
+-- 
+2.43.0
+

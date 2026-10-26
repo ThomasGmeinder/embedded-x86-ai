@@ -1,0 +1,19 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: so_arm101_description
+    relative_path: urdf/so_arm101.urdf.xacro
+  srdf:
+    relative_path: config/so_arm101.srdf
+  package_settings:
+    author_name: tgmeinde
+    author_email: tgmeinde@amd.com
+    generated_timestamp: 1793033160
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
+  modified_urdf:
+    xacros:
+      - control_xacro

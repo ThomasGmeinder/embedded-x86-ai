@@ -40,6 +40,11 @@ say "Sourcing ROS 2 ($ROS_SETUP)"
 set +u +e
 # shellcheck disable=SC1090
 source "$ROS_SETUP" || die "ROS 2 setup failed"
+ROS_WS_SETUP="${REPO_ROOT}/ros_ws/install/setup.bash"
+[[ -f "$ROS_WS_SETUP" ]] || die "no ros_ws overlay at $ROS_WS_SETUP - run ./bootstrap.sh"
+say "Sourcing the ros_ws overlay ($ROS_WS_SETUP)"
+# shellcheck disable=SC1090
+source "$ROS_WS_SETUP" || die "ros_ws setup failed"
 set -e -u
 
 export VVLA_TEST_STRICT=1
@@ -48,4 +53,6 @@ say "NPU load order"
 "$PY" -m pytest tests/npu || RC=$?
 say "Stacks on the twin"
 "$PY" -m pytest tests/sim -m "sim and not docs" "$@" || RC=$?
+say "MoveIt 2 on the twin"
+"$PY" -m pytest tests/moveit || RC=$?
 exit "$RC"

@@ -33,7 +33,7 @@ import time
 
 import numpy as np
 
-from so101_sim import MOTOR_NAMES, gl
+from so101_sim import MJCF_JOINTS, MOTOR_NAMES, gl
 from so101_sim.config import MODELS_DIR, load_sim_config, scene_path
 from so101_sim.mapping import JointMap
 from so101_sim.servo import CurrentModel, OverloadProtection, ServoBank
@@ -110,14 +110,14 @@ class SimWorld:
 
         self.jmap = JointMap(self.cfg["joint_map"], self.cfg["gripper_map"])
         m = self.model
-        self._qadr = np.array([m.joint(n).qposadr[0] for n in MOTOR_NAMES])
-        self._dadr = np.array([m.joint(n).dofadr[0] for n in MOTOR_NAMES])
-        self._act = np.array([m.actuator(n).id for n in MOTOR_NAMES])
+        self._qadr = np.array([m.joint(MJCF_JOINTS[n]).qposadr[0] for n in MOTOR_NAMES])
+        self._dadr = np.array([m.joint(MJCF_JOINTS[n]).dofadr[0] for n in MOTOR_NAMES])
+        self._act = np.array([m.actuator(MJCF_JOINTS[n]).id for n in MOTOR_NAMES])
         kp = m.actuator_gainprm[self._act, 0].copy()
         kv = -m.actuator_biasprm[self._act, 2].copy()
         self._gain_on = m.actuator_gainprm[self._act].copy()
         self._bias_on = m.actuator_biasprm[self._act].copy()
-        self._jrange = m.jnt_range[[m.joint(n).id for n in MOTOR_NAMES]].copy()
+        self._jrange = m.jnt_range[[m.joint(MJCF_JOINTS[n]).id for n in MOTOR_NAMES]].copy()
         self.force_full = m.actuator_forcerange[self._act].copy()  # Torque_Limit 1000
         self.servo = ServoBank(self.jmap, self.cfg["servo"], kv / kp)
         self.current = CurrentModel(self.cfg["current_model"])

@@ -98,6 +98,7 @@ def test_limits_and_hardware_side_come_through_the_twin_joint_map(pipeline_cfg):
 def test_every_joint_turns_about_the_twin_axis(pipeline_cfg, q):
     import mujoco
 
+    from so101_sim import MJCF_JOINTS
     from so101_sim.world import SimWorld
 
     _cfg, _module, root = _description(pipeline_cfg)
@@ -107,12 +108,12 @@ def test_every_joint_turns_about_the_twin_axis(pipeline_cfg, q):
         m, d = world.model, world.data
         d.qpos[:] = 0.0
         for name, angle in q.items():
-            d.qpos[m.jnt_qposadr[m.joint(name).id]] = angle
+            d.qpos[m.jnt_qposadr[m.joint(MJCF_JOINTS[name]).id]] = angle
         mujoco.mj_forward(m, d)
         base = m.body("base").id
         rot, pos = d.xmat[base].reshape(3, 3), d.xpos[base]
         for name in (*BODY, "gripper"):
-            jid = m.joint(name).id
+            jid = m.joint(MJCF_JOINTS[name]).id
             anchor = rot.T @ (d.xanchor[jid] - pos)
             axis = rot.T @ d.xaxis[jid]
             frame = frames[name]

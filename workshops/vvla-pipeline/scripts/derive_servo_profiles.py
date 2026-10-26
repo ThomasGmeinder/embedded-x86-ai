@@ -49,7 +49,7 @@ import math
 import mujoco
 import numpy as np
 
-from so101_sim import MOTOR_NAMES
+from so101_sim import MJCF_JOINTS, MOTOR_NAMES
 from so101_sim.config import DEFAULT_SCENE, load_sim_config
 from so101_sim.mapping import JointMap
 from so101_sim.servo import OverloadProtection
@@ -81,11 +81,11 @@ def bus_tick_s(n_servos: int = 6) -> float:
 
 def _envelope_stats(payload_kg: float, samples: int, seed: int) -> dict:
     model = mujoco.MjModel.from_xml_path(str(DEFAULT_SCENE))
-    wrist = model.jnt_bodyid[model.joint("wrist_roll").id]
+    wrist = model.jnt_bodyid[model.joint(MJCF_JOINTS["wrist_roll"]).id]
     model.body_mass[wrist] += payload_kg
     data = mujoco.MjData(model)
-    qadr = [model.jnt_qposadr[model.joint(n).id] for n in MOTOR_NAMES]
-    dadr = [model.jnt_dofadr[model.joint(n).id] for n in MOTOR_NAMES]
+    qadr = [model.jnt_qposadr[model.joint(MJCF_JOINTS[n]).id] for n in MOTOR_NAMES]
+    dadr = [model.jnt_dofadr[model.joint(MJCF_JOINTS[n]).id] for n in MOTOR_NAMES]
     body = [n for n in MOTOR_NAMES if n != "gripper"]
     lo = np.radians([JOINT_LIMITS[n][0] for n in body])
     hi = np.radians([JOINT_LIMITS[n][1] for n in body])
