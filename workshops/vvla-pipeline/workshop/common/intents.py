@@ -31,6 +31,7 @@ class Intent(str, Enum):
     DANCE = "dance"
     GRIP = "grip"
     RELEASE = "release"
+    PLACE = "place"
     WAVE = "wave"
     HOME = "home"
     STOP = "stop"
@@ -130,6 +131,8 @@ Commands:
 - "release": the user wants the jaws opened, here, so they can take the
   object or drop it ("release", "open", "drop it", "let go",
   "open your hand").
+- "place": the user wants the held object set down on the table ("place it",
+  "set it down", "put it down", "set it on the table").
 - "wave": the user wants a wave / greeting ("wave at me", "say hi").
 - "home": return to the rest/home position ("go home", "reset position",
   "rest now").

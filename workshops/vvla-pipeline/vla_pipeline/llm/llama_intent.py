@@ -250,6 +250,8 @@ _SELFTEST_CASES = [
     ("release", Intent.RELEASE, None),
     ("open your hand", Intent.RELEASE, None),
     ("drop it", Intent.RELEASE, None),
+    ("place it", Intent.PLACE, None),
+    ("set it down on the table", Intent.PLACE, None),
     ("wave hello", Intent.WAVE, None),
     ("go back to your home position", Intent.HOME, None),
     ("stop right now", Intent.STOP, None),

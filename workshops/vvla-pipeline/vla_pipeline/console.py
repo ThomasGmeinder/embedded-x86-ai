@@ -334,8 +334,9 @@ class TwinConsole:
         try:
             state = getattr(ctx, "shared_state", None)
             if isinstance(state, dict):
-                state.pop("grip_lock", None)
-                state.pop("grip_lock_pos", None)
+                from vla_pipeline.behaviors.manipulation import forget_scene
+
+                forget_scene(state)
             if not self._restore_twin():
                 ctx.say("Reset is only available on the digital twin.")
                 return

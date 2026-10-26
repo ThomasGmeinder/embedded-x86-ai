@@ -143,7 +143,8 @@ def _face_gaps(world, pose, centre, half: float) -> tuple[float, float]:
 
 
 def _accepted(twin, cfg, stack: str, body: str, resolved: str, quat=(1.0, 0.0, 0.0, 0.0)):
-    """The first scan pan whose box the pickup would grasp, and where the body really is."""
+    """The first scan view, high pans then near pans as the pickup walks them,
+    whose box the pickup would grasp, and where the body really is."""
     from so101_sim.camera import SimCamera
     from so101_sim.detect import SegDetector
     from so101_sim.kinematics import joint_line, shared_kinematics
@@ -157,10 +158,12 @@ def _accepted(twin, cfg, stack: str, body: str, resolved: str, quat=(1.0, 0.0, 0
     scan = dict(pp["scan_pose"])
     truth = np.array(world.model.body(body).pos, float)
     kin = shared_kinematics(floor)
+    views = [{**scan, "shoulder_pan": float(pan)} for pan in pp["scan_pans"]]
+    views += [{**pp["scan_near_pose"], "shoulder_pan": float(pan)} for pan in pp["scan_near_pans"]]
     cam = SimCamera(world, "arm", renderer=twin.renderer, segmentation=True)
     try:
-        for pan in pp["scan_pans"]:
-            world.reset({**scan, "shoulder_pan": float(pan)})
+        for view in views:
+            world.reset(view)
             for other in world.objects:
                 if other != body:
                     world.hide(other)
@@ -192,7 +195,7 @@ def _accepted(twin, cfg, stack: str, body: str, resolved: str, quat=(1.0, 0.0, 0
             down = [{**pose, "gripper": 75.0} for pose in plan.poses[1:]]
             if plan.beside is not None:
                 down += joint_line(plan.poses[-1], plan.beside)
-            return plan, [*above, *down], joints, truth, float(pan), kin
+            return plan, [*above, *down], joints, truth, float(joints["shoulder_pan"]), kin
     finally:
         cam.release()
     return None, None, None, truth, None, kin

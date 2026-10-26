@@ -484,7 +484,9 @@ class DirectArm(ArmClient):
         joints = clamp_joints(joints, self._send_limits)
         if self._direct_goal:
             # From where the servos are now: another caller may have moved them since our last read.
-            plan = self._profiler.plan(self._plan_start(), joints)
+            # Lockstep keeps the arm on the straight joint-space line every planner checks, as
+            # the ROS 2 trajectory controller moves it.
+            plan = self._profiler.plan(self._plan_start(), joints, lockstep=True)
             self._sync_write_guarded(_SPEED_REGISTERS, plan.speed_raw, "speed")
             self._sync_write_guarded(_ACCEL_REGISTERS, plan.accel_raw, "acceleration")
             self.last_eta_s = plan.eta_s

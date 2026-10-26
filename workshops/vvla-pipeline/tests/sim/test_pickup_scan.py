@@ -15,6 +15,7 @@ locates the object again before the second solve.
 
 from __future__ import annotations
 
+import copy
 import importlib
 import time
 
@@ -36,9 +37,10 @@ NEAR = {**POSE, "shoulder_lift": -57.3, "elbow_flex": 63.2, "wrist_flex": 67.5}
 
 
 class _Det:
-    def __init__(self, box, score=0.9):
+    def __init__(self, box, score=0.9, name="sports ball"):
         self.box = tuple(float(v) for v in box)
         self.score = score
+        self.name = name
         x1, y1, x2, y2 = self.box
         self.area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
 
@@ -47,9 +49,11 @@ class _Arm:
     def __init__(self):
         self.pose = dict(POSE)
         self.returned_at = []
+        self.targets = []
 
     def go_to(self, target, duration_s=0.0, stop_check=None, limits=None):
         self.pose.update(target)
+        self.targets.append(dict(target))
         self.returned_at.append(time.time())
 
     def move_to(self, target, stop_check=None, limits=None, **_):
@@ -93,27 +97,37 @@ def _frame(kind: int) -> np.ndarray:
     return image
 
 
-def _find(frame, name, conf=None):
-    kind = int(frame[0, 0, 0])
-    if kind == 0:
-        return [], "sports ball"
-    if kind == 2:
-        # The larger box is cut by the left edge. The smaller one is usable.
-        return [_Det((0, 5, 90, 90), 0.99), _Det((20, 20, 45, 45), 0.8)], "sports ball"
-    return [_Det((20, 20, 60, 60))], "sports ball"
+class _Detector:
+    """The object detector's interface: ``infer`` boxes a frame, ``find`` keeps
+    the named class from ``self.infer`` (as ``ObjectDetector`` does). The
+    frame's first pixel says what is in it."""
+
+    conf_threshold = 0.4
+
+    def infer(self, frame, conf=None):
+        kind = int(frame[0, 0, 0])
+        if kind == 0:
+            return []
+        if kind == 2:
+            # The larger box is cut by the left edge. The smaller one is usable.
+            return [_Det((0, 5, 90, 90), 0.99), _Det((20, 20, 45, 45), 0.8)]
+        return [_Det((20, 20, 60, 60))]
+
+    def find(self, frame, spoken_name, conf=None):
+        return [det for det in self.infer(frame, conf) if det.name == "sports ball"], "sports ball"
+
+
+_find = _Detector().find
 
 
 def _pp():
-    return {
-        "min_box_area_frac": 0.002,
-        "scan_pose": dict(POSE),
-        "scan_pans": [0.0, -14.0, 39.0],
-        "scan_near_pose": dict(NEAR),
-        "scan_near_pans": [0.0, -14.0],
-        "ambiguous_ratio": 2.0,
-        "retries": 1,
-        "wrist_align_classes": ["toothbrush"],
-    }
+    """The stack's own ``pick_place`` config, with the poses and pans these fakes walk."""
+    from vla_pipeline.utils.config import load_config
+
+    pp = copy.deepcopy(load_config()["behaviors"]["pick_place"])
+    pp.update(scan_pose=dict(POSE), scan_pans=[0.0, -14.0, 39.0], scan_near_pose=dict(NEAR),
+              scan_near_pans=[0.0, -14.0], retries=1)
+    return pp
 
 
 def _mod(name):
@@ -218,14 +232,11 @@ def test_an_arm_camera_without_frames_refuses_the_pick_at_the_first_pan(module):
     mod = _mod(module)
     arm, said = _Arm(), []
 
-    class _Finder:
-        find = staticmethod(_find)
-
     class _Ctx:
         cfg = {"robot": {"backend": "sim"}, "pick_place": _pp(), "grip": {}}
         arm_camera = _DeadCamera()
         shared_state = {}
-        detector = _Finder()
+        detector = _Detector()
 
         def __init__(self):
             self.arm = arm
@@ -241,7 +252,9 @@ def test_an_arm_camera_without_frames_refuses_the_pick_at_the_first_pan(module):
 
     assert not mod.run_pick_place(_Ctx(), _Cmd())
     assert said == ["Looking for a ball.", "The arm camera is offline - I can't pick anything up."]
-    assert len(arm.returned_at) == 1, "the scan panned on without frames"
+    pans = {t["shoulder_pan"] for t in arm.targets if t.get("shoulder_lift") == POSE["shoulder_lift"]}
+    assert pans == {0.0}, f"the scan panned on without frames: {sorted(pans)}"
+    assert arm.targets[-1]["shoulder_lift"] == mod.REST_POSE["shoulder_lift"], "the arm did not park"
 
 
 def test_ball_descent_stays_within_5_mm_of_the_vertical():
@@ -294,16 +307,13 @@ def test_a_slipped_grasp_grasps_from_the_fresh_fix(module, monkeypatch, second_x
 
     held_arm, held_camera = arm, camera
 
-    class _Finder:
-        find = staticmethod(_find)
-
     class _Ctx:
         cfg = {"robot": {"backend": "sim"}, "pick_place": _pp(), "grip": {}}
         arm = held_arm
         arm_camera = held_camera
         camera = held_camera
         shared_state = {}
-        detector = _Finder()
+        detector = _Detector()
 
         def say(self, message):
             events.append(message)

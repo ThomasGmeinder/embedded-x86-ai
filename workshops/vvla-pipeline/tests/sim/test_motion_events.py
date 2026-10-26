@@ -163,7 +163,7 @@ def _keyframe_moves():
 
 @pytest.mark.parametrize("name, start, goal", _keyframe_moves(), ids=[m[0] for m in _keyframe_moves()])
 def test_planned_moves_finish_when_predicted_without_an_overload_trip(world, name, start, goal):
-    plan, finished, tripped = _run_planned(world, start, goal)
+    plan, finished, tripped = _run_planned(world, start, goal, lockstep=True)
     assert not tripped, f"{name}: overload trip on {tripped}"
     took = max(finished.values())
     # The twin's generator brakes on sqrt(2 a e) one physics step at a time; the
@@ -183,6 +183,33 @@ def test_lockstep_finishes_every_joint_with_the_slowest(world):
     times = [finished[k] for k in moved]
     # Lockstep scales whole register steps, so each joint can end a few percent early.
     assert max(times) - min(times) <= 0.1 * plan.eta_s + 5 * world.dt, dict(zip(moved, times))
+
+
+def test_a_direct_goal_moves_every_joint_in_lockstep(world):
+    """The twin transport writes a lockstep plan: out of the jaws-open park
+    into the pickup's scan pose, every joint ends with the slowest, so the
+    arm stays on the joint-space line the place check tests. Unsynchronized,
+    the elbow ended last and the open jaw swept a standing bottle over."""
+    from common.config import load_config
+    from common.motion import JOINT_LIMITS, REST_POSE, SimArmClient, clamp_joints
+
+    park = {**REST_POSE, "gripper": JOINT_LIMITS["gripper"][1]}
+    goal = clamp_joints({**park, **load_config()["pick_place"]["scan_pose"]})
+    moved = [k for k in goal if abs(goal[k] - park[k]) >= 10.0]
+    arm = SimArmClient({"robot": {"max_relative_target": None}}, world=world)
+    world.reset(park)
+    arm.send_joints(goal)
+    finished: dict[str, float] = {}
+    elapsed = 0.0
+    while len(finished) < len(moved):
+        assert elapsed <= 2.0 * arm.last_eta_s + 0.5, f"still moving {elapsed:.2f} s into a {arm.last_eta_s:.2f} s plan"
+        for joint, moving in arm.read_motion_state()["moving"].items():
+            if joint in moved and not moving:
+                finished.setdefault(joint, elapsed)
+        world.advance(world.dt)
+        elapsed += world.dt
+    times = [finished[k] for k in moved]
+    assert max(times) - min(times) <= 0.1 * arm.last_eta_s + 5 * world.dt, dict(zip(moved, times))
 
 
 def test_a_partial_goal_plans_only_its_joints():

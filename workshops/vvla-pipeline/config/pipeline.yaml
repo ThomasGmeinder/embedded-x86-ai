@@ -214,12 +214,38 @@ behaviors:
     handoff_reach: 55.0
     release_timeout_s: 6.0
   pick_place:                 # NEW: voice-grounded "pick up the <object>"
-    # Joint pose from which the arm camera surveys the workspace.
-    scan_pose:   {shoulder_pan: 0.0, shoulder_lift: -55.0, elbow_flex: 65.0, wrist_flex: 45.0, wrist_roll: 0.0, gripper: 70.0}
-    scan_pans: [0.0, -14.0, 39.0, -52.0, 71.0]  # sweep the twin workspace; tune for the real camera/FOV
-    # Fallback view of the near-base table, normally hidden behind the jaws.
-    scan_near_pose: {shoulder_pan: 0.0, shoulder_lift: -57.3, elbow_flex: 63.2, wrist_flex: 67.5, wrist_roll: 0.0, gripper: 70.0}
-    scan_near_pans: [0.0, -14.0, 14.0]
+    # Joint pose from which the arm camera surveys the workspace: the arm stays
+    # 10 cm above the table, over a standing bottle, while the base turns.
+    scan_pose:   {shoulder_pan: 0.0, shoulder_lift: -55.0, elbow_flex: 40.0, wrist_flex: 65.0, wrist_roll: 0.0, gripper: 70.0}
+    # The sweep turns from the ready pose (pan 0) one way, then the other, and
+    # stops at the first view that gives a grasp. tests/sim/pick_coverage.py
+    # chose the views: each default object lies fully inside a high view, its
+    # box clear of the image border by EDGE_MARGIN_PX plus YOLO's measured
+    # overreach; with the near views they cover 552 of the 576 table spots any
+    # view covers. Pans past 86 deg move under the grasp limits, inside the
+    # arm's +-110 deg. Tune for the real camera/FOV.
+    scan_pans: [-10.0, -40.0, -60.0, -100.0, 10.0, 30.0, 60.0, 90.0]
+    # Fallback, looking down at the table near the base (13-26 cm out).
+    scan_near_pose: {shoulder_pan: 0.0, shoulder_lift: -50.0, elbow_flex: 30.0, wrist_flex: 90.0, wrist_roll: 0.0, gripper: 70.0}
+    scan_near_pans: [50.0, 10.0, -30.0, -70.0, -100.0]
+    # The scan's frames keep a list of the objects on the table: one footprint
+    # per detection (objects_min_score: weaker detections count too), except
+    # the jaws themselves inside scan_jaw_polygon, the outline of the open jaws
+    # in the frame as image fractions (x, y).
+    scan_jaw_polygon: [[1.0, 1.0], [0.89, 1.0], [0.645, 0.72], [0.615, 0.665], [0.615, 0.59], [0.75, 0.59], [1.0, 0.69]]
+    objects_min_score: 0.25
+    # "place it" / "set it down": the nearest point to the drop position (where
+    # the pickup holds the object out), within place_search_m, where the object
+    # keeps place_clearance_m from every known object, off the arm's way from
+    # its parked pose into the first scan view, and where the arm's model
+    # clears every known object through the whole put-down.
+    place_search_m: 0.18
+    # From the base: where a pickup reaches each kind of object again (the
+    # bottle lands about 1 cm farther out than its set-down point).
+    place_near_m: 0.18
+    place_far_m: {sphere: 0.33, flat: 0.32, bottle: 0.29}
+    place_clearance_m: 0.025
+    set_down_clearance_m: 0.01  # the object is let go this far above where it rested
     # The object is located on the table from its box (the camera ray meets the
     # table plane) and reached with IK; no fix or no solve means out of reach.
     table_z: -0.005           # table surface height in the arm's base frame (m)

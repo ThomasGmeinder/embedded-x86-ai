@@ -96,8 +96,9 @@ def _h_gesture_mimic(ctx: PipelineContext, cmd: ParsedCommand) -> None:
     if ctx.pose is None or ctx.mount_camera is None:
         ctx.say("Gesture mimic needs the mount camera and pose model.")
         return
-    if ctx.shared_state.pop("grip_lock", None):
-        ctx.shared_state.pop("grip_lock_pos", None)
+    from vla_pipeline.behaviors.manipulation import release_to_pinch
+
+    if release_to_pinch(ctx.shared_state):
         ctx.say("Your pinch drives the gripper now. Open your fingers to let go.")
     run_gesture_mimic(
         ctx.cfg,
@@ -162,6 +163,20 @@ def _h_release(ctx: PipelineContext, cmd: ParsedCommand) -> None:
     from vla_pipeline.behaviors.grip import run_release
 
     run_release(
+        ctx.arm,
+        shared_state=ctx.shared_state,
+        stop_check=ctx.stop_check,
+        feedback=ctx.say,
+    )
+
+
+@registry.register(Intent.PLACE)
+def _h_place(ctx: PipelineContext, cmd: ParsedCommand) -> bool:
+    """Dispatch to :func:`run_place`."""
+    from vla_pipeline.behaviors.pick_place import run_place
+
+    return run_place(
+        ctx.cfg,
         ctx.arm,
         shared_state=ctx.shared_state,
         stop_check=ctx.stop_check,

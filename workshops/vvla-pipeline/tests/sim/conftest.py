@@ -16,7 +16,10 @@
     PROJECT=project ./run_sim_tests.sh -k workshop    # students' workshop code
 
 Videos + timelines land in ``_artifacts/sim_tests/<tier>/`` with an
-``index.html`` that plays them all. A failed test also leaves
+``index.html`` that plays them all. Each ``.jsonl`` timeline holds the
+props' poses, grasps and contacts every 0.2 s, every touch between a prop
+and another body, the run's log lines and the full failure message
+(:mod:`so101_sim.record`). A failed test also leaves
 ``_artifacts/sim_tests/failures/<test>/``: what each fixture with a
 ``failure_report`` saved (joint timeline, twin node log, notebook kernel log),
 summarized at the end of its report.

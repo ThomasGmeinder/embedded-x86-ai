@@ -118,9 +118,8 @@ def test_streamed_setpoints_drive_the_forward_controller(arm):
     assert client.move_to(dict(REST_POSE)) == "arrived", "the trajectory controller did not take over again"
 
 
-def test_a_scene_reset_leaves_the_controller_holding_the_parked_pose(arm, pipeline_cfg):
-    """The reset parks the twin; the trajectory controller must then hold the
-    parked pose, or its last goal pulls the arm back off it."""
+def _held_by_the_trajectory_controller(cfg) -> dict:
+    """The pose ``arm_controller`` holds: its state's reference (calibrated units)."""
     import threading
 
     from control_msgs.msg import JointTrajectoryControllerState
@@ -130,10 +129,7 @@ def test_a_scene_reset_leaves_the_controller_holding_the_parked_pose(arm, pipeli
     from so101_sim.mapping import JointMap
     from vla_pipeline.robot.ros2_control_arm import REPLY_S, Spinner
 
-    world, client = arm
-    assert client.move_to({"shoulder_pan": 30.0, "elbow_flex": 60.0}) == "arrived"
-    assert client.reset_sim()
-    sim = load_sim_config(pipeline_cfg)
+    sim = load_sim_config(cfg)
     jmap = JointMap(sim["joint_map"], sim["gripper_map"])
     heard, reference = threading.Event(), {}
 
@@ -142,7 +138,7 @@ def test_a_scene_reset_leaves_the_controller_holding_the_parked_pose(arm, pipeli
             reference.update((n, jmap.to_cal(n, p)) for n, p in zip(msg.joint_names, msg.reference.positions))
             heard.set()
 
-    probe = Spinner("reset_probe")
+    probe = Spinner("controller_probe")
     try:
         probe.node.create_subscription(
             JointTrajectoryControllerState, f"/{ARM_CONTROLLER}/controller_state", on_state, 10,
@@ -150,9 +146,35 @@ def test_a_scene_reset_leaves_the_controller_holding_the_parked_pose(arm, pipeli
         assert heard.wait(REPLY_S), f"no {ARM_CONTROLLER} state within {REPLY_S} s"
     finally:
         probe.close()
+    return reference
+
+
+def test_a_move_right_after_streaming_waits_for_the_arm_to_stop(arm, pipeline_cfg):
+    """Gesture mimic stopped while its last setpoint still drove the arm away
+    from rest: the park trajectory, timed from where the arm had been, ended
+    short, and the controller then held that spot. The move holds the arm
+    where it is until it stands still, then times the trajectory from there."""
+    from vla_pipeline.robot.arm_interface import REST_POSE
+
+    world, client = arm
+    client.send_joints({"shoulder_pan": -15.0, "shoulder_lift": -58.0, "elbow_flex": 66.0, "wrist_flex": -13.0})
+    _until(world, lambda: world.joint_cal()["shoulder_lift"] > REST_POSE["shoulder_lift"] + 5.0)
+    assert client.move_to(dict(REST_POSE)) == "arrived"
+    held = _held_by_the_trajectory_controller(pipeline_cfg)
+    off = {k: round(v - REST_POSE[k], 2) for k, v in held.items() if abs(v - REST_POSE[k]) > 0.5}
+    assert not off, f"the trajectory controller holds off the rest pose (deg): {off}"
+
+
+def test_a_scene_reset_leaves_the_controller_holding_the_parked_pose(arm, pipeline_cfg):
+    """The reset parks the twin; the trajectory controller must then hold the
+    parked pose, or its last goal pulls the arm back off it."""
+    world, client = arm
+    assert client.move_to({"shoulder_pan": 30.0, "elbow_flex": 60.0}) == "arrived"
+    assert client.reset_sim()
+    held = _held_by_the_trajectory_controller(pipeline_cfg)
     parked = world.rest_pose
-    off = {k: round(v - parked[k], 2) for k, v in reference.items() if abs(v - parked[k]) > 0.5}
-    assert not off, f"{ARM_CONTROLLER} holds off the parked pose (deg): {off}"
+    off = {k: round(v - parked[k], 2) for k, v in held.items() if abs(v - parked[k]) > 0.5}
+    assert not off, f"the trajectory controller holds off the parked pose (deg): {off}"
 
 
 def test_the_gripper_load_and_torque_limit_cross_the_wire(arm):

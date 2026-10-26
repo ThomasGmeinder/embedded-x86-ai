@@ -10,9 +10,22 @@
 ``SimRecorder`` writes a 3-pane MP4 - what the user camera saw (scripted or
 webcam) | the wrist camera | the 3-D view - with a HUD strip (sim time,
 active behavior, joint goals vs. actual, gripper current bar, latest
-events), plus a ``.jsonl`` timeline of every event. ``write_index`` builds
-an ``index.html`` that plays all recordings of a test session side by side
-with their pass/fail status.
+events), plus a ``.jsonl`` timeline for failure analysis, one JSON object
+per line, each with ``t_sim`` and ``event``:
+
+- ``state`` every ``sample_s`` of sim time: joints, goals, gripper current,
+  the active behavior, the gripper body's position, servos whose overload
+  protection tripped, and every prop's pose, motion, grasp and contacts
+  (:meth:`SimWorld.props_report`);
+- ``touch`` / ``grasp`` on every rendered pass where a prop starts or stops
+  touching another body (the table excepted), or is grasped or let go;
+- ``log``: each log record at INFO and above from any logger while
+  recording - what the behaviors planned and measured;
+- the caller's events (``heard``, ``say``, ``behavior_start`` ...), and
+  ``result`` with the test's full failure message.
+
+``write_index`` builds an ``index.html`` that plays all recordings of a
+test session side by side with their pass/fail status.
 
 The panes are extra low-resolution views on the shared renderer (one GPU
 pass for everything); frames are encoded by an ``ffmpeg`` subprocess on a
@@ -41,6 +54,34 @@ logger = logging.getLogger(__name__)
 _HUD_H = 60
 _GRIPPER = MOTOR_NAMES.index("gripper")
 _CLOSE_LIMIT = 0.5  # the Torque_Limit (fraction) load_threshold is set for; a hold runs lower
+# Timeline events the index page lists; states and log records stay in the .jsonl.
+_INDEX_SKIPS = ("state", "log")
+
+
+class _TimelineLog(logging.Handler):
+    """Copies every log record at INFO and above into a recorder's timeline."""
+
+    def __init__(self, recorder: "SimRecorder"):
+        super().__init__(logging.INFO)
+        self._recorder = recorder
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            rec = {
+                "t_sim": round(self._recorder.world.time, 3),
+                "t_wall": round(record.created, 3),
+                "event": "log",
+                "level": record.levelname,
+                "logger": record.name,
+                "thread": record.threadName,
+                "msg": record.getMessage(),
+            }
+            if record.exc_info:
+                rec["exc"] = logging.Formatter().formatException(record.exc_info)
+            self._recorder._write(rec)
+        except Exception:
+            self.handleError(record)
+
 
 class SimRecorder:
     """Record a twin run to ``path`` (.mp4) + ``path.with_suffix('.jsonl')``."""
@@ -83,6 +124,10 @@ class SimRecorder:
         self._t0 = None
         self._frames = 0
         self._timeline = None
+        self._write_lock = threading.Lock()  # the dispatch, render and logging threads all write lines
+        self._log_handler: _TimelineLog | None = None
+        self._touching: dict[str, set] = {}
+        self._grasped: dict[str, bool] = {}
         self._running = False
         self._error: BaseException | None = None
         SimRecorder._ids += 1
@@ -112,8 +157,13 @@ class SimRecorder:
         self._thread = threading.Thread(target=self._write_loop, name=f"{self._tag}-writer", daemon=True)
         self._thread.start()
         self._t0 = time.perf_counter()
+        self.event(
+            "record_start", title=self.title, scene=self.world.scene_path.name,
+            objects=self.world.objects, sample_s=self.sample_s,
+        )
+        self._log_handler = _TimelineLog(self)
+        logging.getLogger().addHandler(self._log_handler)
         rs.add_hook(self._on_pass)
-        self.event("record_start", title=self.title)
         return self
 
     def label(self, text: str) -> None:
@@ -123,15 +173,22 @@ class SimRecorder:
     def event(self, kind: str, **data) -> None:
         """Timestamp an event into the timeline (and the HUD ticker)."""
         rec = {"t_sim": round(self.world.time, 3), "t_wall": round(time.time(), 3), "event": kind, **data}
-        if self._timeline is not None:
+        self._write(rec)
+        detail = " ".join(f"{k}={v}" for k, v in data.items() if k not in ("title", "objects"))
+        self._events.append(f"{rec['t_sim']:6.2f}s {kind} {detail}".strip())
+        self._events = self._events[-3:]
+
+    def _write(self, rec: dict) -> None:
+        """One timeline line, flushed: a crashed run keeps everything up to it."""
+        line = json.dumps(rec, default=str) + "\n"
+        with self._write_lock:
+            if self._timeline is None:
+                return
             try:
-                self._timeline.write(json.dumps(rec, default=str) + "\n")
+                self._timeline.write(line)
                 self._timeline.flush()
             except ValueError:
                 pass
-        detail = " ".join(f"{k}={v}" for k, v in data.items() if k not in ("title",))
-        self._events.append(f"{rec['t_sim']:6.2f}s {kind} {detail}".strip())
-        self._events = self._events[-3:]
 
     def stamp(self, status: str, message: str = "", seconds: float = 1.5) -> None:
         """Append ``seconds`` of the final frame with a PASS/FAIL banner."""
@@ -145,7 +202,7 @@ class SimRecorder:
         cv2.putText(frame, status.upper(), (10, 32), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
         for i, line in enumerate(str(message).splitlines()[:2]):
             cv2.putText(frame, line[:110], (140, 20 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-        self.event("result", status=status, message=str(message)[:500])
+        self.event("result", status=status, message=str(message))
         for _ in range(max(1, int(seconds * self.fps))):
             self._enqueue(frame)
 
@@ -154,6 +211,9 @@ class SimRecorder:
         if not self._running:
             return self.path if keep else None
         self.event("record_stop")
+        if self._log_handler is not None:
+            logging.getLogger().removeHandler(self._log_handler)
+            self._log_handler = None
         rs = self._renderer
         rs.remove_hook(self._on_pass)
         self._running = False
@@ -173,9 +233,10 @@ class SimRecorder:
             self._cv_writer.release()
         for name in self._views:
             rs.release_view(name)
-        if self._timeline is not None:
-            self._timeline.close()
-            self._timeline = None
+        with self._write_lock:
+            if self._timeline is not None:
+                self._timeline.close()
+                self._timeline = None
         if not keep:
             for p in (self.path, self.timeline_path):
                 try:
@@ -247,9 +308,11 @@ class SimRecorder:
     def _on_pass(self, service, due, t_sim) -> None:
         if not self._running or self._3d_view not in due:
             return
+        props = self.world.props_report()
+        self._note_changes(props, t_sim)
         if t_sim - self._last_sample >= self.sample_s:
             self._last_sample = t_sim
-            self._sample()
+            self._sample(props)
         frame = self.compose(t_sim)
         # keep wall-clock timing honest: repeat frames if the renderer lagged
         target = int((time.perf_counter() - self._t0) * self.fps) + 1
@@ -265,22 +328,40 @@ class SimRecorder:
             logger.error("recorder: encoder failed; recording stopped")
             return
 
-    def _sample(self) -> None:
+    def _note_changes(self, props: dict, t_sim: float) -> None:
+        """``touch`` / ``grasp`` events for what changed on each prop since the last pass."""
+        for name, p in props.items():
+            now = set(p["touching"])
+            before = self._touching.get(name, set())
+            if now != before:
+                self._write({
+                    "t_sim": round(t_sim, 3), "event": "touch", "object": name,
+                    "began": sorted(now - before), "ended": sorted(before - now),
+                    "touching": p["touching"], "xyz": p["xyz"], "tilt": p["tilt"], "behavior": self._label,
+                })
+                self._touching[name] = now
+            if p["grasped"] != self._grasped.get(name, False):
+                self._write({
+                    "t_sim": round(t_sim, 3), "event": "grasp", "object": name, "grasped": p["grasped"],
+                    "xyz": p["xyz"], "behavior": self._label,
+                })
+                self._grasped[name] = p["grasped"]
+
+    def _sample(self, props: dict) -> None:
         snap = self.world.snapshot()
-        rec = {
+        self._write({
             "t_sim": round(snap["t"], 3),
             "event": "state",
+            "behavior": self._label,
             "joints": {k: round(v, 1) for k, v in snap["joints"].items()},
             "goal": {k: round(v, 1) for k, v in snap["goal"].items()},
             "gripper_current": round(
                 snap["current_a"]["gripper"] * 1000.0 / self.world.current.ma_per_unit
             ),
-        }
-        if self._timeline is not None:
-            try:
-                self._timeline.write(json.dumps(rec) + "\n")
-            except ValueError:
-                pass
+            "hand": [round(float(v), 4) for v in self.world.body_pos("gripper")],
+            "tripped": [m for i, m in enumerate(MOTOR_NAMES) if self.world.protection.tripped[i]],
+            "props": props,
+        })
 
     def _pane(self, img, text: str) -> np.ndarray:
         w, h = self.pane
@@ -341,7 +422,8 @@ class SimRecorder:
 
 
 def write_index(out_dir, results: dict | None = None, title: str = "SO-101 digital-twin test videos") -> Path:
-    """``index.html`` playing every ``*.mp4`` in ``out_dir`` with its status + timeline."""
+    """``index.html`` playing every ``*.mp4`` in ``out_dir`` with its status + timeline
+    (the events; the ``state`` samples and ``log`` records are in the ``.jsonl``)."""
     out_dir = Path(out_dir)
     results = results or {}
     cards = []
@@ -352,11 +434,15 @@ def write_index(out_dir, results: dict | None = None, title: str = "SO-101 digit
         tl = mp4.with_suffix(".jsonl")
         events = []
         if tl.exists():
-            for line in tl.read_text(encoding="utf-8").splitlines()[:400]:
+            for line in tl.read_text(encoding="utf-8").splitlines():
                 try:
                     e = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if e.get("event") in _INDEX_SKIPS:
+                    continue
+                if len(events) >= 400:
+                    break
                 extra = ", ".join(f"{k}={v}" for k, v in e.items() if k not in ("t_sim", "t_wall", "event"))
                 events.append(f"<li><code>{e.get('t_sim', 0):7.2f}s</code> <b>{html.escape(str(e.get('event')))}</b> {html.escape(extra)}</li>")
         cards.append(

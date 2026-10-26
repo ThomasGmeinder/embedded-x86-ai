@@ -23,6 +23,7 @@ from vla_pipeline.behaviors.manipulation import (
     _shape_of,
     _sweep_views,
     run_pick_place as _run_pick_place,
+    run_place as _run_place,
 )
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "_shape_of",
     "_sweep_views",
     "run_pick_place",
+    "run_place",
 ]
 
 
@@ -74,3 +76,9 @@ def run_pick_place(
         pose=pose,
     )
     return _run_pick_place(ctx, command(object_name))
+
+
+def run_place(cfg: dict, arm, shared_state: dict | None = None, stop_check=None, feedback=None) -> bool:
+    """Set the picked object down on free table. Delegates to :func:`vla_pipeline.behaviors.manipulation.run_place`."""
+    ctx = Ctx(cfg, arm, say=feedback, stop_check=stop_check, shared_state=shared_state)
+    return _run_place(ctx)

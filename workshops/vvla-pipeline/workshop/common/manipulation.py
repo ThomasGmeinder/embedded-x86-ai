@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Manipulation behaviors: grip, pick_place, fetch_block (PROVIDED).
+"""Manipulation behaviors: grip, pick_place, place, fetch_block (PROVIDED).
 
 The pipeline's remaining voice commands, in the workshop's handler shape
 ``(ctx, cmd)`` so the registry can dispatch them like dance or wave:
@@ -19,6 +19,10 @@ The pipeline's remaining voice commands, in the workshop's handler shape
   above the other objects, and hold it out. The jaws stay closed until
   "release", "open", or "drop it". With the arm camera offline, or on a real
   arm whose camera is not calibrated, it refuses and says why.
+- **place** - "place it" or "set it down" puts the picked object down on the
+  table nearest the drop position, where the pickup holds it out, clear of
+  every object the arm knows of (:class:`TableObjects`): what the pickup's
+  scan detected and what the arm did since; nothing is looked at again.
 - **fetch_block** - fetch the block from its taught pose, then hand it over.
 
 The handover finds you with YOLO-pose on the mount camera, aims the pan
@@ -32,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
@@ -356,15 +361,30 @@ def hand_over(ctx, section: dict, lift_pose: dict, still_holding=lambda: True) -
     ctx.arm.go_to({"gripper": JOINT_LIMITS["gripper"][1]}, duration_s=1.0, stop_check=ctx.stop_check)
     if ctx.stop_event.wait(1.0):  # the person takes it from the open jaws
         return False
-    park_open(ctx.arm, ctx.stop_check)
+    park_open(ctx.arm, _ready(ctx.cfg["pick_place"]), ctx.stop_check)
     return True
 
 
-def park_open(arm, stop_check=None) -> None:
-    """Go to the rest pose with the jaws wide open. Closing them on the way
-    home can catch the object just let go of and drag it across the table."""
+# The rest pose with the jaws wide open: where the arm waits between behaviors.
+_PARK_OPEN = {**REST_POSE, "gripper": JOINT_LIMITS["gripper"][1]}
+
+
+def _ready(pp: dict) -> dict:
+    """Where the arm passes between :data:`_PARK_OPEN` and the table: the high
+    scan pose at the parked pan, above every object standing on the table."""
+    pose, _pans = _high_sweep(pp)
+    return {**pose, "shoulder_pan": _PARK_OPEN["shoulder_pan"]}
+
+
+def park_open(arm, ready: dict, stop_check=None) -> None:
+    """Go to :data:`_PARK_OPEN` through ``ready`` (:func:`_ready`), the jaws
+    wide open: closing them on the way home can catch the object just let go
+    of and drag it across the table."""
     arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
-    arm.go_to({**REST_POSE, "gripper": JOINT_LIMITS["gripper"][1]}, duration_s=3.0, stop_check=stop_check)
+    arm.go_to({**ready, "gripper": _PARK_OPEN["gripper"]}, duration_s=2.0, stop_check=stop_check, limits=GRASP_LIMITS)
+    if stop_check and stop_check():
+        return
+    arm.go_to(_PARK_OPEN, duration_s=2.0, stop_check=stop_check)
 
 # ----------------------------------------------------------------------------
 # fetch_block and pick_place
@@ -411,13 +431,13 @@ def run_fetch_block(ctx, cmd=None) -> bool:
     _settle_jaw(ctx.arm, g, hold, ctx.stop_check)
     if not holding(ctx.arm, g, hold):
         ctx.say("I dropped the block.")
-        park_open(ctx.arm)
+        park_open(ctx.arm, _ready(ctx.cfg["pick_place"]), ctx.stop_check)
         return False
     if not hand_over(ctx, fb, lift_pose, lambda: holding(ctx.arm, g, hold)):
         if ctx.stop_check():
             return False
         ctx.say("I dropped the block.")
-        park_open(ctx.arm)
+        park_open(ctx.arm, _ready(ctx.cfg["pick_place"]), ctx.stop_check)
         return False
     return True
 
@@ -558,13 +578,11 @@ def _shape_of(resolved: str) -> str:
 
 
 def _box_usable(box, shape: str, width: int, height: int) -> bool:
-    """True when ``locate_on_table`` will accept this box's edges."""
-    x1, y1, x2, y2 = (float(v) for v in box)
-    if x1 <= 1 or x2 >= width - 1 or y2 >= height - 1:
-        return False
-    if shape == "flat" and y1 <= 1:
-        return False
-    return True
+    """True when ``locate_on_table`` will accept this box's edges (``box_cut``)."""
+    from so101_sim.kinematics import box_cut
+
+    cut, top_cut = box_cut(box, (width, height))
+    return not cut and not (shape == "flat" and top_cut)
 
 
 def _rank_views(views: list) -> list:
@@ -628,21 +646,25 @@ def _below_cutoff(find, frame, name) -> str:
     return "best %.2f at %s" % (best.score, tuple(round(float(v)) for v in best.box))
 
 
-def _sweep_views(arm, camera, find, name, pose, pans, pp, stop_check, *, near=False, first=True, cam=None, accept=None):
+def _sweep_views(arm, camera, find, name, pose, pans, pp, stop_check, *, near=False, first=True, cam=None, accept=None,
+                 observe=None):
     """Walk the pans until one settled frame can be grasped.
 
     A miss, a box cut by the image edge, or a box whose grasp does not solve
     does not end the sweep. ``accept(batch)`` returns true when that pan's
     boxes produced a grasp. With no ``accept``, the first usable box stops
-    the sweep. Returns ``(views, status, saw_small, saw_large)``.
+    the sweep. ``observe(frame, joints)`` sees every settled frame. Returns
+    ``(views, status, saw_small, saw_large)``.
     """
     views, saw_small, saw_large = [], False, False
     min_frac = float(pp["min_box_area_frac"])
     for i, pan in enumerate(pans):
+        # The arm's far left needs pans past JOINT_LIMITS' 86 deg, out to the grasp's 115.
         arm.go_to(
             {**pose, "shoulder_pan": float(pan)},
             duration_s=2.5 if first and i == 0 else 1.2,
             stop_check=stop_check,
+            limits=GRASP_LIMITS,
         )
         if stop_check and stop_check():
             return views, "stopped", saw_small, saw_large
@@ -662,6 +684,8 @@ def _sweep_views(arm, camera, find, name, pose, pans, pp, stop_check, *, near=Fa
         )
         if not ok or frame is None:
             return views, "offline", saw_small, saw_large
+        if observe is not None:
+            observe(frame, joints)
         dets, resolved = find(frame, name)
         if resolved is None:
             return views, "unknown", saw_small, saw_large
@@ -699,12 +723,21 @@ def _sweep_views(arm, camera, find, name, pose, pans, pp, stop_check, *, near=Fa
     return views, "ok", saw_small, saw_large
 
 
-def _search_views(arm, camera, find, name, pp, stop_check, cam=None, accept=None):
-    """High sweep first. The near pose runs only when that sweep stored nothing."""
-    base = dict(pp["scan_pose"])
-    pans = list(pp.get("scan_pans") or [base.get("shoulder_pan", 0.0)])
+def _high_sweep(pp: dict) -> tuple[dict, list]:
+    """The high scan pose and its pans, in sweep order."""
+    pose = dict(pp["scan_pose"])
+    return pose, list(pp.get("scan_pans") or [pose.get("shoulder_pan", 0.0)])
+
+
+def _search_views(arm, camera, find, name, pp, stop_check, cam=None, accept=None, observe=None):
+    """From the ready pose (:func:`_ready`), the high sweep first. The near
+    pose runs only when that sweep stored nothing."""
+    arm.go_to(_ready(pp), duration_s=2.5, stop_check=stop_check, limits=GRASP_LIMITS)
+    if stop_check and stop_check():
+        return [], "stopped", False, False
+    base, pans = _high_sweep(pp)
     views, status, saw_small, saw_large = _sweep_views(
-        arm, camera, find, name, base, pans, pp, stop_check, cam=cam, accept=accept,
+        arm, camera, find, name, base, pans, pp, stop_check, first=False, cam=cam, accept=accept, observe=observe,
     )
     if status != "ok" or views or not pp.get("scan_near_pose"):
         return views, status, saw_small, saw_large
@@ -712,7 +745,7 @@ def _search_views(arm, camera, find, name, pp, stop_check, cam=None, accept=None
     near_pans = list(pp.get("scan_near_pans") or [near.get("shoulder_pan", 0.0)])
     more, status, small, large = _sweep_views(
         arm, camera, find, name, near, near_pans, pp, stop_check,
-        near=True, first=False, cam=cam, accept=accept,
+        near=True, first=False, cam=cam, accept=accept, observe=observe,
     )
     return views + more, status, saw_small or small, saw_large or large
 
@@ -933,18 +966,24 @@ def run_pick_place(ctx, cmd) -> bool:
         plan = None
         return False
 
+    objects = ctx.shared_state.get("table_objects")
+    if objects is None:
+        objects = ctx.shared_state["table_objects"] = TableObjects()
+    eyes = _OnePass(ctx.detector, float(pp.get("objects_min_score", 0.25)))
     views, status, saw_small, saw_large = _search_views(
-        ctx.arm, camera, ctx.detector.find, name, pp, ctx.stop_check, cam, accept,
+        ctx.arm, camera, eyes.find, name, pp, ctx.stop_check, cam, accept,
+        observe=_observer(ctx, objects, eyes.boxes),
     )
     if status == "stopped" or ctx.stop_check():
         return False
+    ready = _ready(pp)
     if status == "offline":
         ctx.say(_ARM_CAMERA_OFFLINE)
-        ctx.arm.go_to_rest()
+        park_open(ctx.arm, ready, ctx.stop_check)
         return False
     if status == "unknown":
         ctx.say(f"Sorry - I don't know what a {name} looks like.")
-        ctx.arm.go_to_rest()
+        park_open(ctx.arm, ready, ctx.stop_check)
         return False
     if not views:
         if saw_ungraspable:
@@ -953,7 +992,7 @@ def run_pick_place(ctx, cmd) -> bool:
             ctx.say(f"The {name} I can see is too small to grab safely.")
         else:
             ctx.say(f"I can't see a {name} in the workspace.")
-        ctx.arm.go_to_rest()
+        park_open(ctx.arm, ready, ctx.stop_check)
         return False
     ranked = _rank_views(views)
     winner = ranked[0]
@@ -962,7 +1001,7 @@ def run_pick_place(ctx, cmd) -> bool:
     if len(by_score) > 1 and by_score[0].score / max(by_score[1].score, 1e-6) < float(pp["ambiguous_ratio"]):
         ctx.say(f"I see {len(by_score)} of those - taking the clearest one.")
 
-    gripped, hold = False, 0.0
+    gripped, hold, at_grasp = False, 0.0, False
     attempts = 1 + int(pp.get("retries", 1))
     for attempt in range(attempts):
         if ctx.stop_check():
@@ -972,6 +1011,7 @@ def run_pick_place(ctx, cmd) -> bool:
         # and the fingers then swing in on the way down.
         if not _execute_plan(ctx.arm, plan, ctx.stop_check, GRASP_LIMITS):
             return False
+        at_grasp = True
         if ctx.stop_check():
             return False
         gripped, hold = close_with_feedback(
@@ -991,6 +1031,7 @@ def run_pick_place(ctx, cmd) -> bool:
         ctx.say("The grasp slipped - trying once more.")
         if not _return_along(ctx.arm, plan, ctx.stop_check, GRASP_LIMITS):
             return False
+        at_grasp = False
         fresh = _view_here(ctx.arm, camera, ctx.detector.find, name, pp, cam)
         if fresh is None:
             logger.info("retry: no usable box from the pre-grasp - giving up")
@@ -1003,8 +1044,11 @@ def run_pick_place(ctx, cmd) -> bool:
         return False
     if not gripped:
         ctx.say(f"I couldn't get a grip on the {resolved}. Giving up for now.")
-        park_open(ctx.arm)
+        if at_grasp and not _return_along(ctx.arm, plan, ctx.stop_check, GRASP_LIMITS):
+            return False
+        park_open(ctx.arm, ready, ctx.stop_check)
         return False
+    grasp_z = _grasp_height(ctx.arm)
 
     # The grasp limits allow the wrist to 90°, which the high carry needs
     # for every object. The tighter workshop cap drops the hand back down.
@@ -1016,14 +1060,17 @@ def run_pick_place(ctx, cmd) -> bool:
     if status == "stopped":
         return False
     if status == "dropped":
+        ctx.shared_state.pop("table_objects", None)  # it fell where no scan has seen it
         ctx.say(f"I dropped the {resolved}.")
-        park_open(ctx.arm)
+        park_open(ctx.arm, ready, ctx.stop_check)
         return False
     if status != "offered":
         ctx.say(f"I can't lift the {resolved} clear of the other objects.")
         return False
     ctx.shared_state["grip_lock"] = True
     ctx.shared_state["grip_lock_pos"] = hold
+    ctx.shared_state["picked"] = {"name": resolved, "grasp_z": grasp_z}
+    objects.remove_near(plan.xyz[:2], _PICKED_MATCH_M)
     ctx.say("Done.")
     return True
 
@@ -1035,10 +1082,400 @@ def _camera_model_known(cfg: dict, cam: dict) -> bool:
     return camera_calibrated(cam.get("intrinsics"), cam.get("extrinsics"))
 
 
+# A set-down pose farther off its point would press the object into the
+# table, or drop it from that high.
+_PUT_DOWN_ERR_M = 0.005
+_PUT_DOWN_TILT = 0.3
+# Table a held object takes up once set down, by shape: half the length of the
+# segment it lies along (pointing away from the base), the half-width around
+# that segment, and its height (m). The bottle lands about 1 cm off its
+# set-down point; the toothbrush is held 18 mm off its middle, so either end
+# reaches that much farther.
+_HELD_FOOTPRINT_M = {"sphere": (0.0, 0.02, 0.04), "bottle": (0.0, 0.035, 0.085), "flat": (0.066, 0.012, 0.02)}
+# How tall an object counts when its box fits no class model (m).
+_UNSURE_HEIGHT_M = 0.1
+_FLAT_TOP_M = 0.012
+# The arm passes every object by at least this much (m).
+_ARM_CLEARANCE_M = 0.005
+# The most table one detected object is taken to cover, from its centre (m).
+_MAX_FOOTPRINT_M = 0.15
+# Where a dropped object can come to rest around the point under the jaws (m).
+_DROP_SPREAD_M = 0.07
+# A scan's footprint of the picked object lies this close to where the grasp aimed (m).
+_PICKED_MATCH_M = 0.04
+# Footprints whose centres are this close are one object seen again (m).
+_SAME_OBJECT_M = 0.05
+# How well a footprint's shape is known, best last: a guess (a class with no
+# shape model, the area a dropped object can roll over), a detection of a
+# class with a shape model, the arm's own placement.
+_GUESSED, _FITTED, _PLACED = 0, 1, 2
+
+
+@dataclass
+class _Footprint:
+    """Table one object takes up: within ``radius`` of the segment
+    ``centre`` +/- ``half`` along ``axis``, ``height`` tall; ``evidence``
+    says how well that is known."""
+
+    name: str
+    centre: np.ndarray
+    radius: float
+    height: float
+    half: float = 0.0
+    axis: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0]))
+    evidence: int = _GUESSED
+
+    def points(self) -> np.ndarray:
+        """Points 1 cm apart along the segment (the centre alone for a disc)."""
+        n = max(1, int(np.ceil(2.0 * self.half / 0.01)) + 1)
+        return np.linspace(self.centre - self.half * self.axis, self.centre + self.half * self.axis, n)
+
+
+def _segment_gap(points, a, b) -> np.ndarray:
+    """Distance from each of ``points`` (N, 2) to the segment ``a``-``b``."""
+    ab = b - a
+    t = np.clip(((points - a) @ ab) / max(float(ab @ ab), 1e-12), 0.0, 1.0)
+    return np.linalg.norm(points - (a + t[:, None] * ab), axis=1)
+
+
+class TableObjects:
+    """What the arm knows is on the table: one :class:`_Footprint` per object.
+
+    The pickup's scan adds what it detects (:func:`_observer`); an object seen
+    again replaces its old footprint unless that is known better, and one not
+    seen again keeps it. The arm's own moves update the list: a pickup removes
+    its object, a placed object is added where it went down, a drop adds the
+    area under the jaws. Table no footprint covers counts as free, as MoveIt's
+    planning scene and the PR2's put-down treat space no sensor saw taken.
+    """
+
+    def __init__(self):
+        self.items: list[_Footprint] = []
+
+    def see(self, footprint: _Footprint) -> None:
+        """``footprint`` replaces the known objects within ``_SAME_OBJECT_M`` of
+        it, unless one of them has better ``evidence``: then nothing changes."""
+        xy = np.asarray(footprint.centre, float)
+        same = [f for f in self.items if float(np.linalg.norm(f.centre - xy)) <= _SAME_OBJECT_M]
+        if any(f.evidence > footprint.evidence for f in same):
+            return
+        self.remove_near(xy, _SAME_OBJECT_M)
+        self.items.append(footprint)
+
+    def remove_near(self, xy, within: float) -> None:
+        xy = np.asarray(xy, float)
+        self.items = [f for f in self.items if float(np.linalg.norm(f.centre - xy)) > within]
+
+    def clear_of(self, footprint: _Footprint, clearance: float) -> bool:
+        """``footprint`` keeps ``clearance`` from every known object."""
+        points = footprint.points()
+        for known in self.items:
+            ends = known.points()[[0, -1]]
+            if float(_segment_gap(points, ends[0], ends[1]).min()) < footprint.radius + known.radius + clearance:
+                return False
+        return True
+
+    def __str__(self) -> str:
+        return "; ".join(
+            f"{f.name} at ({f.centre[0]:.3f}, {f.centre[1]:.3f}) {2000 * f.radius:.0f} mm across"
+            + (f", {2000 * f.half:.0f} mm long" if f.half else "")
+            + f" ({('guessed', 'fitted', 'placed')[f.evidence]})"
+            for f in self.items
+        ) or "none"
+
+
+class _OnePass:
+    """``detector`` with one inference per frame: the list of known objects
+    takes every box over ``min_score`` (:meth:`boxes`), and the detector's own
+    ``find`` runs on the same boxes, above its own cutoff."""
+
+    def __init__(self, detector, min_score: float):
+        self._inner = detector
+        self._min = float(min_score)
+        self._frame = None
+        self._boxes: list = []
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def boxes(self, frame) -> list:
+        if frame is not self._frame:
+            self._frame, self._boxes = frame, list(self._inner.infer(frame, self._min))
+        return self._boxes
+
+    def infer(self, frame, conf=None) -> list:
+        conf = float(self._inner.conf_threshold if conf is None else conf)
+        if conf < self._min:
+            return list(self._inner.infer(frame, conf))
+        return [det for det in self.boxes(frame) if det.score > conf]
+
+    def find(self, frame, spoken_name: str, conf=None):
+        return type(self._inner).find(self, frame, spoken_name, conf)
+
+
+def _inside_convex(cells, poly) -> np.ndarray:
+    """Which ``cells`` (N, 2) lie inside the convex polygon ``poly`` (M, 2)."""
+    left = np.ones(len(cells), bool)
+    right = np.ones(len(cells), bool)
+    for a, b in zip(poly, np.roll(poly, -1, axis=0)):
+        cross = (b[0] - a[0]) * (cells[:, 1] - a[1]) - (b[1] - a[1]) * (cells[:, 0] - a[0])
+        left &= cross >= 0
+        right &= cross <= 0
+    return left | right
+
+
+def _footprint(kin, det, joints, K, dist, mount, table_z: float, size) -> _Footprint | None:
+    """The table a detected object takes up, or ``None`` when its box has no table fix.
+
+    Anything but a flat object is first its class's table fit (a sphere, the
+    bottle, or an upright cylinder for a class with no model of its own), a
+    disc. A flat object, and a box no fit explains, is the box's corners on a
+    plane just above the table, as a strip along its longer side: right for a
+    flat object, too big for a tall one, which counts ``_UNSURE_HEIGHT_M``
+    tall. When those corners spread wider than ``_MAX_FOOTPRINT_M``, the
+    box's front edge pushed back by its own width stands in, no wider than
+    that.
+    """
+    shape = _shape_of(det.name)
+    if shape != "flat":
+        loc = kin.locate_on_table(det.box, joints, K, dist, mount, table_z, size, shape=shape)
+        if loc is not None:
+            radius = min(0.5 * float(loc["width"]), _MAX_FOOTPRINT_M)
+            return _Footprint(det.name, np.asarray(loc["xyz"][:2], float), radius, float(loc["height"]),
+                              evidence=_FITTED if shape in ("sphere", "bottle") else _GUESSED)
+    height = _FLAT_TOP_M if shape == "flat" else _UNSURE_HEIGHT_M
+    x1, y1, x2, y2 = (float(v) for v in det.box)
+    o, d = kin.rays([(x2, y2), (x1, y2), (x1, y1), (x2, y1)], joints, K, dist, mount)
+    if (d[:, 2] < -1e-6).all():
+        plane = table_z + _FLAT_TOP_M
+        corners = (o + d * ((plane - o[2]) / d[:, 2])[:, None])[:, :2]
+        sides = (corners[1] - corners[0], corners[2] - corners[1])
+        long, short = sorted(sides, key=lambda s: -float(np.linalg.norm(s)))
+        length, width = float(np.linalg.norm(long)), float(np.linalg.norm(short))
+        if 0.5 * float(np.hypot(length, width)) <= _MAX_FOOTPRINT_M:
+            return _Footprint(det.name, corners.mean(axis=0), 0.5 * width, height, 0.5 * (length - width),
+                              long / max(length, 1e-9), _FITTED if shape == "flat" else _GUESSED)
+    if not (d[:2, 2] < -1e-6).all():
+        return None
+    front = (o + d[:2] * ((table_z - o[2]) / d[:2, 2])[:, None])[:, :2]
+    half = 0.5 * float(np.linalg.norm(front[0] - front[1]))
+    away = front.mean(axis=0) - o[:2]
+    away /= max(float(np.linalg.norm(away)), 1e-9)
+    return _Footprint(det.name, front.mean(axis=0) + away * half, min(2.0 * half, _MAX_FOOTPRINT_M), height)
+
+
+def _observer(ctx, objects: TableObjects, boxes):
+    """``observe(frame, joints)`` for the pickup's scan: every object
+    ``boxes(frame)`` detects in a settled frame goes into ``objects``.
+
+    A box mostly inside the outline of the open jaws in the frame
+    (``scan_jaw_polygon``) is the jaws themselves.
+    """
+    from so101_sim.kinematics import shared_kinematics
+
+    pp = ctx.cfg["pick_place"]
+    cam = (ctx.cfg.get("cameras") or {}).get("arm") or {}
+    mount = cam.get("extrinsics")
+    table_z = float(pp.get("table_z", -0.005))
+    jaw_outline = np.asarray(pp["scan_jaw_polygon"], float)
+    kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
+
+    def observe(frame, joints) -> None:
+        height, width = frame.shape[:2]
+        K, dist = kin.intrinsics(cam.get("intrinsics"), width, height)
+        jaws = jaw_outline * [width, height]
+        for det in boxes(frame):
+            x1, y1, x2, y2 = (float(c) for c in det.box)
+            grid = np.stack(np.meshgrid(np.linspace(x1, x2, 5), np.linspace(y1, y2, 5)), axis=-1).reshape(-1, 2)
+            if _inside_convex(grid, jaws).mean() >= 0.5:
+                continue
+            found = _footprint(kin, det, joints, K, dist, mount, table_z, (width, height))
+            if found is None:
+                logger.info("table: no table fix for the %s box %s", det.name, tuple(det.box))
+                continue
+            objects.see(found)
+
+    return observe
+
+
+def _grasp_height(arm) -> float:
+    """Height of the grasp point at the arm's pose, with the width ``_offer`` uses."""
+    from so101_sim.kinematics import shared_kinematics
+
+    kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
+    return float(kin.world.grasp_point(arm.get_joints(), 0.04)[2])
+
+
+def _put_down_path(kin, here: dict, hold: float, xy, picked: dict, pp: dict):
+    """``(carry, descent, rise)`` poses that set the held object down at ``xy``, or ``None``.
+
+    ``carry`` takes it from ``here`` to the carry height over ``xy``;
+    ``descent`` lowers it until the grasp point is back at the height it had
+    when the object rested on the table, ``set_down_clearance_m`` higher;
+    ``rise`` takes the open jaws back up. An object in
+    ``wrist_align_classes`` (the toothbrush) is laid pointing away from the
+    base.
+    """
+    from so101_sim.kinematics import joint_line
+
+    table_z = float(pp.get("table_z", -0.005))
+    x, y = (float(v) for v in xy)
+    down_z = float(picked["grasp_z"]) + float(pp.get("set_down_clearance_m", 0.01))
+    axis = None
+    if picked["name"] in pp.get("wrist_align_classes", []):
+        r = max(float(np.hypot(x, y)), 1e-6)
+        axis = np.array([x / r, y / r, 0.0])
+    down, err, tilt = kin.ik(
+        np.array([x, y, down_z]), 0.04, hold, here, limits=GRASP_LIMITS, object_axis=axis,
+        one_branch=axis is None,
+    )
+    if err > _PUT_DOWN_ERR_M or abs(tilt) > _PUT_DOWN_TILT:
+        return None
+    above, err, _tilt = kin.ik(
+        np.array([x, y, _CARRY_Z]), 0.04, hold, down, limits=GRASP_LIMITS, one_branch=True,
+    )
+    if err > _OFFER_ERR_M:
+        return None
+    descent = _descent_poses(kin, above, down, 0.04, table_z, GRASP_LIMITS)
+    if descent is None:
+        return None
+    above = {**above, "gripper": hold}
+    descent = [{**pose, "gripper": hold} for pose in descent]
+    rise = [{**pose, "gripper": OPEN_GRIPPER} for pose in reversed([above, *descent[:-1]])]
+    return joint_line({**here, "gripper": hold}, above), descent, rise
+
+
+def _held_footprint(name: str) -> tuple[float, float, float]:
+    """``(half_length, radius, height)`` of the named object once set down."""
+    return _HELD_FOOTPRINT_M.get(_shape_of(name), (0.0, 0.03, 0.085))
+
+
+def _held_at(name: str, xy) -> _Footprint:
+    """The named object set down at ``xy``, laid pointing away from the base."""
+    half, radius, height = _held_footprint(name)
+    xy = np.asarray(xy, float)
+    return _Footprint(name, xy, radius, height, half, xy / max(float(np.hypot(*xy)), 1e-6), _PLACED)
+
+
+def _around(centre, radius: float, step: float = 0.01) -> list:
+    """``centre``, then the points of a ``step`` grid within ``radius`` of it, nearest first."""
+    k = int(radius / step + 1e-9)
+    offsets = np.stack(np.meshgrid(np.arange(-k, k + 1), np.arange(-k, k + 1)), axis=-1).reshape(-1, 2) * step
+    gaps = np.linalg.norm(offsets, axis=1)
+    keep = gaps <= radius + 1e-9
+    return [np.asarray(centre, float) + offset for offset in offsets[keep][np.argsort(gaps[keep], kind="stable")]]
+
+
+def _arm_clear(kin, poses, footprints, table_z: float) -> bool:
+    """At each of ``poses`` the arm keeps ``_ARM_CLEARANCE_M`` from every footprint."""
+    return all(
+        kin.hand_clearance(q, (p[0], p[1], f.radius, table_z + f.height)) >= _ARM_CLEARANCE_M
+        for f in footprints for p in f.points() for q in poses
+    )
+
+
+def _free_spot(ctx, kin, picked: dict, hold: float, drop_xy, objects: TableObjects):
+    """The nearest point to ``drop_xy`` the held object can go down on: ``(xy, path)``, or ``(None, None)``.
+
+    The object, laid there, keeps ``place_clearance_m`` from every known
+    object (:meth:`TableObjects.clear_of`) and lies between ``place_near_m``
+    and its ``place_far_m`` from the base, where a pickup reaches it again.
+    The arm (:func:`_arm_clear`) stays clear of it between :data:`_PARK_OPEN`
+    and the ready pose (:func:`_ready`), which every pickup and every way
+    home passes, and clear of every known object through the whole put-down:
+    the carry over, down, the jaws opening, back up and home. ``drop_xy``
+    itself is tried first, then a 1 cm grid outward, within ``place_search_m``.
+    """
+    from so101_sim.kinematics import joint_line
+
+    pp = ctx.cfg["pick_place"]
+    table_z = float(pp.get("table_z", -0.005))
+    name = picked["name"]
+    shape = _shape_of(name)
+    near = float(pp["place_near_m"])
+    far = float(pp["place_far_m"].get(shape, min(pp["place_far_m"].values())))
+    clearance = float(pp.get("place_clearance_m", 0.025))
+    # At the parked jaw opening all the way: park_open passes ready that wide,
+    # and a scan entry narrows the jaws along the move.
+    ready = {**_ready(pp), "gripper": _PARK_OPEN["gripper"]}
+    out_of_park = [_PARK_OPEN, *joint_line(_PARK_OPEN, ready)]
+    here = dict(ctx.arm.get_joints())
+    passed = {"out of reach": 0, "taken": 0, "on the way out of park": 0, "no path": 0, "put-down meets an object": 0}
+    for xy in _around(drop_xy, float(pp.get("place_search_m", 0.18))):
+        if not near <= float(np.hypot(*xy)) <= far:
+            passed["out of reach"] += 1
+            continue
+        laid = _held_at(name, xy)
+        if not objects.clear_of(laid, clearance):
+            passed["taken"] += 1
+            continue
+        if not _arm_clear(kin, out_of_park, [laid], table_z):
+            passed["on the way out of park"] += 1
+            continue
+        path = _put_down_path(kin, here, hold, xy, picked, pp)
+        if path is None:
+            passed["no path"] += 1
+            continue
+        carry, descent, rise = path
+        opening = joint_line(descent[-1], {**descent[-1], "gripper": OPEN_GRIPPER})
+        home = [*joint_line(rise[-1], ready), *out_of_park]
+        if not _arm_clear(kin, [*carry, *descent, *opening, *rise, *home], objects.items, table_z):
+            passed["put-down meets an object"] += 1
+            continue
+        logger.info("place: nearer points passed over: %s", passed)
+        return xy, path
+    logger.info("place: no free spot: %s", passed)
+    return None, None
+
+
+def _put_down(ctx, picked: dict, xy, path) -> bool:
+    """Carry the held object over ``xy``, lower it onto the table, open, rise
+    and park. A stop before the jaws open keeps the object."""
+    state = ctx.shared_state
+    carry, descent, rise = path
+    ctx.say(f"Putting the {picked['name']} down.")
+    if not _follow(ctx.arm, carry, ctx.stop_check, GRASP_LIMITS, 2.5):
+        return False
+    if not _follow(ctx.arm, descent, ctx.stop_check, GRASP_LIMITS, 1.5):
+        return False
+    ctx.arm.move_to(descent[-1], tolerance_deg=0.5, stop_check=ctx.stop_check, limits=GRASP_LIMITS)
+    if ctx.stop_check():
+        return False
+    for key in ("grip_lock", "grip_lock_pos", "picked"):
+        state.pop(key, None)
+    objects = state.get("table_objects")
+    if objects is not None:
+        objects.see(_held_at(picked["name"], xy))
+    ctx.arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
+    ctx.arm.go_to({"gripper": OPEN_GRIPPER}, duration_s=0.8, stop_check=ctx.stop_check)
+    if not _follow(ctx.arm, rise, ctx.stop_check, GRASP_LIMITS, 1.5):
+        return False
+    park_open(ctx.arm, _ready(ctx.cfg["pick_place"]), ctx.stop_check)
+    if ctx.stop_check():
+        return False
+    ctx.say("Done.")
+    return True
+
+
 def run_release(ctx, cmd=None) -> bool:
-    """Open the jaws where they are. The arm stays put."""
-    ctx.shared_state.pop("grip_lock", None)
-    ctx.shared_state.pop("grip_lock_pos", None)
+    """Open the jaws where they are, whatever is below them. The arm stays put.
+
+    The object can come to rest anywhere near the point under the jaws, so
+    that area joins the known objects until a scan sees where it lies.
+    """
+    from so101_sim.kinematics import shared_kinematics
+
+    state = ctx.shared_state
+    picked = state.get("picked")
+    for key in ("grip_lock", "grip_lock_pos", "picked"):
+        state.pop(key, None)
+    objects = state.get("table_objects")
+    if objects is not None:
+        kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
+        name = picked["name"] if picked else "dropped object"
+        height = _held_footprint(name)[2] if picked else _UNSURE_HEIGHT_M
+        under = np.asarray(kin.world.grasp_point(ctx.arm.get_joints(), 0.04)[:2], float)
+        objects.see(_Footprint(name, under, _DROP_SPREAD_M, height))
     ctx.say("Released.")
     ctx.arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
     ctx.arm.go_to(
@@ -1047,9 +1484,65 @@ def run_release(ctx, cmd=None) -> bool:
     return not ctx.stop_check()
 
 
+def run_place(ctx, cmd=None) -> bool:
+    """Set the picked object down on the table nearest the drop position,
+    where the pickup holds it out ("place it", "set it down"), clear of every
+    object the arm knows of.
+
+    The known objects are what the pickup's scan detected and what the arm has
+    done since; nothing is looked at again. Only an object a pickup still
+    holds can be placed; with no free spot the arm stays where it is.
+    """
+    from so101_sim.kinematics import shared_kinematics
+
+    state = ctx.shared_state
+    picked = state.get("picked")
+    if picked is None or not state.get("grip_lock"):
+        ctx.say("I'm not holding anything I picked up.")
+        return False
+    name = picked["name"]
+    hold = float(state["grip_lock_pos"])
+    if not holding(ctx.arm, ctx.cfg["grip"], hold):
+        for key in ("grip_lock", "grip_lock_pos", "picked"):
+            state.pop(key, None)
+        ctx.say(f"I'm not holding the {name} any more.")
+        return False
+    kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
+    drop_xy = np.asarray(kin.world.grasp_point(ctx.arm.get_joints(), 0.04)[:2], float)
+    objects = state.get("table_objects") or TableObjects()
+    logger.info("place: known objects: %s", objects)
+    xy, path = _free_spot(ctx, kin, picked, hold, drop_xy, objects)
+    if path is None:
+        ctx.say(f"I can't find a free spot for the {name}.")
+        return False
+    logger.info(
+        "place: %s at (%.3f, %.3f), %.0f mm from the drop position (%.3f, %.3f)",
+        name, *xy, 1000 * float(np.linalg.norm(xy - drop_xy)), *drop_xy,
+    )
+    return _put_down(ctx, picked, xy, path)
+
+
+def release_to_pinch(state: dict) -> bool:
+    """Hand the jaws to the pinch (gesture mimic). A locked grip ends, and the
+    object can then be let go anywhere, so the known objects go too. True
+    when a grip was locked."""
+    if not state.pop("grip_lock", None):
+        return False
+    for key in ("grip_lock_pos", "picked", "table_objects"):
+        state.pop(key, None)
+    return True
+
+
+def forget_scene(state: dict) -> None:
+    """What a scene reset forgets: the locked grip, the picked object, and the known objects."""
+    for key in ("grip_lock", "grip_lock_pos", "picked", "table_objects"):
+        state.pop(key, None)
+
+
 def register_manipulation(registry) -> None:
-    """Add grip, release, pick_place and fetch_block to ``registry``."""
+    """Add grip, release, place, pick_place and fetch_block to ``registry``."""
     registry.add(Intent.GRIP, run_grip)
     registry.add(Intent.RELEASE, run_release)
+    registry.add(Intent.PLACE, run_place)
     registry.add(Intent.PICK_PLACE, run_pick_place)
     registry.add(Intent.FETCH_BLOCK, run_fetch_block)

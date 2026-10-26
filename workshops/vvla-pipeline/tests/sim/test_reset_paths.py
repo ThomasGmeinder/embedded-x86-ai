@@ -37,17 +37,23 @@ _AWAY = {
     "wrist_roll": 10.0,
     "gripper": 40.0,
 }
+# A held pickup: a reset forgets it.
+_HELD = {
+    "grip_lock": True,
+    "grip_lock_pos": 40.0,
+    "picked": {"name": "bottle", "grasp_z": 0.05},
+}
 
 
 def _notebook_reset(arm) -> None:
     """The reset button in ``02_digital_twin.ipynb``, and the pytest helper."""
+    from common.manipulation import forget_scene
     from so101_sim.world import restore_twin
 
     arm.world  # the notebook's world and the arm's world are the same object
     state = getattr(arm, "shared_state", None)
     if isinstance(state, dict):
-        state.pop("grip_lock", None)
-        state.pop("grip_lock_pos", None)
+        forget_scene(state)
     restore_twin(arm)
 
 
@@ -76,7 +82,7 @@ def _pipeline_console_reset(server_arm) -> dict:
     """``run_pipeline.sh``: the console owns no world, so reset is the ROS service."""
     from vla_pipeline.console import TwinConsole
 
-    state = {"grip_lock": True, "grip_lock_pos": 40.0}
+    state = dict(_HELD)
     client = SimpleNamespace(
         world=None,
         shared_state=state,
@@ -105,7 +111,7 @@ def _arm(stack: str, cfg: dict):
     sim = dict(cfg.get("sim") or {})
     world = SimWorld({"sim": sim}, rest_pose=REST_POSE, start=False)
     arm = SimArmClient(cfg, world)
-    arm.shared_state = {"grip_lock": True, "grip_lock_pos": 40.0}
+    arm.shared_state = dict(_HELD)
     return arm
 
 
@@ -191,10 +197,11 @@ def test_notebook_test_and_pipeline_resets_leave_the_same_twin(workshop_cfg, pip
         ):
             found = _differ(notebook_snap, other)
             diffs.extend(f"{label}: {line}" for line in found)
-        if client_state.get("grip_lock") is not None:
-            diffs.append("run_pipeline client grip_lock was not cleared")
+        for label, state in (("run_pipeline client", client_state), ("notebook", notebook.shared_state)):
+            kept = sorted(set(state) & set(_HELD))
+            if kept:
+                diffs.append(f"{label} kept {kept} across the reset")
         assert not diffs, "reset paths diverged\n" + "\n".join(diffs)
-        assert "grip_lock" not in notebook.shared_state
     finally:
         for arm in made:
             arm.world.close()

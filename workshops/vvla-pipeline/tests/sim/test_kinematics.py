@@ -8,9 +8,10 @@
 """``so101_sim.kinematics``: locating objects from arm-camera boxes, grasp IK,
 and the hand-eye solve behind ``scripts/calibrate_arm_camera.py``.
 
-Localization runs on the twin: the arm looks from ``scan_pose`` (panned so the
-object sits between the jaws), the box comes from the twin's segmentation, and the
-result is compared with where the object really is.
+Localization runs on the twin: the arm looks from the configured scan view the
+pickup would keep (the first, in sweep order, whose box the pickup accepts), the
+box comes from the twin's segmentation, and the result is compared with where the
+object really is.
 """
 
 from __future__ import annotations
@@ -62,22 +63,9 @@ def test_principal_axis_rejects_square_or_clipped_crop():
     assert principal_axis_in_box(frame, (0, 35, 105, 85)) is None
 
 
-def _aimed_scan_pose(kin, cfg, p) -> dict:
-    """scan_pose with the pan that puts ``p`` at the image x between the jaws."""
-    pp = cfg["behaviors"]["pick_place"]
-    jaws_x = -0.24  # normalized image x of an object sitting between the jaws
-    best = None
-    for pan in np.arange(-60.0, 40.0, 0.5):
-        pose = {**pp["scan_pose"], "shoulder_pan": float(pan)}
-        u = kin.project(p, pose)[0, 0]
-        err = abs(u / 640 * 2 - 1 - jaws_x)
-        if best is None or err < best[0]:
-            best = (err, pose)
-    return best[1]
-
-
 def _look(twin, obj, pos, pose):
-    """Arm at ``pose``, only ``obj`` on the table at ``pos``: ``(class, box, (w, h), true centre)``."""
+    """Arm at ``pose``, only ``obj`` on the table at ``pos``: ``(class, box, (w, h),
+    true centre)``, or ``None`` when ``obj`` is not in the frame."""
     from so101_sim.camera import SimCamera
     from so101_sim.detect import SegDetector
 
@@ -95,10 +83,32 @@ def _look(twin, obj, pos, pose):
         ok, frame = cam.read(fresh=True)
         assert ok
         dets = [d for d in SegDetector(cam).detect(frame) if d[3] == obj]
-        assert dets, f"{obj} not in view"
+        if not dets:
+            return None
         return dets[0][0], dets[0][2], frame.shape[1::-1], world.body_pos(obj)
     finally:
         cam.release()
+
+
+def _scan_view(twin, cfg, obj, pos):
+    """The configured scan view the pickup keeps for ``obj`` at ``pos``: the first,
+    high pans then near pans, whose box its ``_box_usable`` accepts.
+    ``(joints, class, box, (w, h), true centre)``."""
+    from vla_pipeline.behaviors.manipulation import _box_usable, _high_sweep, _shape_of
+
+    pp = cfg["behaviors"]["pick_place"]
+    high, pans = _high_sweep(pp)
+    views = [{**high, "shoulder_pan": float(p)} for p in pans]
+    views += [{**pp["scan_near_pose"], "shoulder_pan": float(p)} for p in pp["scan_near_pans"]]
+    for pose in views:
+        seen = _look(twin, obj, pos, pose)
+        if seen is None:
+            continue
+        cls, box, size, truth = seen
+        area = (box[2] - box[0]) * (box[3] - box[1])
+        if area >= float(pp["min_box_area_frac"]) * size[0] * size[1] and _box_usable(box, _shape_of(cls), *size):
+            return twin.world.joint_cal(), cls, box, size, truth
+    pytest.fail(f"no configured scan view sees the {obj} at {np.round(pos[:2], 3)} clear of the image border")
 
 
 @pytest.mark.parametrize(
@@ -111,8 +121,7 @@ def test_locate_on_table(twins, pipeline_cfg, kin, obj, xy):
 
     twin = twins("pipeline", pipeline_cfg)
     pos = np.array([xy[0], xy[1], twin.world.model.body(obj).pos[2]])
-    pose = _aimed_scan_pose(kin, pipeline_cfg, pos)
-    cls, box, size, truth = _look(twin, obj, pos, pose)
+    pose, cls, box, size, truth = _scan_view(twin, pipeline_cfg, obj, pos)
 
     shape = "sphere" if cls in ROUND_CLASSES else "flat" if cls in FLAT_CLASSES else "bottle" if cls == "bottle" else "upright"
     loc = kin.locate_on_table(box, pose, image_size=size, shape=shape)
@@ -130,6 +139,20 @@ def test_locate_on_table(twins, pipeline_cfg, kin, obj, xy):
 def test_box_cut_by_the_image_side_gives_no_fix(kin):
     assert kin.locate_on_table((0, 100, 80, 200), {}, image_size=(640, 480)) is None
     assert kin.locate_on_table((200, 400, 300, 480), {}, image_size=(640, 480)) is None
+
+
+def test_a_box_within_the_edge_margin_counts_as_cut():
+    """YOLO's box of an object the border cuts stops up to 4 px short of it."""
+    from so101_sim.kinematics import EDGE_MARGIN_PX, box_cut
+
+    size = (640, 480)
+    assert EDGE_MARGIN_PX > 4.0
+    assert box_cut((4.0, 100, 80, 200), size) == (True, False)
+    assert box_cut((100, 100, 200, 476.0), size) == (True, False)
+    assert box_cut((100, 3.0, 200, 200), size) == (False, True)
+    inside = EDGE_MARGIN_PX
+    assert box_cut((inside, inside, 640 - inside, 480 - inside), size) == (False, False)
+    assert box_cut((20, 20, 60, 60), size, margin=25.0) == (True, True)
 
 
 @pytest.mark.parametrize("r,bearing", [(0.16, 0), (0.20, 25), (0.24, -20), (0.28, 10), (0.30, -5)])
@@ -227,8 +250,7 @@ def test_grasp_path_is_deterministic(twins, pipeline_cfg, kin, obj, xy, shape):
     """Same joints and the same box: the same goals. A two-pixel shift keeps the elbow."""
     twin = twins("pipeline", pipeline_cfg)
     pos = np.array([xy[0], xy[1], twin.world.model.body(obj).pos[2]])
-    joints = _aimed_scan_pose(kin, pipeline_cfg, pos)
-    _cls, box, size, _truth = _look(twin, obj, pos, joints)
+    joints, _cls, box, size, _truth = _scan_view(twin, pipeline_cfg, obj, pos)
     first = _goal_list(kin, joints, box, size, shape)
     second = _goal_list(kin, joints, box, size, shape)
     assert first == second
@@ -291,8 +313,7 @@ def test_the_twin_camera_stands_in_until_both_calibrations_are_set(kin):
 def test_default_camera_model_projects_like_the_twin(twins, pipeline_cfg, kin):
     twin = twins("pipeline", pipeline_cfg)
     pos = np.array([0.28, 0.06, 0.015])
-    pose = _aimed_scan_pose(kin, pipeline_cfg, pos)
-    _, box, _, truth = _look(twin, "sports_ball", pos, pose)
+    pose, _, box, _, truth = _scan_view(twin, pipeline_cfg, "sports_ball", pos)
     u, v = kin.project(truth, pose)[0]
     assert abs(u - 0.5 * (box[0] + box[2])) < 5 and abs(v - 0.5 * (box[1] + box[3])) < 5
 

@@ -25,12 +25,14 @@ of a behavior still do the same thing.
 from __future__ import annotations
 
 import importlib
+import itertools
 import logging
+import math
 
 import numpy as np
 import pytest
 
-from rigs import assert_ordered_high_scan, carry_problem, hold_problem
+from rigs import assert_ordered_high_scan, carry_problem, hold_problem, wait_settled
 from scripted import Hand, Person
 
 pytestmark = pytest.mark.sim
@@ -438,10 +440,22 @@ def test_fetch_block_hands_to_person(rig, stack):
     rig.run([(0.0, "bring me the block")])
 
     assert rig.event_times("behavior_end", intent="fetch_block", ok=True), rig.said
-    assert rig.trace.heights("sports_ball").max() - z0 > 0.03, "prop never lifted"
-    opened = next(s.t for s in rig.trace.samples if s.t > 1.0 and s.goal["gripper"] > 90.0)
-    problem = hold_problem(rig, "sports_ball", z0, watch_s=0.0, until=opened - 1e-3)
+    release = next(s for s in rig.trace.samples if s.t > 1.0 and s.goal["gripper"] > 90.0)
+    problem = hold_problem(rig, "sports_ball", z0, watch_s=0.0, until=release.t - 1e-3)
     assert problem is None, problem
+    # The jaws open with the arm at hand_over's extend pose and the ball between them there.
+    lift, reach = fb["lift_pose"], float(fb["handoff_reach"])
+    handover = {"shoulder_lift": lift["shoulder_lift"] + reach, "elbow_flex": max(lift["elbow_flex"] - 40.0, 0.0),
+                "wrist_flex": 20.0}
+    off = {k: round(release.joints[k] - v, 1) for k, v in handover.items() if abs(release.joints[k] - v) > 3.0}
+    assert not off, f"the jaws opened off the handover pose (deg): {off}"
+    from so101_sim.kinematics import shared_kinematics
+
+    kin = shared_kinematics(_motion(stack).GRIPPER_CLOSED_FLOOR)
+    R, t = kin.gripper_pose(release.joints)
+    ball = R @ release.in_hand["sports_ball"] + t
+    gap = float(np.linalg.norm(ball - kin.world.grasp_point(release.joints, 0.04)))
+    assert gap < 0.02, f"the ball was {1000 * gap:.0f} mm from the jaws when they opened at the handover"
     assert not rig.world.is_grasped("sports_ball"), "prop not released"
     _assert_at(rig, _motion(stack).REST_POSE)
 
@@ -487,8 +501,7 @@ def _press_reset(rig) -> None:
     """The notebook reset button, once the behavior has already stopped."""
     from so101_sim.world import restore_twin
 
-    rig.ctx.shared_state.pop("grip_lock", None)
-    rig.ctx.shared_state.pop("grip_lock_pos", None)
+    importlib.import_module(_GRASP[rig.target]).forget_scene(rig.ctx.shared_state)
     restore_twin(rig.arm)
 
 
@@ -518,6 +531,54 @@ def test_reset_then_pick_the_toothbrush(rig, stack, caplog):
         report = f"after reset {n}\n{_postmortem(caplog, rig.said)}"
         assert _said_since(rig, spoken, "Got the toothbrush"), report
         assert rig.world.is_grasped("toothbrush"), report
+
+
+# ---------------------------------------------------------------------------
+# place: each object set down near the drop position, in every order
+# ---------------------------------------------------------------------------
+_PLACE_ORDERS = list(itertools.permutations(("sports_ball", "toothbrush", "bottle")))
+_SPOKEN = {"sports_ball": "ball", "toothbrush": "toothbrush", "bottle": "bottle"}
+
+
+def _tilt_deg(quat) -> float:
+    """Angle between a body's z axis and the world's."""
+    w, x, y, z = (float(v) for v in quat)
+    return math.degrees(math.acos(max(-1.0, min(1.0, 1.0 - 2.0 * (x * x + y * y)))))
+
+
+@pytest.mark.slow
+@PIPELINE
+@pytest.mark.parametrize("order", _PLACE_ORDERS, ids=["-".join(o) for o in _PLACE_ORDERS])
+def test_pick_up_and_place_each_object_in_turn(rig, stack, order, caplog):
+    """Default scene: pick up each object, then "place it". It goes down within
+    ``place_search_m`` of the drop position (where the pickup held it out) on
+    table the scans saw free, the bottle upright, and no other object moves.
+    The failure text is what each place step saw and passed over."""
+    caplog.set_level(logging.INFO, logger=_GRASP[stack])
+    pp = _section(rig, "pick_place")
+    rig.pose.keys = [(0.0, [PERSON_LEFT])]
+    rig.default_scene()
+    for body in order:
+        mark = len(caplog.records)
+        rig.run([(0.0, f"pick up the {_SPOKEN[body]}")])
+
+        def report(step: str) -> str:
+            lines = [r.getMessage() for r in caplog.records[mark:] if r.getMessage().startswith(("place:", "table map:"))]
+            return f"{' -> '.join(order)}: {step} the {body}; robot said {rig.said[-4:]}\n" + "\n".join(lines)
+
+        assert rig.world.is_grasped(body), report("picking up")
+        drop = rig.world.body_pos(body)[:2]
+        others = {b: rig.world.body_pos(b) for b in rig.world.objects if b != body}
+        rig.run([(0.0, "place it")])
+        assert not rig.world.is_grasped(body), report("placing")
+        wait_settled(rig.world)
+        end = rig.world.body_pos(body)
+        gap = float(np.linalg.norm(end[:2] - drop))
+        assert gap <= float(pp["place_search_m"]) + 0.02, report(f"{gap:.3f} m from the drop position after placing")
+        if body == "bottle":
+            assert _tilt_deg(rig.world.body_quat(body)) < 10.0, report("tipping over")
+        moved = {b: round(float(np.linalg.norm(rig.world.body_pos(b) - p)), 3) for b, p in others.items()}
+        assert not {b: d for b, d in moved.items() if d > 0.01}, report(f"moving others {moved} while placing")
 
 
 # ---------------------------------------------------------------------------

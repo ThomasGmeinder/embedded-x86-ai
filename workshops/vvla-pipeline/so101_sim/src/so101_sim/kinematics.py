@@ -40,6 +40,8 @@ __all__ = [
     "TABLE_Z",
     "ROUND_CLASSES",
     "FLAT_CLASSES",
+    "EDGE_MARGIN_PX",
+    "box_cut",
     "principal_axis_in_box",
     "axis_error_deg",
     "joint_line",
@@ -58,6 +60,10 @@ OPEN_GRIPPER = 75.0
 # Detector classes with geometry that needs a different table-box model.
 ROUND_CLASSES = frozenset({"sports ball", "orange", "apple"})
 FLAT_CLASSES = frozenset({"book", "toothbrush"})
+# A box nearer the image border than this is cut by it: for an object the
+# border cuts, YOLO's box stopped up to 4 px short of the border on the twin's
+# scan views (against the twin's segmentation of the same frames).
+EDGE_MARGIN_PX = 5.0
 
 _CV_FROM_MJ = np.diag([1.0, -1.0, -1.0])  # MuJoCo cameras look down -z with y up
 _CLEARANCE_BODIES = ("lower_arm", "wrist", "gripper", "camera_mount", "moving_jaw_so101_v1")
@@ -80,6 +86,14 @@ def axis_error_deg(angle: float, target: float) -> float:
     return (float(angle) - float(target) + 90.0) % 180.0 - 90.0
 
 
+def box_cut(box, image_size, margin: float = EDGE_MARGIN_PX) -> tuple[bool, bool]:
+    """``(sides_or_bottom, top)``: whether the border of an ``image_size``
+    ``(w, h)`` frame cuts ``box`` ``(x1, y1, x2, y2)``, within ``margin`` px."""
+    x1, y1, x2, y2 = (float(v) for v in box)
+    width, height = (float(v) for v in image_size)
+    return x1 < margin or x2 > width - margin or y2 > height - margin, y1 < margin
+
+
 def principal_axis_in_box(
     frame,
     box,
@@ -100,7 +114,7 @@ def principal_axis_in_box(
         return None
     height, width = image.shape[:2]
     x1f, y1f, x2f, y2f = (float(v) for v in box)
-    if x1f <= 1 or y1f <= 1 or x2f >= width - 1 or y2f >= height - 1:
+    if any(box_cut(box, (width, height))):
         return None
     x1, y1 = max(0, int(math.floor(x1f))), max(0, int(math.floor(y1f)))
     x2, y2 = min(width, int(math.ceil(x2f))), min(height, int(math.ceil(y2f)))
@@ -409,16 +423,15 @@ class Kinematics:
         jaws closed beside it); a model with no bottle mesh keeps the cylinder
         step. A resting sphere (``shape="sphere"``), upright cylinder
         (``"upright"``), or thin table-plane footprint (``"flat"``) is fitted
-        to the box. A box cut by the image's sides or bottom gives ``None``; a
-        cut top edge is ignored only for upright objects.
+        to the box. A box cut by the image's sides or bottom (:func:`box_cut`)
+        gives ``None``; a cut top edge is ignored only for upright objects.
         """
         x1, y1, x2, y2 = (float(v) for v in box)
         top_cut = False
         if image_size is not None:
-            W, H = image_size
-            if x1 <= 1 or x2 >= W - 1 or y2 >= H - 1:
+            cut, top_cut = box_cut(box, image_size)
+            if cut:
                 return None
-            top_cut = y1 <= 1
         K = self.default_intrinsics(*(image_size or (None, None))) if K is None else np.asarray(K, float)
         if shape == "flat":
             if top_cut:
@@ -933,8 +946,8 @@ class Kinematics:
         """Poses that move the grasp point along the straight line from
         ``start``'s to ``end``'s, ``end`` included.
 
-        Servos interpolate each joint on its own, so one move between two
-        poses only roughly follows the line; short steps keep the jaws on it.
+        A move follows the straight joint-space line (:func:`joint_line`),
+        which bends the grasp point's path; short steps keep the jaws on it.
         """
         with self._lock:
             a, b = self.world.grasp_point(start, width), self.world.grasp_point(end, width)
@@ -950,11 +963,12 @@ class Kinematics:
 
 
 def joint_line(start: dict, end: dict, max_step_deg: float = 8.0) -> list[dict]:
-    """``end`` split into poses along the straight joint-space line from ``start``.
+    """``end`` split into poses along the straight joint-space line from ``start``,
+    at most ``max_step_deg`` apart: the poses a planner checks along a move.
 
-    A single goal lets every servo run its own profile, so the joint with the
-    longest travel arrives last and the hand leaves the line between the two
-    poses; short steps hold it on the line the planner checked.
+    The arm runs every move on this line: the direct transports plan each
+    goal in lockstep (``ServoProfiler.plan``), and the ROS 2 trajectory
+    controller moves all body joints over one duration.
     """
     keys = [k for k in end if k in start]
     n = max(1, math.ceil(max((abs(end[k] - start[k]) for k in keys), default=0.0) / max_step_deg))

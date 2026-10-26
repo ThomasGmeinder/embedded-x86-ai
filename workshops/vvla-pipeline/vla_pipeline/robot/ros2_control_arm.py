@@ -18,7 +18,8 @@ message conversions (``Ros2ArmClient`` in :mod:`vla_pipeline.robot.robot_node`):
   tolerance; the controller's result says whether the joints got there;
 - a streamed setpoint (:meth:`~ControllerArm.send_joints`: gesture mimic,
   person tracking) goes to ``arm_forward_controller``, switched in on the
-  first one; the next move switches ``arm_controller`` back;
+  first one; the next move holds the arm where it is until it stands still,
+  then switches ``arm_controller`` back;
 - the gripper is ``gripper_forward_controller``;
 - the state is ``/joint_states`` from ``joint_state_broadcaster``.
 
@@ -160,6 +161,11 @@ class ControllerArm(ArmClient):
         # The server's position-difference velocity reads one encoder step per
         # tick while still; below one and a half of those the jaw has stopped.
         self._jaw_still_rad_s = 1.5 * self._jmap.steps_to_rad("gripper", 1.0) * control_fps
+        # The same rule for the body, between consecutive states (calibrated units).
+        self._still_step = {
+            k: 1.5 * abs(self._jmap.to_cal(k, self._jmap.steps_to_rad(k, 1.0)) - self._jmap.to_cal(k, 0.0)) for k in BODY
+        }
+        self._still_states = 0  # consecutive states with every body joint within its still step
         self._goal_time_s = goal_time_s()
         self._FollowJointTrajectory = FollowJointTrajectory
         self._SwitchController = SwitchController
@@ -218,7 +224,12 @@ class ControllerArm(ArmClient):
         """Store a state (calibrated units; the jaw's speed in rad/s; the gripper's
         effort in N·m, None when unreadable) and wake every wait."""
         with self._cond:
+            before = self._state
             self._state = {**(self._state or {}), **positions}
+            still = before is not None and all(
+                abs(self._state[k] - before[k]) <= self._still_step[k] for k in BODY if k in positions and k in before
+            )
+            self._still_states = self._still_states + 1 if still else 0
             self._jaw_speed, self._effort_nm = jaw_speed, effort_nm
             self._state_t = time.monotonic()
             self._cond.notify_all()
@@ -294,6 +305,18 @@ class ControllerArm(ArmClient):
             self._streaming = streaming
             self._stream = None
 
+    def _stop_stream(self, stop_check=None) -> bool:
+        """Hold the measured body pose on the forward controller and wait until
+        the arm stands still there: a trajectory timed from an arm still moving
+        toward the last streamed setpoint ends short of its goal. False when
+        ``stop_check`` fires first."""
+        self.send_joints({k: v for k, v in self.get_joints().items() if k in BODY})
+        with self._cond:
+            self._still_states = 0
+        # Two states in a row: a reversal passes through standstill within one tick.
+        return self._wait(lambda: self._still_states >= 2, self._goal_time_s + REPLY_S,
+                          "the arm to stand still after streaming", stop_check)
+
     def _command_gripper(self, cal: float) -> None:
         """Command the gripper's forward controller (calibrated units)."""
         self._gripper_pub.publish(self._Float64MultiArray(data=[self._jmap.to_rad("gripper", cal)]))
@@ -329,8 +352,10 @@ class ControllerArm(ArmClient):
             self._send_limits = limits
             try:
                 target = clamp_joints(target, limits)
-                start = self.get_joints()
                 body = {k: v for k, v in target.items() if k in BODY}
+                if body and self._streaming and not self._stop_stream(stop_check):
+                    return "stopped"
+                start = self.get_joints()
                 eta_s = float(shared_profiler().plan(start, body or target).eta_s)
                 sent_at = time.time()
                 if "gripper" in target:

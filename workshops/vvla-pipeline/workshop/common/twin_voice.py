@@ -28,6 +28,7 @@ from common import speech
 from common.fixtures import offline_parse_text
 from common.imaging import resolve_class
 from common.intents import CommandRegistry, Intent, ParsedCommand, is_noise, is_stop
+from common.manipulation import forget_scene
 
 RESET_LINE = "Reset. Arm parked, objects back on the table."
 # How long the microphone may take to open before the console falls back to
@@ -268,8 +269,7 @@ class VoiceCommands:
             self._work.wait_for(lambda: not self._running, 3.0)
         self.drain()
         try:
-            self.ctx.shared_state.pop("grip_lock", None)
-            self.ctx.shared_state.pop("grip_lock_pos", None)
+            forget_scene(self.ctx.shared_state)
             # the twin program parks the arm and puts the objects back (/sim/reset_scene)
             if self.twin.reset_scene():
                 self.console.say(RESET_LINE)

@@ -188,10 +188,23 @@ grip:                               # close until contact, confirm with the arm 
   jaw_diff_threshold: 0.06
 
 pick_place:                         # "pick up the ball": detect on the arm camera, grasp, hand over
-  scan_pose: {shoulder_pan: 0.0, shoulder_lift: -55.0, elbow_flex: 65.0, wrist_flex: 45.0, wrist_roll: 0.0, gripper: 70.0}
-  scan_pans: [0.0, -14.0, 39.0, -52.0, 71.0]  # sweep workspace; tune for the real camera/FOV
-  scan_near_pose: {shoulder_pan: 0.0, shoulder_lift: -57.3, elbow_flex: 63.2, wrist_flex: 67.5, wrist_roll: 0.0, gripper: 70.0}
-  scan_near_pans: [0.0, -14.0, 14.0]  # fallback for near objects hidden behind the jaws
+  scan_pose: {shoulder_pan: 0.0, shoulder_lift: -55.0, elbow_flex: 40.0, wrist_flex: 65.0, wrist_roll: 0.0, gripper: 70.0}  # 10 cm over the table
+  # from the ready pose (pan 0) one way, then the other; each default object fully inside a high view, clear of the
+  # image border (tests/sim/pick_coverage.py chose them); inside the arm's +-110 deg; tune for the real camera/FOV
+  scan_pans: [-10.0, -40.0, -60.0, -100.0, 10.0, 30.0, 60.0, 90.0]
+  scan_near_pose: {shoulder_pan: 0.0, shoulder_lift: -50.0, elbow_flex: 30.0, wrist_flex: 90.0, wrist_roll: 0.0, gripper: 70.0}
+  # fallback, looking down at the table near the base (13-26 cm out)
+  scan_near_pans: [50.0, 10.0, -30.0, -70.0, -100.0]
+  # the scan's frames keep a list of the objects on the table: one footprint per detection, the jaws excepted
+  scan_jaw_polygon: [[1.0, 1.0], [0.89, 1.0], [0.645, 0.72], [0.615, 0.665], [0.615, 0.59], [0.75, 0.59], [1.0, 0.69]]  # outline of the open jaws (image fractions x, y)
+  objects_min_score: 0.25               # weaker detections still count as objects
+  # "place it": the nearest point to the drop position within place_search_m that keeps
+  # place_clearance_m from every known object, off the arm's way out of park, with a put-down clear of every object
+  place_search_m: 0.18
+  place_near_m: 0.18                   # from the base: where a pickup reaches each kind again
+  place_far_m: {sphere: 0.33, flat: 0.32, bottle: 0.29}
+  place_clearance_m: 0.025
+  set_down_clearance_m: 0.01        # the object is let go this far above where it rested
   table_z: -0.005                   # table surface height in the arm's base frame (m); located there, reached with IK
   pregrasp_above_m: 0.06            # jaws open this far above the grasp, then descend in joint space
   max_grasp_height_m: 0.03          # grasp tall objects no higher than this

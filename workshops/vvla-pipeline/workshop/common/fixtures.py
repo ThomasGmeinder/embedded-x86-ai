@@ -226,6 +226,7 @@ _KEYWORD_ROUTES = [
     (r"\b(copy|mirror|follow|mimic)\b", "gesture_mimic", None),
     (r"\b(block|cube)\b", "fetch_block", None),
     (r"\b(pick|grab|bring|fetch|get)\b", "pick_place", "OBJECT"),
+    (r"\bplace\b|\b(set|put|lay)\b.*\b(down|table)\b", "place", None),
     (r"\b(dance|groove|party|moves)\b", "dance", None),
     (r"\b(hold|take)\b", "grip", None),
     (r"\b(wave|hi|hello|greet)\b", "wave", None),

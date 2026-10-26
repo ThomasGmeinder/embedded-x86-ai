@@ -44,6 +44,7 @@ from common.imaging import (
     pick_arm,
     pick_nearest,
 )
+from common.manipulation import release_to_pinch
 from common.motion import LIVE_MIMIC_LIMITS, set_active_limits
 
 logger = logging.getLogger(__name__)
@@ -150,8 +151,7 @@ def run_mimic(ctx, cmd=None) -> None:
     # base JOINT_LIMITS.
     live = bool(getattr(ctx.arm, "is_live", False))
     prev_limits = set_active_limits(LIVE_MIMIC_LIMITS) if live else None
-    if ctx.shared_state.pop("grip_lock", None):
-        ctx.shared_state.pop("grip_lock_pos", None)
+    if release_to_pinch(ctx.shared_state):
         ctx.say("Your pinch drives the gripper now. Open your fingers to let go.")
     logger.info(
         "Mimic running (pose on %s%s) - move your hand; 'q' quits.",

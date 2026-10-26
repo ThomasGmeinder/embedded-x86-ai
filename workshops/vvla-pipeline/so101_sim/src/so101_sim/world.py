@@ -627,20 +627,24 @@ class SimWorld:
                         out.append((bname, gname, round(-float(c.dist), 4)))
         return out
 
+    def _geom_label(self, g: int) -> str:
+        """Geom ``g``'s name, its mesh's name when the geom has none, else ``geom<id>``."""
+        mj, m = self._mj, self.model
+        label = mj.mj_id2name(m, mj.mjtObj.mjOBJ_GEOM, g)
+        if label is None and m.geom_type[g] == mj.mjtGeom.mjGEOM_MESH:
+            label = mj.mj_id2name(m, mj.mjtObj.mjOBJ_MESH, int(m.geom_dataid[g]))
+        return label or f"geom{g}"
+
     def _collision_geoms(self, body: str, names=None) -> frozenset[int]:
         """Colliding geom ids on ``body``, only those in ``names`` when given."""
-        mj, m = self._mj, self.model
+        m = self.model
         bid = m.body(body).id
         out = set()
         for g in range(m.ngeom):
             if m.geom_bodyid[g] != bid or not (m.geom_contype[g] or m.geom_conaffinity[g]):
                 continue
-            if names is not None:
-                label = mj.mj_id2name(m, mj.mjtObj.mjOBJ_GEOM, g)
-                if label is None and m.geom_type[g] == mj.mjtGeom.mjGEOM_MESH:
-                    label = mj.mj_id2name(m, mj.mjtObj.mjOBJ_MESH, int(m.geom_dataid[g]))
-                if label not in names:
-                    continue
+            if names is not None and self._geom_label(g) not in names:
+                continue
             out.add(g)
         return frozenset(out)
 
@@ -676,10 +680,7 @@ class SimWorld:
                     if finger not in fingers or other in fingers:
                         continue
                     body = mj.mj_id2name(m, mj.mjtObj.mjOBJ_BODY, m.geom_bodyid[other])
-                    label = mj.mj_id2name(m, mj.mjtObj.mjOBJ_GEOM, finger)
-                    if label is None:
-                        label = mj.mj_id2name(m, mj.mjtObj.mjOBJ_MESH, int(m.geom_dataid[finger]))
-                    pads.setdefault(body, set()).add(label or f"geom{finger}")
+                    pads.setdefault(body, set()).add(self._geom_label(finger))
             site = self.data.site("gripperframe")
             rot, centre = site.xmat.reshape(3, 3), site.xpos.copy()
             where = {b: 1000.0 * rot.T @ (self.data.body(b).xpos - centre) for b in pads if b != "table"}
@@ -726,6 +727,44 @@ class SimWorld:
                 if np.linalg.norm(v[:3]) >= SETTLED_M_S or np.linalg.norm(v[3:]) >= SETTLED_RAD_S:
                     return False
         return True
+
+    def props_report(self) -> dict:
+        """Every prop's state at the last physics step, JSON-ready (timelines).
+
+        Per prop: ``xyz`` (m), ``yaw`` and ``tilt`` (deg; tilt is the body's z
+        axis off vertical: 90 for a bottle on its side), ``speed`` (mm/s) and
+        ``spin`` (deg/s), ``grasped`` (:meth:`is_grasped`), and ``touching``:
+        each other body in contact, the table excepted, with the geoms of that
+        body that touch it.
+        """
+        mj, m = self._mj, self.model
+        ids = {m.body(name).id: name for name in self._free}
+        with self.lock:
+            touching: dict[str, dict[str, set]] = {name: {} for name in self._free}
+            for k in range(self.data.ncon):
+                c = self.data.contact[k]
+                for mine, other in ((c.geom1, c.geom2), (c.geom2, c.geom1)):
+                    prop = ids.get(int(m.geom_bodyid[mine]))
+                    if prop is None:
+                        continue
+                    body = mj.mj_id2name(m, mj.mjtObj.mjOBJ_BODY, m.geom_bodyid[other])
+                    if body not in ("table", "world"):
+                        touching[prop].setdefault(body, set()).add(self._geom_label(other))
+            out = {}
+            for name, (_qadr, dadr) in self._free.items():
+                b = self.data.body(name)
+                R = b.xmat.reshape(3, 3)
+                v = self.data.qvel[dadr : dadr + 6]
+                out[name] = {
+                    "xyz": [round(float(x), 4) for x in b.xpos],
+                    "yaw": round(math.degrees(math.atan2(float(R[1, 0]), float(R[0, 0]))), 1),
+                    "tilt": round(math.degrees(math.acos(min(1.0, max(-1.0, float(R[2, 2]))))), 1),
+                    "speed": round(1000.0 * float(np.linalg.norm(v[:3]))),
+                    "spin": round(math.degrees(float(np.linalg.norm(v[3:])))),
+                    "grasped": self.is_grasped(name),
+                    "touching": {body: sorted(geoms) for body, geoms in sorted(touching[name].items())},
+                }
+        return out
 
     def snapshot(self) -> dict:
         """Compact state for logs / video HUD (calibrated units)."""
