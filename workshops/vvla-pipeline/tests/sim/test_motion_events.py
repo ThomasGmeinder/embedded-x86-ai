@@ -7,7 +7,7 @@
 
 """What a move waits on, and how fast the servos run it.
 
-A direct-goal move is one ``Goal_Position`` write. ``common.servo_profile``
+A direct-goal move is one ``Goal_Position`` write. ``vla_pipeline.robot.servo_profile``
 picks each joint's ``Goal_Velocity`` and ``Acceleration`` from the arm's
 gravity and inertia, and the move is over when the servo bus owner reports
 the goal finished (``ArmClient._await_motion``). The twin runs the same
@@ -29,7 +29,7 @@ STEP_RAD = math.tau / 4096  # one encoder step of a body joint
 
 
 def _profile(gravity_nm: float) -> tuple[int, int]:
-    from common.servo_profile import profile_for
+    from vla_pipeline.robot.servo_profile import profile_for
 
     return profile_for(
         gravity_nm, INERTIA, DAMPING, FRICTION, rad_per_step=STEP_RAD, stall_nm=STALL_NM,
@@ -49,7 +49,7 @@ def test_planned_torque_stays_inside_the_cruise_and_ramp_budgets():
 
 
 def test_every_joint_converts_servo_steps_through_the_twin_joint_map(world):
-    from common.servo_profile import shared_profiler
+    from vla_pipeline.robot.servo_profile import shared_profiler
     from so101_sim import MOTOR_NAMES
 
     profiler = shared_profiler()
@@ -62,7 +62,7 @@ def test_more_gravity_never_plans_a_faster_profile():
 
 
 def test_a_joint_whose_budget_gravity_uses_up_still_creeps():
-    from common.servo_profile import MIN_ACCEL_RAW, MIN_SPEED_RAW
+    from vla_pipeline.robot.servo_profile import MIN_ACCEL_RAW, MIN_SPEED_RAW
 
     speed_raw, accel_raw = _profile(1.5)
     assert speed_raw == MIN_SPEED_RAW
@@ -75,18 +75,9 @@ def test_a_joint_whose_budget_gravity_uses_up_still_creeps():
     (0.1, 1.0, 4.0, 2.0 * (0.1 / 4.0) ** 0.5),  # never reaches cruise: a triangle
 ])
 def test_trapezoid_duration(distance, speed, accel, seconds):
-    from common.servo_profile import trapezoid_s
+    from vla_pipeline.robot.servo_profile import trapezoid_s
 
     assert trapezoid_s(distance, speed, accel) == pytest.approx(seconds)
-
-
-@pytest.fixture(scope="module")
-def world():
-    from so101_sim.world import SimWorld
-
-    w = SimWorld(start=False)
-    yield w
-    w.close()
 
 
 def _run_planned(world, start: dict, goal: dict, lockstep: bool = False):
@@ -96,7 +87,7 @@ def _run_planned(world, start: dict, goal: dict, lockstep: bool = False):
     Returns the plan, each joint's seconds until its flag dropped, and the
     joints that tripped overload protection on the way.
     """
-    from common.servo_profile import shared_profiler
+    from vla_pipeline.robot.servo_profile import shared_profiler
     from so101_sim import MOTOR_NAMES
     from so101_sim.arm import SimBus
 
@@ -123,7 +114,7 @@ def _run_planned(world, start: dict, goal: dict, lockstep: bool = False):
 
 def test_moving_is_set_by_the_goal_write_before_physics_steps(world):
     """A state published between the write and the next physics step must not look finished."""
-    from common.motion import REST_POSE
+    from vla_pipeline.robot.arm_interface import REST_POSE
     from so101_sim.arm import SimBus
 
     world.reset(REST_POSE)
@@ -137,8 +128,10 @@ def test_moving_is_set_by_the_goal_write_before_physics_steps(world):
 
 def _keyframe_moves():
     """Park, the pickup's scan sweep, a reach down to the table, the wave and every dance keyframe."""
-    from common.config import load_config
-    from common.motion import DANCE_MOVES, REST_POSE, WAVE_UP, clamp_joints
+    from vla_pipeline.behaviors.dance import DANCE_MOVES
+    from vla_pipeline.behaviors.simple import WAVE_UP
+    from vla_pipeline.robot.arm_interface import REST_POSE, clamp_joints
+    from vla_pipeline.utils.config import load_config
 
     pp = load_config()["pick_place"]
     wave = clamp_joints({**REST_POSE, **WAVE_UP})
@@ -173,7 +166,8 @@ def test_planned_moves_finish_when_predicted_without_an_overload_trip(world, nam
 
 
 def test_lockstep_finishes_every_joint_with_the_slowest(world):
-    from common.motion import REST_POSE, WAVE_UP, clamp_joints
+    from vla_pipeline.behaviors.simple import WAVE_UP
+    from vla_pipeline.robot.arm_interface import REST_POSE, clamp_joints
 
     goal = clamp_joints({**REST_POSE, **WAVE_UP})
     # A joint moving a few degrees runs at the registers' smallest steps and ends early.
@@ -190,8 +184,9 @@ def test_a_direct_goal_moves_every_joint_in_lockstep(world):
     into the pickup's scan pose, every joint ends with the slowest, so the
     arm stays on the joint-space line the place check tests. Unsynchronized,
     the elbow ended last and the open jaw swept a standing bottle over."""
-    from common.config import load_config
-    from common.motion import JOINT_LIMITS, REST_POSE, SimArmClient, clamp_joints
+    from vla_pipeline.robot.arm_interface import JOINT_LIMITS, REST_POSE, clamp_joints
+    from vla_pipeline.robot.sim_arm import SimArmClient
+    from vla_pipeline.utils.config import load_config
 
     park = {**REST_POSE, "gripper": JOINT_LIMITS["gripper"][1]}
     goal = clamp_joints({**park, **load_config()["pick_place"]["scan_pose"]})
@@ -213,8 +208,8 @@ def test_a_direct_goal_moves_every_joint_in_lockstep(world):
 
 
 def test_a_partial_goal_plans_only_its_joints():
-    from common.motion import REST_POSE
-    from common.servo_profile import shared_profiler
+    from vla_pipeline.robot.arm_interface import REST_POSE
+    from vla_pipeline.robot.servo_profile import shared_profiler
 
     plan = shared_profiler().plan(REST_POSE, {"shoulder_pan": 30.0})
     assert set(plan.speed_raw) == set(plan.accel_raw) == {"shoulder_pan"}
@@ -224,8 +219,9 @@ def test_a_partial_goal_plans_only_its_joints():
 def test_a_twin_goal_is_planned_from_the_servo_setpoint(world):
     """The twin's profile starts at its setpoint. Another caller may have moved the
     arm since this client's last read, so the setpoint is read for every goal."""
-    from common.motion import REST_POSE, SimArmClient
-    from common.servo_profile import shared_profiler
+    from vla_pipeline.robot.arm_interface import REST_POSE
+    from vla_pipeline.robot.servo_profile import shared_profiler
+    from vla_pipeline.robot.sim_arm import SimArmClient
 
     arm = SimArmClient({"robot": {"max_relative_target": None}}, world=world)
     world.reset({**REST_POSE, "gripper": 85.0})
@@ -240,7 +236,8 @@ def test_a_twin_goal_is_planned_from_the_servo_setpoint(world):
 def test_a_goal_written_mid_move_is_bounded_by_the_twin_profile(world):
     """A goal written while a profile still runs brakes first. The twin's own
     dry run counts that braking, so it matches the steps the profile takes."""
-    from common.motion import REST_POSE, SimArmClient
+    from vla_pipeline.robot.arm_interface import REST_POSE
+    from vla_pipeline.robot.sim_arm import SimArmClient
 
     arm = SimArmClient({"robot": {"max_relative_target": None}}, world=world)
     world.reset(dict(REST_POSE))
@@ -258,7 +255,9 @@ def test_a_goal_written_mid_move_is_bounded_by_the_twin_profile(world):
 
 def test_the_twin_arm_ends_a_move_on_the_physics_pass_its_servos_finish():
     """Past the planned profile plus one physics step the wait raises MotionTimeout."""
-    from common.motion import REST_POSE, WAVE_UP, SimArmClient, clamp_joints
+    from vla_pipeline.behaviors.simple import WAVE_UP
+    from vla_pipeline.robot.arm_interface import REST_POSE, clamp_joints
+    from vla_pipeline.robot.sim_arm import SimArmClient
     from so101_sim.world import SimWorld
 
     world = SimWorld(rest_pose=REST_POSE)
@@ -270,7 +269,8 @@ def test_the_twin_arm_ends_a_move_on_the_physics_pass_its_servos_finish():
 
 
 def test_a_twin_move_fails_at_once_without_a_physics_thread(world):
-    from common.motion import REST_POSE, SimArmClient
+    from vla_pipeline.robot.arm_interface import REST_POSE
+    from vla_pipeline.robot.sim_arm import SimArmClient
 
     arm = SimArmClient({"robot": {"max_relative_target": None}}, world=world)
     world.reset(dict(REST_POSE))
@@ -280,7 +280,7 @@ def test_a_twin_move_fails_at_once_without_a_physics_thread(world):
 
 def _reporting_arm(finish: dict, how: str = "settled"):
     """A transport whose bus owner reports every goal finished at ``finish``."""
-    from common.motion import ArmClient
+    from vla_pipeline.robot.arm_interface import ArmClient
 
     class ReportingArm(ArmClient):
         def __init__(self):
@@ -313,7 +313,7 @@ def test_a_stopped_move_halts_where_the_arm_is():
 
 
 def test_dry_run_arm_moves_at_once():
-    from common.motion import DryRunArm
+    from vla_pipeline.robot.arm_interface import DryRunArm
 
     arm = DryRunArm()
     assert arm.move_to({"shoulder_pan": 30.0}) == "arrived"

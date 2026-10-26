@@ -7,7 +7,7 @@
 
 """Direct serial (``robot.use_ros2: false``): the bus owner in this process.
 
-The arm under test is ``LeRobotArm``, the real-arm class, with the twin's
+The arm under test is ``DirectArm``, the real-arm class, with the twin's
 ``SimFollower`` as its bus: the owner writes goals and reads the servos'
 registers exactly as it would on the Feetech bus.
 """
@@ -16,15 +16,17 @@ from __future__ import annotations
 
 import pytest
 
+from rigs import wait_until
+
 pytestmark = pytest.mark.sim
 
 
 @pytest.fixture
-def world(workshop_cfg):
-    from common.motion import REST_POSE
+def world(pipeline_cfg):
     from so101_sim.world import SimWorld
+    from vla_pipeline.robot.arm_interface import REST_POSE
 
-    w = SimWorld({"sim": dict(workshop_cfg.get("sim") or {})}, rest_pose=REST_POSE)
+    w = SimWorld({"sim": dict(pipeline_cfg.get("sim") or {})}, rest_pose=REST_POSE)
     for obj in w.objects:
         w.hide(obj)
     yield w
@@ -32,11 +34,11 @@ def world(workshop_cfg):
 
 
 def _real_class_arm(world):
-    """A ``LeRobotArm`` (direct goals, as the configs set) whose follower is the twin's bus."""
-    from common.motion import LeRobotArm
+    """A ``DirectArm`` (direct goals, as the configs set) whose follower is the twin's bus."""
     from so101_sim import SimFollower
+    from vla_pipeline.robot.arm_interface import DirectArm
 
-    arm = LeRobotArm.__new__(LeRobotArm)
+    arm = DirectArm.__new__(DirectArm)
     arm._robot = SimFollower(world, max_relative_target=None, robot_id="sim")
     arm._robot.config.disable_torque_on_disconnect = False
     arm._robot.connect()
@@ -44,29 +46,25 @@ def _real_class_arm(world):
     return arm
 
 
-def _until(world, pred) -> None:
-    seen = world.next_step(world.passes)
-    while not pred():
-        seen = world.next_step(seen)
-
 
 @pytest.fixture
-def owner(world, workshop_cfg):
-    from common.motion import BusOwnerArm, bus_owner
+def owner(world, pipeline_cfg):
+    from vla_pipeline.robot.arm_interface import BusOwnerArm, bus_owner
 
-    arm = bus_owner(_real_class_arm(world), workshop_cfg)
+    arm = bus_owner(_real_class_arm(world), pipeline_cfg)
     assert isinstance(arm, BusOwnerArm)
     yield arm
     arm.close()
 
 
-def test_only_the_real_bus_arm_gets_an_owner(world, workshop_cfg):
-    from common.motion import DryRunArm, SimArmClient, bus_owner
+def test_only_the_real_bus_arm_gets_an_owner(world, pipeline_cfg):
+    from vla_pipeline.robot.arm_interface import DryRunArm, bus_owner
+    from vla_pipeline.robot.sim_arm import SimArmClient
 
     twin = SimArmClient({"robot": {"max_relative_target": None}}, world=world)
-    assert bus_owner(twin, workshop_cfg) is twin, "the twin's physics owns its servos"
+    assert bus_owner(twin, pipeline_cfg) is twin, "the twin's physics owns its servos"
     dry = DryRunArm()
-    assert bus_owner(dry, workshop_cfg) is dry
+    assert bus_owner(dry, pipeline_cfg) is dry
 
 
 def test_a_direct_move_arrives_on_the_owners_report(owner, world):
@@ -89,19 +87,19 @@ def test_a_stop_halts_a_direct_move(owner, world):
 
 def test_the_torque_limit_and_current_pass_through_the_owner(owner, world):
     owner.set_gripper_torque_limit(240)
-    _until(world, lambda: world.bus.read("Torque_Limit", "gripper", normalize=False) == 240)
+    wait_until(world, lambda: world.bus.read("Torque_Limit", "gripper", normalize=False) == 240)
     t = owner.wait_state(owner.state_time() + 0.2)
     assert t is not None and owner.get_gripper_load() is not None
 
 
-def test_the_owner_ticks_and_parks_on_close(world, workshop_cfg):
-    from common.motion import REST_POSE, bus_owner
+def test_the_owner_ticks_and_parks_on_close(world, pipeline_cfg):
+    from vla_pipeline.robot.arm_interface import REST_POSE, bus_owner
 
-    arm = bus_owner(_real_class_arm(world), workshop_cfg)
+    arm = bus_owner(_real_class_arm(world), pipeline_cfg)
     t0 = arm.state_time()
     assert arm.wait_state(t0 + 0.05) >= t0 + 0.05
     assert arm.wait_state(t0 + 10.0, stop_check=lambda: True) is None
     assert arm.move_to({"shoulder_pan": 30.0}) == "arrived"
     arm.close()
-    _until(world, lambda: not any(world.bus.sync_read("Moving").values()))
+    wait_until(world, lambda: not any(world.bus.sync_read("Moving").values()))
     assert abs(world.joint_cal()["shoulder_pan"] - REST_POSE["shoulder_pan"]) < 2.5, "close did not park"

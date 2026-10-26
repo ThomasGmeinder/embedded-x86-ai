@@ -65,6 +65,21 @@ _ROTATIONS = {
 }
 
 
+def to_image_msg(frame_bgr, stamp=None, frame_id: str = ""):
+    """Pack a BGR ndarray into a ``sensor_msgs/Image`` (encoding ``bgr8``)."""
+    from sensor_msgs.msg import Image
+
+    msg = Image()
+    if stamp is not None:
+        msg.header.stamp = stamp
+    msg.header.frame_id = frame_id
+    msg.height, msg.width = frame_bgr.shape[:2]
+    msg.encoding = "bgr8"
+    msg.step = msg.width * 3
+    msg.data = frame_bgr.tobytes()
+    return msg
+
+
 class CameraNode(Node):
     """Owns one V4L2 device and publishes frames + health.
 
@@ -147,14 +162,7 @@ class CameraNode(Node):
             if ok:
                 if self._rotate in _ROTATIONS:
                     frame = cv2.rotate(frame, _ROTATIONS[self._rotate])
-                msg = Image()
-                msg.header.stamp = self.get_clock().now().to_msg()
-                msg.header.frame_id = f"camera_{self.role}"
-                msg.height, msg.width = frame.shape[:2]
-                msg.encoding = "bgr8"
-                msg.step = msg.width * 3
-                msg.data = frame.tobytes()
-                self._pub.publish(msg)
+                self._pub.publish(to_image_msg(frame, self.get_clock().now().to_msg(), f"camera_{self.role}"))
                 healthy = True
             elif self._source is None:
                 self._cap.release()

@@ -25,9 +25,6 @@ Joint convention (degrees, LeRobot SO-101 calibration space):
 ``shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper``.
 Every command passes :func:`clamp_joints`, the software safety backstop.
 
-The workshop keeps its own copy of this layer (``workshop/common/motion.py``,
-where :class:`DirectArm` is called ``LeRobotArm``); ``tests/sim/test_copies.py`` fails when the two drift apart.
-
 Independent test
 ----------------
     python -m vla_pipeline.robot.arm_interface --dry-run
@@ -46,6 +43,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 from so101_sim import MOTOR_NAMES, MOTOR_SHORT
+from so101_sim.mapping import DEG_PER_COUNT
 
 logger = logging.getLogger(__name__)
 
@@ -105,35 +103,8 @@ _PIPELINE_BACKSTOP = {
 # behaviors keep JOINT_LIMITS.
 GRASP_LIMITS = {**JOINT_LIMITS, **_PIPELINE_BACKSTOP}
 
-_LIVE_LIMIT_SCALE = 1.25
-
-
-def _extended_limits() -> dict:
-    out = {}
-    for name, (lo, hi) in JOINT_LIMITS.items():
-        if name == "gripper":  # calibrated jaw span, NOT a scaled angle:
-            out[name] = (lo, hi)  # extending it would jam the jaws
-            continue
-        cap_lo, cap_hi = _PIPELINE_BACKSTOP.get(name, (-180.0, 180.0))
-        out[name] = (
-            max(lo * _LIVE_LIMIT_SCALE, cap_lo),
-            min(hi * _LIVE_LIMIT_SCALE, cap_hi),
-        )
-    return out
-
-
-# Live gesture-mimic envelope: JOINT_LIMITS extended by 25%, capped at the
-# pipeline backstop, gripper kept as-is. Active ONLY while gesture mimic
-# drives a REAL arm: run_mimic() switches it in for the session and restores
-# the base limits afterwards; dry-run/synthetic mimic and every scripted
-# behavior (dance/wave/grip/rest) stay on the base JOINT_LIMITS.
-LIVE_MIMIC_LIMITS = _extended_limits()
-
-# The envelope clamp_joints() applies when not handed an explicit one. A real
-# arm server node also switches its process over (see vla_pipeline/robot/robot_node.py) so
-# extended live-mimic commands are not re-clamped in transit - scripted
-# behaviors are clamped to the BASE limits client-side before publish, so
-# only live mimic ever uses the extra travel.
+# The envelope clamp_joints() applies when not handed an explicit one; the
+# notebook twin's server widens it to GRASP_LIMITS (so101_sim.node).
 _active_limits = JOINT_LIMITS
 
 
@@ -194,11 +165,6 @@ class ArmClient(ABC):
     # A standing grasp sets this to GRASP_LIMITS for the move, so send_joints
     # does not pull a 90° wrist back to the workshop's 67.5° cap.
     _send_limits: dict | None = None
-
-    # True when commands (may) reach real hardware. Gesture mimic uses this to
-    # decide whether the 25%-extended LIVE_MIMIC_LIMITS envelope applies;
-    # simulated arms stay on the base JOINT_LIMITS.
-    is_live: bool = False
 
     # Last Torque_Limit sent to the gripper; displays scale the grasp level by it.
     gripper_torque_limit: int = GRIPPER_TORQUE_LIMIT
@@ -348,8 +314,6 @@ class ArmClient(ABC):
 class DryRunArm(ArmClient):
     """No-hardware arm: commands are integrated so behaviors run anywhere."""
 
-    is_live = False  # simulated - mimic keeps the base JOINT_LIMITS
-
     last_eta_s = 0.0  # commands take effect at once
 
     def __init__(self, verbose: bool = False):
@@ -408,8 +372,6 @@ class DirectArm(ArmClient):
     server node (:mod:`vla_pipeline.robot.robot_node`), which wraps this class. Effort readback
     is best-effort: ``None`` on firmware that can't provide it.
     """
-
-    is_live = True  # real servos - live mimic may use LIVE_MIMIC_LIMITS
 
     _EFFORT_REGISTERS = ("Present_Current", "Present_Load")
 
@@ -581,7 +543,6 @@ class BusOwnerArm(ArmClient):
 
     def __init__(self, bus_arm: ArmClient, control_fps: float = DEFAULT_CONTROL_HZ):
         self._bus = bus_arm
-        self.is_live = bus_arm.is_live
         self._direct_goal = getattr(bus_arm, "_direct_goal", False)
         self._interval = 1.0 / float(control_fps)
         self._cond = threading.Condition()
@@ -748,10 +709,8 @@ def calibration_exists(robot_id: str) -> bool:
     return calibration_path(robot_id) is not None
 
 
-# Feetech STS3215 encoder resolution (12-bit). LeRobot normalizes degrees as
-# ``(raw - mid) * 360 / (resolution - 1)`` with ``mid = (range_min+range_max)/2``.
-_STS3215_RESOLUTION = 4096
-_DEG_PER_COUNT = 360.0 / (_STS3215_RESOLUTION - 1)
+# LeRobot normalizes degrees as ``(raw - mid) * DEG_PER_COUNT`` with
+# ``mid = (range_min+range_max)/2``, for the STS3215's 12-bit encoder.
 
 # The gripper uses 0..100 normalization; body joints run in DEGREES mode.
 # See lerobot so_follower + motors_bus._normalize.
@@ -824,7 +783,7 @@ def calibration_limits_and_rest(
             limits[name] = (0.0, 100.0)
             rest[name] = 50.0
         else:
-            half_span_deg = 0.5 * span_counts * _DEG_PER_COUNT
+            half_span_deg = 0.5 * span_counts * DEG_PER_COUNT
             limits[name] = (-half_span_deg, half_span_deg)
             rest[name] = 0.0  # DEGREES mode: calibrated midpoint == 0°
         meta[name] = {**entry, "span_counts": span_counts, "swept": swept}

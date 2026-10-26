@@ -5,9 +5,9 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Test rigs: the real pipeline / workshop stacks wired to the digital twin.
+"""Test rigs: the real pipeline wired to the digital twin.
 
-A rig owns one scenario: it builds the stack's own context (arm transport,
+A rig owns one scenario: it builds the pipeline's own context (arm transport,
 cameras, models, LLM client, dispatcher) with only the sensors swapped for
 the scripted sources, records joint/goal/current traces for assertions, and
 films the run with :class:`so101_sim.SimRecorder`.
@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from so101_sim import MOTOR_NAMES as MOTORS
+
 from scripted import (
     Clock,
     CountingDetector,
@@ -35,8 +37,8 @@ from scripted import (
 
 logger = logging.getLogger(__name__)
 
-MOTORS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
-_GRIPPER = MOTORS.index("gripper")
+# The open jaws low over the table, closing axis horizontal: how the pickup grasps the ball.
+LOW_GRASP_POSE = {"shoulder_pan": 0.0, "shoulder_lift": 9.0, "elbow_flex": 20.0, "wrist_flex": 54.0, "wrist_roll": 0.0}
 
 SLIP_TOL_M = 0.002  # how far it may move in the gripper frame once it is off the table
 LIFT_SLIP_TOL_M = 0.004  # how far while the fingers take its weight (the pads give a little)
@@ -97,7 +99,7 @@ class Trace:
         heights = {b: float(w.body_pos(b)[2]) for b in self.watch}
         in_hand = {b: w.in_gripper(b) for b in self.watch}
         hand_z = float(w.body_pos("gripper")[2])
-        overload = bool(w.protection.tripped[_GRIPPER])
+        overload = bool(w.protection.tripped[MOTORS.index("gripper")])
         now = float(w.data.time)
         if self._sim_last is not None and now >= self._sim_last:
             self._sim_t += now - self._sim_last
@@ -228,11 +230,16 @@ def raise_crashes(crashes: list[str]) -> None:
         raise AssertionError("a behavior crashed: " + "; ".join(crashes))
 
 
+def wait_until(world, pred) -> None:
+    """Block until ``pred()`` holds, judged after each physics pass."""
+    seen = world.next_step(world.passes)
+    while not pred():
+        seen = world.next_step(seen)
+
+
 def wait_settled(world) -> None:
     """Block until every prop is at rest (``SimWorld.props_settled``), judged after a physics pass."""
-    seen = world.next_step(world.passes)
-    while not world.props_settled():
-        seen = world.next_step(seen)
+    wait_until(world, world.props_settled)
 
 
 def wait_joint_rest(world, joint: str) -> None:
@@ -240,15 +247,13 @@ def wait_joint_rest(world, joint: str) -> None:
     from so101_sim.world import SETTLED_RAD_S
 
     i = MOTORS.index(joint)
-    seen = world.next_step(world.passes)
-    while abs(float(world.joint_vel()[i])) >= SETTLED_RAD_S:
-        seen = world.next_step(seen)
+    wait_until(world, lambda: abs(float(world.joint_vel()[i])) < SETTLED_RAD_S)
 
 
 def hold_seconds(world) -> float:
     """The gripper's ``Protection_Time`` and one physics step: a squeeze at or
     above its ``Overload_Torque`` trips within it."""
-    return float(world.protection.time_s[_GRIPPER]) + world.dt
+    return float(world.protection.time_s[MOTORS.index("gripper")]) + world.dt
 
 
 def step_through(world, trace: "Trace", seconds: float, t0: float) -> None:
@@ -374,9 +379,7 @@ def assert_ordered_high_scan(caplog, pans, *, allow_near=False):
 
 
 class _Rig:
-    """Common scenario plumbing; subclasses build the stack's context."""
-
-    target = "?"
+    """Common scenario plumbing; :class:`PipelineRig` builds the context."""
 
     def __init__(self, twin, cfg: dict, recorder_path=None, title: str = ""):
         self.world = twin.world
@@ -591,22 +594,21 @@ def _llm_host_port(base: str) -> tuple[str, int]:
 class PipelineRig(_Rig):
     """``vla_pipeline``: SimArmClient + real Dispatcher/registry/LLM client."""
 
-    target = "pipeline"
-
     def _hand_obs_cls(self):
         from vla_pipeline.vision.mediapipe_hands import HandObservation
 
         return HandObservation
 
     def _load_threshold(self) -> float:
-        return float(self.cfg["behaviors"]["grip"].get("load_threshold", 120.0))
+        return float(self.cfg["grip"].get("load_threshold", 120.0))
 
     def __init__(self, twin, cfg: dict, llm_base: str, recorder_path=None, title: str = "",
                  arm=None, arm_camera=None, detector=None):
         super().__init__(twin, cfg, recorder_path, title)
+        from vla_pipeline.dispatch import PipelineContext, build_registry
         from vla_pipeline.llm.llama_intent import LlamaIntentParser
-        from vla_pipeline.main import PipelineContext
         from vla_pipeline.robot.sim_arm import SimArmClient
+        from vla_pipeline.utils.gesture_map import mapper_from_config
         from vla_pipeline.vision.yolo_detect_npu import Detection, resolve_class
 
         host, port = _llm_host_port(llm_base)
@@ -619,9 +621,11 @@ class PipelineRig(_Rig):
         self._closers.append(self.parser.close)
         self.ctx = PipelineContext(
             cfg=self.cfg, arm=self.arm, pose=self.pose, detector=self.detector, hands=self.hands,
-            mount_camera=self.mount, arm_camera=self.arm_camera, headless=True,
+            mount_camera=self.mount, arm_camera=self.arm_camera, mapper=mapper_from_config(self.cfg),
+            registry=build_registry(), headless=True,
         )
         self.ctx.say = self.say
+        self.ctx.listeners.append(self.on_event)
         self.dispatcher = None
 
     def run(self, script, startup_grace_s: float = 0.0) -> "PipelineRig":
@@ -631,15 +635,10 @@ class PipelineRig(_Rig):
         (``MotionTimeout``); a hang is left to the suite's hang guard.
         """
         from vla_pipeline.dispatch import Dispatcher
-        from vla_pipeline.main import is_stop, make_noise_gate, registry
 
         self.clock.start()
         self.trace.start()
-        d = Dispatcher(
-            self.ctx, self.parser.parse, registry, is_stop=is_stop,
-            is_noise=make_noise_gate(self.cfg), startup_grace_s=startup_grace_s, clock=self.clock,
-        )
-        d.listeners.append(self.on_event)
+        d = Dispatcher(self.ctx, self.parser.parse, startup_grace_s=startup_grace_s, clock=self.clock)
         self.dispatcher = d
         shutdown = threading.Event()
         loop = threading.Thread(target=d.run, args=(shutdown,), name="dispatch", daemon=True)
@@ -658,75 +657,3 @@ class PipelineRig(_Rig):
         self._raise_crashes()
         return self
 
-
-# ---------------------------------------------------------------------------
-# workshop (workshop/<project>)
-# ---------------------------------------------------------------------------
-class WorkshopRig(_Rig):
-    """Workshop: common.motion.SimArmClient + integration.handle_transcript."""
-
-    target = "workshop"
-
-    def _hand_obs_cls(self):
-        from models.hands import HandObservation
-
-        return HandObservation
-
-    def __init__(self, twin, cfg: dict, llm_base: str, recorder_path=None, title: str = "", arm=None,
-                 detector=None):
-        super().__init__(twin, cfg, recorder_path, title)
-        from common.imaging import Detection, resolve_class
-        from common.motion import SimArmClient, mapper_from_config
-        from integration.dispatch import WorkshopContext, build_registry
-        from models.llm import LlamaIntentParser
-
-        host, port = _llm_host_port(llm_base)
-        self.cfg["llm"].update(host=host, port=port, autostart=False)
-        self.cfg["robot"]["backend"] = "sim"
-        self.arm = arm if arm is not None else SimArmClient(self.cfg, world=self.world)
-        self._eyes(detector, Detection, resolve_class)
-        self.parser = LlamaIntentParser(self.cfg, autostart=False)
-        self._closers.append(self.parser.close)
-        self.ctx = WorkshopContext(
-            cfg=self.cfg, arm=self.arm, pose=self.pose, hands=self.hands, camera=self.mount,
-            mapper=mapper_from_config(self.cfg), registry=build_registry(), headless=True,
-            detector=self.detector, arm_camera=self.seg_camera,
-        )
-        self.ctx.say = self.say
-
-    def _deliver(self, text: str) -> None:
-        from common.intents import Intent
-        from integration.dispatch import handle_transcript
-
-        self.on_event("heard", text=text)
-
-        def parse(t):
-            cmd = self.parser.parse(t)
-            self.on_event("parsed", text=t, intent=cmd.intent.value, params=dict(cmd.params or {}))
-            if cmd.intent not in (Intent.UNKNOWN, Intent.STOP) and self.ctx.registry.get(cmd.intent):
-                self.on_event("behavior_start", intent=cmd.intent.value)
-            return cmd
-
-        try:
-            cmd = handle_transcript(self.ctx, text, parse)
-        except Exception as e:
-            self.on_event("behavior_crash", error=repr(e))
-            raise
-        if cmd.intent is Intent.STOP:
-            self.on_event("stop", text=text)
-        self.on_event("handled", text=text, intent=cmd.intent.value)
-
-    def run(self, script) -> "WorkshopRig":
-        """Play ``script`` through ``handle_transcript``; return once every behavior it started returned."""
-        self.clock.start()
-        self.trace.start()
-        tx = ScriptedTranscripts(self.world, self.clock, script, self._deliver, concurrent=True).start()
-        self.transcripts = tx
-        try:
-            tx.join()
-        finally:
-            self.ctx.stop_event.set()
-            tx.join()
-            self.ctx.stop_event.clear()
-        self._raise_crashes()
-        return self

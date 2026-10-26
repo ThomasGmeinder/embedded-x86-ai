@@ -5,25 +5,18 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Llama 3.2 3B on the iGPU - the brain, via ``llama.cpp`` + ROCm/HIP.
+"""TODOs 1.5-1.6: Llama-3.2-3B on the iGPU, grammar-constrained.
 
-The LLM does not run in-process: a ``llama-server`` (built with
-``-DGGML_HIP=ON``) owns the iGPU and we talk to it over its OpenAI-compatible
-HTTP API. Two things make this path AMD-specific, and both are your TODOs:
+The model runs in ``llama-server`` (llama.cpp on ROCm) and is queried over
+its OpenAI-compatible HTTP API. A GBNF grammar (``config/intent.gbnf``)
+constrains generation so the model can only emit
+``{"command": "<name>", "object": "<words>"}``. The pipeline's
+:class:`~vla_pipeline.llm.llama_intent.LlamaIntentParser` owns the server
+process; these are the launch recipe and one request.
 
-1. **Bringing the server up on the iGPU** (:func:`llama_server_command`):
-   the launch flags and environment that keep a Strix APU happy -
-   ``HSA_OVERRIDE_GFX_VERSION`` (the ROCm runtime needs the iGPU presented
-   as a supported gfx target or the first kernel dispatch can segfault),
-   ``--ctx-size`` capped at 2048 (the model's native 131072 KV cache OOMs
-   the iGPU VRAM carve-out), ``--n-gpu-layers 99`` (everything on the GPU),
-   and ``--no-warmup`` (gfx1151 can segfault in the warmup pass).
-2. **Grammar-constrained intent parsing** (:func:`parse_intent`): sending a
-   chat completion with the GBNF grammar attached, so the model physically
-   cannot emit anything but ``{"command": ..., "object": ...}``.
-
+Reference: ``vla_pipeline/llm/llama_intent.py`` (same names and parameters).
 Notebook: ``notebooks/01_ai_models/03_igpu_llama.ipynb``
-Self-test: ``python -m models.selftest`` (uses a mock server - no GPU needed)
+Self-test: ``python -m vvla_workshop.selftest_models``
 """
 
 from __future__ import annotations
@@ -31,13 +24,11 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
-import time
 
 import requests
 
-from common.config import resolve
-from common.intents import INTENT_SYSTEM_PROMPT, Intent, ParsedCommand
+from vla_pipeline.llm.intents import INTENT_SYSTEM_PROMPT, Intent, ParsedCommand
+from vla_pipeline.utils.config import resolve
 
 logger = logging.getLogger(__name__)
 
@@ -55,56 +46,16 @@ def llama_server_command(cfg: dict):
     server_bin = resolve(l["server_bin"])
     model = resolve(l["model_gguf"])
     if not server_bin.exists():
-        raise FileNotFoundError(f"{server_bin} not found - build llama.cpp "
-                                "with -DGGML_HIP=ON first (see the repo README).")
+        raise FileNotFoundError(f"{server_bin} not found - run ./bootstrap.sh (llama.cpp build step).")
     if not model.exists():
-        raise FileNotFoundError(f"{model} not found - download the GGUF first.")
-
+        raise FileNotFoundError(f"{model} not found - run ./bootstrap.sh (model download step).")
     # >>> TODO 1.5: llama_server_command - notebooks/01_ai_models/03_igpu_llama.ipynb
     raise NotImplementedError(
         "TODO 1.5 (llama_server_command): implement me - see notebooks/01_ai_models/03_igpu_llama.ipynb")
     # <<< TODO 1.5
 
 
-def server_alive(base_url: str, http=None, timeout: float = 0.5) -> bool:
-    """PROVIDED: ``GET /health`` → True on HTTP 200."""
-    http = http or requests
-    try:
-        return http.get(f"{base_url}/health", timeout=timeout).status_code == 200
-    except requests.RequestException:
-        return False
-
-
-def start_llama_server(cfg: dict, ready_timeout_s: float = 120.0,
-                       log_dir: str = "logs") -> subprocess.Popen:
-    """PROVIDED: spawn the server with YOUR command/env and wait for /health.
-
-    Process plumbing is generic; the launch recipe (your TODO 1.5) is not.
-    """
-    cmd, env = llama_server_command(cfg)
-    log_path = resolve(log_dir)
-    log_path.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_path / "llama-server.log", "w")
-    logger.info("Starting llama-server (ROCm): %s", " ".join(cmd))
-    proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT,
-                            env=env)
-    base = f"http://{cfg['llm']['host']}:{cfg['llm']['port']}"
-    deadline = time.time() + ready_timeout_s
-    while time.time() < deadline:
-        if server_alive(base):
-            logger.info("llama-server ready at %s", base)
-            return proc
-        if proc.poll() is not None:
-            raise RuntimeError(
-                f"llama-server exited with code {proc.returncode} during "
-                f"startup - see {log_path / 'llama-server.log'}")
-        time.sleep(0.5)
-    proc.terminate()
-    raise TimeoutError("llama-server did not become healthy in time.")
-
-
-def parse_intent(transcript: str, base_url: str, grammar: str,
-                 http=None, temperature: float = 0.0) -> ParsedCommand:
+def parse_intent(transcript: str, base_url: str, grammar: str, http=None, temperature: float = 0.0) -> ParsedCommand:
     """One transcript → one :class:`ParsedCommand`, grammar-constrained.
 
     POST an OpenAI-style chat completion to ``{base_url}/v1/chat/completions``
@@ -119,47 +70,3 @@ def parse_intent(transcript: str, base_url: str, grammar: str,
     raise NotImplementedError(
         "TODO 1.6 (parse_intent): implement me - see notebooks/01_ai_models/03_igpu_llama.ipynb")
     # <<< TODO 1.6
-
-
-class LlamaIntentParser:
-    """PROVIDED: lifecycle wrapper - connect or autostart, then parse.
-
-    Keeps one HTTP session alive (saves ~5-20 ms per command) and owns the
-    server process only if it spawned one.
-    """
-
-    def __init__(self, cfg: dict, autostart=None):
-        l = cfg["llm"]
-        self.base = f"http://{l['host']}:{l['port']}"
-        self.temperature = float(l.get("temperature", 0.0))
-        self.grammar = resolve(l["grammar_file"]).read_text(encoding="utf-8")
-        self._http = requests.Session()
-        self._proc = None
-        autostart = l.get("autostart", True) if autostart is None else autostart
-        if not server_alive(self.base, self._http):
-            if autostart:
-                self._proc = start_llama_server(cfg)
-            else:
-                raise ConnectionError(
-                    f"llama-server not reachable at {self.base} and autostart "
-                    "is disabled.")
-
-    def parse(self, transcript: str) -> ParsedCommand:
-        """Parse ``transcript`` via :func:`parse_intent`, logging latency."""
-        t0 = time.perf_counter()
-        cmd = parse_intent(transcript, self.base, self.grammar,
-                           http=self._http, temperature=self.temperature)
-        logger.info("Intent %r %s ← %r (%.0f ms)", cmd.intent.value,
-                    cmd.params or "", transcript,
-                    (time.perf_counter() - t0) * 1e3)
-        return cmd
-
-    def close(self) -> None:
-        """Terminate the owned llama-server process, if this instance started one."""
-        if self._proc is not None and self._proc.poll() is None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-            self._proc = None

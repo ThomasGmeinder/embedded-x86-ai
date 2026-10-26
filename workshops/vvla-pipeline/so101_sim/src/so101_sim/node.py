@@ -7,15 +7,14 @@
 
 """ROS 2 process hosting the digital twin in place of the arm + arm camera.
 
-It runs the host stack's OWN server nodes - ``So101ServerNode`` with the
+It runs the pipeline's OWN server nodes - ``So101ServerNode`` with the
 twin injected as its bus transport, and ``CameraNode`` with a
 :class:`~so101_sim.camera.SimCamera` as its frame source - so the topics,
 QoS, rates, de-duplication and health flags are byte-for-byte the real
-ones. Clients (the orchestrator, the workshop app, ``ros2 topic echo``)
+ones. Clients (the orchestrator, the notebooks, ``ros2 topic echo``)
 cannot tell the difference.
 
     python -m so101_sim.node --config config/pipeline.yaml
-    python -m so101_sim.node --config workshop/solution/config/workshop.yaml
     python -m so101_sim.node --config config/pipeline.yaml --device-cameras --viewer
 
 Arm and arm camera must live in ONE process (they share the physics), which
@@ -24,7 +23,7 @@ Extra topic: ``/sim/view/image_raw`` (the free 3-D view, bgr8). Extra service:
 ``/sim/reset_scene`` (``std_srvs/Trigger``): ``restore_twin`` in this process,
 with the parked pose made the server's target.
 
-``--notebook-twin`` (workshop stack) is the twin ``02_digital_twin.ipynb``
+``--notebook-twin`` is the twin ``02_digital_twin.ipynb``
 starts for its console, on a private ROS domain. It adds, on top of the
 default launch:
 
@@ -45,9 +44,7 @@ import argparse
 import json
 import logging
 import os
-import sys
 import time
-from pathlib import Path
 from types import SimpleNamespace
 
 logger = logging.getLogger(__name__)
@@ -61,7 +58,7 @@ PROPS_STATUS = "so101_sim: props"  # settled, and <prop>.grasped for each prop
 GRIPPER_STATUS = "so101_sim: gripper"  # torque_limit, overload_torque, tripped
 
 
-def _sensor_qos():
+def sensor_qos():
     from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
     return QoSProfile(
@@ -76,40 +73,14 @@ def _stamp_msg(stamp: float):
     return Time(sec=nanoseconds // 1_000_000_000, nanosec=nanoseconds % 1_000_000_000)
 
 
-def detect_stack(config_path: str | None, cfg: dict) -> str:
-    """``workshop`` for workshop.yaml-style configs, else ``pipeline``."""
-    if config_path and Path(config_path).name.startswith("workshop"):
-        return "workshop"
-    return "pipeline"
-
-
-def _load_yaml(path: str) -> dict:
-    import yaml
-
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def _stack_parts(stack: str, cfg: dict, config_path: str | None):
-    """(world, arm, ServerNodeClass, CameraNodeClass) for the host stack: its
-    own arm server and camera node, on its own bus transport over the twin."""
-    from so101_sim.control import server_transport_cfg
-
-    if stack == "workshop":
-        # workshop/<solution|project>/config/workshop.yaml -> host that variant's ros/
-        if config_path:
-            pkg = str(Path(config_path).resolve().parents[1])
-            if pkg not in sys.path:
-                sys.path.insert(0, pkg)
-        from common.motion import SimArmClient, sim_world
-        from ros.arm_node import So101ServerNode
-        from ros.camera_node import CameraNode
-
-        world = sim_world(cfg)
-        return world, SimArmClient(server_transport_cfg(cfg), world), So101ServerNode, CameraNode
+def _stack_parts(cfg: dict):
+    """(world, arm, ServerNodeClass, CameraNodeClass): the pipeline's arm
+    server and camera node, on its bus transport over the twin."""
     from vla_pipeline.robot.robot_node import So101ServerNode
     from vla_pipeline.robot.sim_arm import SimArmClient, sim_world
     from vla_pipeline.vision.camera_node import CameraNode
+
+    from so101_sim.control import server_transport_cfg
 
     world = sim_world(cfg)
     return world, SimArmClient(server_transport_cfg(cfg), world), So101ServerNode, CameraNode
@@ -125,7 +96,6 @@ class ViewPublisher:
 
         from so101_sim.camera import SimCamera
 
-        self._Image = Image
         self.node = Node("so101_sim_view")
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1
@@ -135,17 +105,12 @@ class ViewPublisher:
         self.node.create_timer(1.0 / fps, self._tick)
 
     def _tick(self) -> None:
+        from vla_pipeline.vision.camera_node import to_image_msg
+
         ok, frame = self._cam.read()
         if not ok:
             return
-        msg = self._Image()
-        msg.header.stamp = self.node.get_clock().now().to_msg()
-        msg.header.frame_id = "sim_view"
-        msg.height, msg.width = frame.shape[:2]
-        msg.encoding = "bgr8"
-        msg.step = msg.width * 3
-        msg.data = frame.tobytes()
-        self._pub.publish(msg)
+        self._pub.publish(to_image_msg(frame, self.node.get_clock().now().to_msg(), "sim_view"))
 
     def destroy(self) -> None:
         self._cam.release()
@@ -167,30 +132,24 @@ class StampedCameraPublisher:
 
         from so101_sim.camera import SimCamera
 
-        self._Image = Image
         self.role = role
         self.topic = str(spec.get("topic", f"/cameras/{role}/image_raw"))
         fps = float(spec.get("fps", 30.0))
         self.node = Node(f"so101_sim_{role}_camera")
-        self._pub = self.node.create_publisher(Image, self.topic, _sensor_qos())
+        self._pub = self.node.create_publisher(Image, self.topic, sensor_qos())
         self._cam = SimCamera(world, role, fps=fps, blocking=False)
         self._last_stamp = None
         self.node.create_timer(1.0 / fps, self._tick)
 
     def _tick(self) -> None:
+        from vla_pipeline.vision.camera_node import to_image_msg
+
         ok, frame = self._cam.read()
         stamp = self._cam.last_stamp
         if not ok or stamp is None or stamp == self._last_stamp:
             return
         self._last_stamp = stamp
-        msg = self._Image()
-        msg.header.stamp = _stamp_msg(stamp)
-        msg.header.frame_id = f"camera_{self.role}"
-        msg.height, msg.width = frame.shape[:2]
-        msg.encoding = "bgr8"
-        msg.step = msg.width * 3
-        msg.data = frame.tobytes()
-        self._pub.publish(msg)
+        self._pub.publish(to_image_msg(frame, _stamp_msg(stamp), f"camera_{self.role}"))
 
     def destroy(self) -> None:
         self._cam.release()
@@ -312,12 +271,11 @@ class TwinControl:
 def _use_grasp_envelope() -> None:
     """Clamp this process to ``GRASP_LIMITS``.
 
-    The workshop server switches the process to ``LIVE_MIMIC_LIMITS`` because
-    the twin arm is live, and that caps ``wrist_flex`` at 84.4 deg. The
-    console's client already clamps ordinary moves to the desk cap; only
-    grasp moves are sent wider.
+    The base envelope caps ``wrist_flex`` at 84.4 deg. The console's client
+    already clamps ordinary moves to the desk cap; only grasp moves are sent
+    wider.
     """
-    from common.motion import GRASP_LIMITS, set_active_limits
+    from vla_pipeline.robot.arm_interface import GRASP_LIMITS, set_active_limits
 
     set_active_limits(GRASP_LIMITS)
 
@@ -325,8 +283,6 @@ def _use_grasp_envelope() -> None:
 def build_nodes(
     cfg: dict,
     *,
-    stack: str = "pipeline",
-    config_path: str | None = None,
     device_cameras: bool = False,
     view: bool = True,
     notebook_twin: bool = False,
@@ -338,13 +294,11 @@ def build_nodes(
     twin; ``source: device`` cameras are opened here only if
     ``device_cameras`` (otherwise their usual camera node serves them).
     ``notebook_twin`` adds what ``02_digital_twin.ipynb``'s console needs
-    (see the module docstring); it requires the workshop stack.
+    (see the module docstring).
     """
     from so101_sim.camera import SimCamera
 
-    if notebook_twin and stack != "workshop":
-        raise ValueError("--notebook-twin needs the workshop stack")
-    world, arm, ServerNode, CameraNode = _stack_parts(stack, cfg, config_path)
+    world, arm, ServerNode, CameraNode = _stack_parts(cfg)
     nodes, closers = [], []
     server = ServerNode(cfg, arm=arm)
     nodes.append(server)
@@ -389,8 +343,7 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
     ap = argparse.ArgumentParser(description="SO-101 digital twin ROS 2 node")
-    ap.add_argument("--config", required=True, help="pipeline.yaml or workshop.yaml")
-    ap.add_argument("--stack", choices=["auto", "pipeline", "workshop"], default="auto")
+    ap.add_argument("--config", required=True, help="the pipeline config")
     ap.add_argument("--device-cameras", action="store_true",
                     help="also publish source:device cameras from this process")
     ap.add_argument("--sim-cameras", default=None,
@@ -399,8 +352,8 @@ def main() -> None:
     ap.add_argument("--no-view", action="store_true", help=f"don't publish {VIEW_TOPIC}")
     ap.add_argument("--viewer", action="store_true", help="open the MuJoCo viewer window")
     ap.add_argument("--notebook-twin", action="store_true",
-                    help="the 02_digital_twin.ipynb console twin (workshop stack): grasp "
-                    "envelope, capture-stamped arm camera, the props' TF frames and status")
+                    help="the 02_digital_twin.ipynb console twin: grasp envelope, "
+                    "capture-stamped arm camera, the props' TF frames and status")
     ap.add_argument("--scene", default=None,
                     help="with --notebook-twin: JSON from SimWorld.snapshot_scene to start from")
     args, ros_args = ap.parse_known_args()
@@ -426,22 +379,18 @@ def main() -> None:
         raise SystemExit("rclpy not importable - source /opt/ros/jazzy/setup.bash first") from None
 
     from so101_sim.spin import spin_until_shutdown
+    from vla_pipeline.utils.config import load_config
 
-    cfg = _load_yaml(args.config)
+    cfg = load_config(args.config)
     cfg.setdefault("robot", {})["backend"] = "sim"
     if args.viewer:
         cfg.setdefault("sim", {})["viewer"] = True
     for role in filter(None, (args.sim_cameras or "").split(",")):
         cfg.setdefault("cameras", {}).setdefault(role.strip(), {})["source"] = "sim"
-    stack = detect_stack(args.config, cfg) if args.stack == "auto" else args.stack
-    if args.notebook_twin and stack != "workshop":
-        ap.error("--notebook-twin needs the workshop stack")
 
     rclpy.init(args=ros_args)
     world, nodes, closers = build_nodes(
         cfg,
-        stack=stack,
-        config_path=args.config,
         device_cameras=args.device_cameras,
         view=not args.no_view,
         notebook_twin=args.notebook_twin,
@@ -456,7 +405,7 @@ def main() -> None:
     executor = SingleThreadedExecutor()
     for n in nodes:
         executor.add_node(n)
-    logger.info("digital twin up (%s stack): %d nodes", stack, len(nodes))
+    logger.info("digital twin up: %d nodes", len(nodes))
     try:
         spin_until_shutdown(executor)
     finally:

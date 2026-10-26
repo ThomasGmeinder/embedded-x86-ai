@@ -53,12 +53,12 @@ from so101_sim.control import (
 )
 
 from vla_pipeline.robot.arm_interface import (
-    MOTOR_NAMES, REST_POSE, ArmClient, MotionTimeout, clamp_joints, joints_text,
+    REST_POSE, ArmClient, MotionTimeout, clamp_joints, joints_text,
 )
 
 logger = logging.getLogger(__name__)
 
-BODY = tuple(MOTOR_NAMES[:5])
+from so101_sim.mapping import BODY_JOINTS as BODY  # noqa: E402
 # A controller's or service's reply takes one controller update and a local DDS
 # hop (1.3 ms at most, scripts/ros2_control_poc.py): this bound only catches a
 # controller manager or arm server that is gone. It is the hardware side's
@@ -136,7 +136,6 @@ class ControllerArm(ArmClient):
       and :meth:`_stream_setpoint`.
     """
 
-    is_live = True
     # go_to() is one trajectory goal: the controller interpolates the move.
     _direct_goal = True
 

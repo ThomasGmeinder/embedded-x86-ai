@@ -40,13 +40,10 @@ import threading
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-
-from so101_sim import control  # noqa: E402
-
-CONFIG = ROOT / "config" / "pipeline.yaml"
-BODY = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
+from so101_sim import control
+from so101_sim.mapping import BODY_JOINTS as BODY
+from vla_pipeline.utils.config import DEFAULT_CONFIG as CONFIG
+from vla_pipeline.utils.config import REPO_ROOT as ROOT
 SETTLED_DEG = 0.5
 # Jaws low over the table, closing axis horizontal: how the pickup grasps the ball.
 GRASP_POSE = {"shoulder_pan": 0.0, "shoulder_lift": 9.0, "elbow_flex": 20.0, "wrist_flex": 54.0, "wrist_roll": 0.0}
@@ -61,7 +58,7 @@ def _moves(cfg: dict) -> list[tuple[str, dict]]:
     def body(pose: dict) -> dict:
         return {k: v for k, v in pose.items() if k in BODY}
 
-    pp = cfg["behaviors"]["pick_place"]
+    pp = cfg["pick_place"]
     scan = clamp_joints({**REST_POSE, **pp["scan_pose"]})
     moves = [("rest to wave", body(clamp_joints({**REST_POSE, **WAVE_UP}))), ("park", body(REST_POSE)),
              ("rest to scan", body(scan))]
@@ -256,7 +253,7 @@ def grasp_action(probe: Probe, world, closed: float, opened: float) -> dict:
             "grasped": bool(world.is_grasped("sports_ball"))}
 
 
-def _stop(proc: subprocess.Popen) -> None:
+def _stop_group(proc: subprocess.Popen) -> None:
     os.killpg(proc.pid, signal.SIGINT)
     proc.wait()
 
@@ -290,7 +287,7 @@ class Session:
         for n in (*extra, self.probe.node):
             self.executor.add_node(n)
         threading.Thread(target=self.executor.spin, daemon=True).start()
-        self.launch = control.start_controllers(cfg_path, "pipeline")
+        self.launch = control.start_controllers(cfg_path)
         self.probe.wait(
             lambda: self.probe.state is not None
             and self.probe.controllers.get("arm_controller") == "active"
@@ -322,7 +319,7 @@ def measure_moves(cfg: dict, cfg_path: Path, jmap, profile_server: bool = False,
     sampler = ["py-spy", "record", "--threads", "--format", "raw", "--rate", "200", "-o", py_spy, "--"] if py_spy else []
     started = time.monotonic()
     twin = subprocess.Popen(
-        [*sampler, sys.executable, "-m", "so101_sim.node", "--config", str(cfg_path), "--stack", "pipeline",
+        [*sampler, sys.executable, "-m", "so101_sim.node", "--config", str(cfg_path),
          "--no-view", "--ros-args",
          "-r", f"{cfg['robot']['command_topic']}:={control.HARDWARE_COMMANDS}",
          "-r", f"{cfg['robot']['state_topic']}:={control.HARDWARE_STATES}"],
@@ -355,7 +352,7 @@ def measure_moves(cfg: dict, cfg_path: Path, jmap, profile_server: bool = False,
     finally:
         if session is not None:
             session.close()
-        _stop(twin)
+        _stop_group(twin)
         _wait_exit(twin_pid, 10.0)
 
 
@@ -372,7 +369,7 @@ def measure_grasp(cfg: dict, cfg_path: Path, jmap, domain: int) -> dict:
     rclpy.init()
     in_process = dict(cfg, robot={**cfg["robot"], "command_topic": control.HARDWARE_COMMANDS,
                                   "state_topic": control.HARDWARE_STATES})
-    world, nodes, closers = build_nodes(in_process, stack="pipeline", config_path=str(cfg_path), view=False)
+    world, nodes, closers = build_nodes(in_process, view=False)
     session = None
     try:
         session = Session(jmap, cfg_path, extra=nodes)

@@ -7,10 +7,8 @@
 
 """Manipulation behaviors: grip, pick_place, place, fetch_block.
 
-The handlers take ``(ctx, cmd)``: :mod:`vla_pipeline.behaviors._ctx` builds
-the context from a behavior's ``(cfg, arm, ...)`` arguments for
-:mod:`~vla_pipeline.behaviors.grip`, :mod:`~vla_pipeline.behaviors.pick_place`
-and :mod:`~vla_pipeline.behaviors.fetch_block`:
+The handlers take ``(ctx, cmd)`` (a :class:`~vla_pipeline.dispatch.PipelineContext`);
+:func:`register_manipulation` adds them to the registry:
 
 - **grip** - present the open jaws, close until contact (gripper current, or
   a position stall), confirm with the arm camera, lock the grip. "release",
@@ -28,10 +26,8 @@ and :mod:`~vla_pipeline.behaviors.fetch_block`:
 - **fetch_block** - fetch the block from its taught pose, then hand it over.
 
 The handover finds you with YOLO-pose on the mount camera, aims the pan
-joint at you, extends, opens the jaws and parks. Settings:
-``behaviors.grip``, ``behaviors.pick_place`` and ``behaviors.fetch_block`` in
-``config/pipeline.yaml``. The workshop keeps its own copy
-(``workshop/common/manipulation.py``); ``tests/sim/test_copies.py`` fails when the two drift apart.
+joint at you, extends, opens the jaws and parks. Settings: ``grip``,
+``pick_place`` and ``fetch_block`` in ``config/pipeline.yaml``.
 """
 
 from __future__ import annotations
@@ -45,6 +41,7 @@ import numpy as np
 
 from so101_sim.kinematics import OPEN_GRIPPER, camera_calibrated
 
+from vla_pipeline.llm.intents import Intent
 from vla_pipeline.robot.arm_interface import (
     GRASP_LIMITS, GRIPPER_CLOSED_FLOOR, GRIPPER_TORQUE_LIMIT, JOINT_LIMITS, REST_POSE, joints_text,
 )
@@ -317,12 +314,12 @@ def find_person_pan(ctx, seek_s: float = 4.0) -> tuple[float, bool]:
     """Track the person for ``seek_s``, one new frame at a time, and aim the
     pan joint at them. A camera that delivers no fresh frame ends the search."""
     pan, found = 0.0, False
-    if ctx.pose is None or ctx.camera is None:
+    if ctx.pose is None or ctx.mount_camera is None:
         logger.info("[handoff] no mount camera - handing over straight ahead")
         return pan, found
     deadline = time.monotonic() + seek_s
     while time.monotonic() < deadline and not ctx.stop_check():
-        ok, frame = _read_settled(ctx.camera, time.time())
+        ok, frame = _read_settled(ctx.mount_camera, time.time())
         if not ok or frame is None:
             logger.info("[handoff] the mount camera delivered no fresh frame")
             break
@@ -362,7 +359,7 @@ def hand_over(ctx, section: dict, lift_pose: dict, still_holding=lambda: True) -
     ctx.arm.go_to({"gripper": JOINT_LIMITS["gripper"][1]}, duration_s=1.0, stop_check=ctx.stop_check)
     if ctx.stop_event.wait(1.0):  # the person takes it from the open jaws
         return False
-    park_open(ctx.arm, _ready(ctx.cfg["pick_place"]), ctx.stop_check)
+    park_open(ctx.arm, ready_pose(ctx.cfg["pick_place"]), ctx.stop_check)
     return True
 
 
@@ -370,7 +367,7 @@ def hand_over(ctx, section: dict, lift_pose: dict, still_holding=lambda: True) -
 _PARK_OPEN = {**REST_POSE, "gripper": JOINT_LIMITS["gripper"][1]}
 
 
-def _ready(pp: dict) -> dict:
+def ready_pose(pp: dict) -> dict:
     """Where the arm passes between :data:`_PARK_OPEN` and the table: the high
     scan pose at the parked pan, above every object standing on the table."""
     pose, _pans = _high_sweep(pp)
@@ -378,7 +375,7 @@ def _ready(pp: dict) -> dict:
 
 
 def park_open(arm, ready: dict, stop_check=None) -> None:
-    """Go to :data:`_PARK_OPEN` through ``ready`` (:func:`_ready`), the jaws
+    """Go to :data:`_PARK_OPEN` through ``ready`` (:func:`ready_pose`), the jaws
     wide open: closing them on the way home can catch the object just let go
     of and drag it across the table."""
     arm.set_gripper_torque_limit(GRIPPER_TORQUE_LIMIT)
@@ -432,13 +429,13 @@ def run_fetch_block(ctx, cmd=None) -> bool:
     _settle_jaw(ctx.arm, g, hold, ctx.stop_check)
     if not holding(ctx.arm, g, hold):
         ctx.say("I dropped the block.")
-        park_open(ctx.arm, _ready(ctx.cfg["pick_place"]), ctx.stop_check)
+        park_open(ctx.arm, ready_pose(ctx.cfg["pick_place"]), ctx.stop_check)
         return False
     if not hand_over(ctx, fb, lift_pose, lambda: holding(ctx.arm, g, hold)):
         if ctx.stop_check():
             return False
         ctx.say("I dropped the block.")
-        park_open(ctx.arm, _ready(ctx.cfg["pick_place"]), ctx.stop_check)
+        park_open(ctx.arm, ready_pose(ctx.cfg["pick_place"]), ctx.stop_check)
         return False
     return True
 
@@ -731,9 +728,9 @@ def _high_sweep(pp: dict) -> tuple[dict, list]:
 
 
 def _search_views(arm, camera, find, name, pp, stop_check, cam=None, accept=None, observe=None):
-    """From the ready pose (:func:`_ready`), the high sweep first. The near
+    """From the ready pose (:func:`ready_pose`), the high sweep first. The near
     pose runs only when that sweep stored nothing."""
-    arm.go_to(_ready(pp), duration_s=2.5, stop_check=stop_check, limits=GRASP_LIMITS)
+    arm.go_to(ready_pose(pp), duration_s=2.5, stop_check=stop_check, limits=GRASP_LIMITS)
     if stop_check and stop_check():
         return [], "stopped", False, False
     base, pans = _high_sweep(pp)
@@ -977,7 +974,7 @@ def run_pick_place(ctx, cmd) -> bool:
     )
     if status == "stopped" or ctx.stop_check():
         return False
-    ready = _ready(pp)
+    ready = ready_pose(pp)
     if status == "offline":
         ctx.say(_ARM_CAMERA_OFFLINE)
         park_open(ctx.arm, ready, ctx.stop_check)
@@ -1382,7 +1379,7 @@ def _free_spot(ctx, kin, picked: dict, hold: float, drop_xy, objects: TableObjec
     object (:meth:`TableObjects.clear_of`) and lies between ``place_near_m``
     and its ``place_far_m`` from the base, where a pickup reaches it again.
     The arm (:func:`_arm_clear`) stays clear of it between :data:`_PARK_OPEN`
-    and the ready pose (:func:`_ready`), which every pickup and every way
+    and the ready pose (:func:`ready_pose`), which every pickup and every way
     home passes, and clear of every known object through the whole put-down:
     the carry over, down, the jaws opening, back up and home. ``drop_xy``
     itself is tried first, then a 1 cm grid outward, within ``place_search_m``.
@@ -1398,7 +1395,7 @@ def _free_spot(ctx, kin, picked: dict, hold: float, drop_xy, objects: TableObjec
     clearance = float(pp.get("place_clearance_m", 0.025))
     # At the parked jaw opening all the way: park_open passes ready that wide,
     # and a scan entry narrows the jaws along the move.
-    ready = {**_ready(pp), "gripper": _PARK_OPEN["gripper"]}
+    ready = {**ready_pose(pp), "gripper": _PARK_OPEN["gripper"]}
     out_of_park = [_PARK_OPEN, *joint_line(_PARK_OPEN, ready)]
     here = dict(ctx.arm.get_joints())
     passed = {"out of reach": 0, "taken": 0, "on the way out of park": 0, "no path": 0, "put-down meets an object": 0}
@@ -1451,7 +1448,7 @@ def _put_down(ctx, picked: dict, xy, path) -> bool:
     ctx.arm.go_to({"gripper": OPEN_GRIPPER}, duration_s=0.8, stop_check=ctx.stop_check)
     if not _follow(ctx.arm, rise, ctx.stop_check, GRASP_LIMITS, 1.5):
         return False
-    park_open(ctx.arm, _ready(ctx.cfg["pick_place"]), ctx.stop_check)
+    park_open(ctx.arm, ready_pose(ctx.cfg["pick_place"]), ctx.stop_check)
     if ctx.stop_check():
         return False
     ctx.say("Done.")
@@ -1538,3 +1535,12 @@ def forget_scene(state: dict) -> None:
     """What a scene reset forgets: the locked grip, the picked object, and the known objects."""
     for key in ("grip_lock", "grip_lock_pos", "picked", "table_objects"):
         state.pop(key, None)
+
+
+def register_manipulation(registry) -> None:
+    """Add grip, release, place, pick_place and fetch_block to ``registry``."""
+    registry.add(Intent.GRIP, run_grip)
+    registry.add(Intent.RELEASE, run_release)
+    registry.add(Intent.PLACE, run_place)
+    registry.add(Intent.PICK_PLACE, run_pick_place)
+    registry.add(Intent.FETCH_BLOCK, run_fetch_block)

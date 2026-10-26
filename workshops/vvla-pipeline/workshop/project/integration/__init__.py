@@ -9,14 +9,8 @@
 
 Your TODOs live in ``dispatch.py`` (registry + transcript routing),
 ``mimic.py`` (the perception → mapping → actuation tick), and
-``behaviors.py`` (the dance loop).
+``behaviors.py`` (the dance loop). Check them offline (scripted pose/hands +
+dry-run arm, no NPU/ROS 2/LLM):
 
-Check yourself offline (scripted pose/hands + dry-run arm, no NPU/ROS 2/LLM):
-
-    python -m integration.selftest
-
-The full harness is the live UI:
-
-    python app.py --dry-run --synthetic     # anywhere
-    python app.py                           # on the rig
+    python -m vvla_workshop.selftest_integration
 """

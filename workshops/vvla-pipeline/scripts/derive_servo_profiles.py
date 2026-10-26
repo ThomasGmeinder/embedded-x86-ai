@@ -19,7 +19,7 @@ Inputs, all read from their owners rather than restated here:
   torque, the fastest ``Goal_Velocity`` and the ``Acceleration`` unit;
 - the twin's overload protection (``so101_sim.servo.OverloadProtection``):
   the ``Overload_Torque`` threshold and ``Protection_Time``;
-- the workshop's joint limits (``common.motion.JOINT_LIMITS``) as the
+- the pipeline's joint limits (``vla_pipeline.robot.arm_interface.JOINT_LIMITS``) as the
   operating envelope, and the heaviest table prop as the payload in the jaws.
 
 Policy (the only choices this script makes):
@@ -32,7 +32,7 @@ Policy (the only choices this script makes):
   shorter than ``Protection_Time``.
 
 The JSON holds the policy and the worst-pose table. At run time
-``common.servo_profile.ServoProfiler`` applies the same formula
+``vla_pipeline.robot.servo_profile.ServoProfiler`` applies the same formula
 (``profile_for``) to the gravity and inertia along each move's own path; the
 table is the profile a transport writes at connect, before its first move.
 
@@ -45,22 +45,17 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sys
-from pathlib import Path
 
 import mujoco
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "workshop" / "solution"))
-sys.path.insert(0, str(ROOT / "so101_sim" / "src"))
-
-from common.motion import JOINT_LIMITS  # noqa: E402
-from common.servo_profile import heaviest_prop, profile_for  # noqa: E402
-from so101_sim import MOTOR_NAMES  # noqa: E402
-from so101_sim.config import DEFAULT_SCENE, load_sim_config  # noqa: E402
-from so101_sim.mapping import JointMap  # noqa: E402
-from so101_sim.servo import OverloadProtection  # noqa: E402
+from so101_sim import MOTOR_NAMES
+from so101_sim.config import DEFAULT_SCENE, load_sim_config
+from so101_sim.mapping import JointMap
+from so101_sim.servo import OverloadProtection
+from vla_pipeline.robot.arm_interface import JOINT_LIMITS
+from vla_pipeline.robot.servo_profile import heaviest_prop, profile_for
+from vla_pipeline.utils.config import REPO_ROOT as ROOT
 
 # Feetech protocol at 1 Mbps: 10 bits per byte on the wire, plus each servo's
 # Return_Delay_Time (0 after LeRobot's configure) and the host's turnaround.
@@ -151,7 +146,7 @@ def derive(cruise_frac: float, peak_frac: float, samples: int, seed: int) -> dic
             "max_speed_raw": max_speed_raw,
             "accel_unit_steps": accel_unit,
             "payload": {"prop": prop, "kg": payload},
-            "envelope": "common.motion.JOINT_LIMITS",
+            "envelope": "vla_pipeline.robot.arm_interface.JOINT_LIMITS",
             "samples": samples,
             "seed": seed,
         },
@@ -180,7 +175,7 @@ def main() -> None:
         f"for {inp['protection_time_s']} s, payload {inp['payload']['prop']} {inp['payload']['kg']} kg"
     )
     print(f"policy: cruise <= {args.cruise_frac:.0%} of stall, ramp peak <= {args.peak_frac:.0%} of stall")
-    print("worst pose of the envelope; common.servo_profile plans each move from its own path")
+    print("worst pose of the envelope; vla_pipeline.robot.servo_profile plans each move from its own path")
     print(f"{'joint':14s} {'gravity':>8s} {'inertia':>8s} {'speed':>7s} {'deg/s':>7s} {'accel':>6s} {'deg/s2':>8s}")
     for name, j in table["joints"].items():
         print(

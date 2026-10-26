@@ -68,8 +68,8 @@ run_check "shell syntax" bash -n \
   "$REPO_ROOT/run_pipeline.sh" \
   "$REPO_ROOT/activate_venv.sh" \
   "$REPO_ROOT/scripts/compile_npu_models.sh" \
-  "$REPO_ROOT/scripts/install_kernel.sh" \
   "$REPO_ROOT/scripts/ryzen_ai_env.sh" \
+  "$REPO_ROOT/run_sim_tests.sh" \
   "$REPO_ROOT/workshop/run_notebooks.sh"
 
 run_check "python syntax" python3 -m py_compile \

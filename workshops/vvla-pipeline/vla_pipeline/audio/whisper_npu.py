@@ -41,7 +41,7 @@ from vla_pipeline.utils.config import load_config, resolve
 
 logger = logging.getLogger(__name__)
 
-SAMPLE_RATE = 16000
+from vla_pipeline.audio.vad_listener import SAMPLE_RATE  # noqa: E402
 CHUNK_SIZE = 1600  # 0.1 sec chunks
 
 # NPU-optimized ONNX published by AMD (RyzenAI-SW ASR demo). Each repo lays out
@@ -278,9 +278,8 @@ def download_whisper_tokenizer(
 ) -> str:
     """Cache the Whisper tokenizer and feature extractor used at runtime.
 
-    The ONNX encoder/decoder do not include them. ``WhisperONNX`` and
-    ``workshop.common.speech.Whisper`` load this repo with
-    ``local_files_only`` first, so bootstrap must place it in the Hugging
+    The ONNX encoder/decoder do not include them. ``WhisperONNX`` loads this
+    repo with ``local_files_only`` first, so bootstrap must place it in the Hugging
     Face cache before an offline run.
     """
     from transformers import WhisperFeatureExtractor, WhisperTokenizer

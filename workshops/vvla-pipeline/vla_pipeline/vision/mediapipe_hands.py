@@ -67,7 +67,7 @@ class HandObservation:
     pinch: float  # normalized thumb↔index distance (gripper)
     thumb_px: tuple[int, int]  # pixel coords
     index_px: tuple[int, int]
-    handedness: str  # "Left" / "Right" (as seen by MediaPipe)
+    handedness: str  # physical side: "Left" / "Right"
     hand_size: float = 0.0  # wrist→middle-MCP span / frame height (depth cue)
     roll: float = 0.0  # in-plane hand angle, deg (0 = fingers up) - fallback roll
     roll_ti: float = 0.0  # thumb→index vector angle, deg in (-180,180] - primary roll
@@ -76,10 +76,33 @@ class HandObservation:
     wrist_px: tuple[int, int] = (0, 0)  # wrist landmark, for the roll overlay
 
 
-class HandTracker:
-    """Thin wrapper around ``mediapipe.solutions.hands`` (CPU)."""
+def create_hand_tracker(cfg: dict):
+    """Build a configured ``mediapipe.solutions.hands.Hands`` (CPU).
 
-    def __init__(self, cfg: dict | None = None):
+    Reads ``mediapipe:`` from the config: ``max_num_hands``,
+    ``min_detection_confidence``, ``min_tracking_confidence``. Video mode
+    (``static_image_mode=False``) so the tracker exploits temporal continuity
+    between frames.
+    """
+    import mediapipe as mp  # heavy import, keep local
+
+    m = (cfg or {}).get("mediapipe", {})
+    return mp.solutions.hands.Hands(
+        static_image_mode=False,
+        max_num_hands=int(m.get("max_num_hands", 1)),
+        min_detection_confidence=float(m.get("min_detection_confidence", 0.5)),
+        min_tracking_confidence=float(m.get("min_tracking_confidence", 0.5)),
+    )
+
+
+class HandTracker:
+    """Wraps MediaPipe Hands (CPU) and extracts the mimic's control signals.
+
+    ``hands`` may be injected (a prebuilt ``mp.solutions.hands.Hands``), which
+    the notebooks use to stay runnable before TODO 1.4 is implemented.
+    """
+
+    def __init__(self, cfg: dict | None = None, hands=None):
         import mediapipe as mp  # heavy import, keep local
 
         m = (cfg or {}).get("mediapipe", {})
@@ -87,25 +110,49 @@ class HandTracker:
         # Below it the line is too short to give a reliable angle, so the weight
         # ramps down linearly and the mapper leans on the wrist→knuckle `roll`.
         self._roll_ti_full_px = float(m.get("roll_ti_full_px", 40.0))
+        # Which physical hand drives the arm: "right" (default), "left", or "any".
+        self._target_hand = str(m.get("track_hand", "right")).strip().lower()
+        # MediaPipe labels handedness as if the image were mirrored (selfie
+        # view). Rig frames are NOT mirrored, so MediaPipe's "Right" is the
+        # physical LEFT hand; set mediapipe.frames_mirrored: true for pre-flipped frames.
+        self._frames_mirrored = bool(m.get("frames_mirrored", False))
         self._mp_hands = mp.solutions.hands
         self._mp_draw = mp.solutions.drawing_utils
-        self.hands = self._mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=int(m.get("max_num_hands", 1)),
-            min_detection_confidence=float(m.get("min_detection_confidence", 0.5)),
-            min_tracking_confidence=float(m.get("min_tracking_confidence", 0.5)),
-        )
+        self.hands = hands if hands is not None else create_hand_tracker(cfg or {})
+
+    def _physical_handedness(self, mp_label: str) -> str:
+        """Correct MediaPipe's mirrored-view Left/Right to the physical side."""
+        if self._frames_mirrored:
+            return mp_label
+        return {"Left": "Right", "Right": "Left"}.get(mp_label, mp_label)
+
+    def _select_hand(self, results):
+        """Index of the hand to track per ``track_hand``, or None if absent.
+
+        ``track_hand: any`` keeps the first hand MediaPipe returns. Otherwise
+        only the requested physical hand counts, so the arm holds its pose
+        instead of following the wrong hand.
+        """
+        if not results.multi_hand_landmarks:
+            return None
+        if self._target_hand in ("any", "both", ""):
+            return 0
+        for i, handed in enumerate(results.multi_handedness or []):
+            if self._physical_handedness(handed.classification[0].label).lower() == self._target_hand:
+                return i
+        return None
 
     def process(self, frame_bgr: np.ndarray) -> tuple[HandObservation | None, object]:
-        """Return (observation for the first detected hand, raw results)."""
+        """Return (observation for the tracked hand, raw results); ``(None, raw)`` without one."""
         h, w = frame_bgr.shape[:2]
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         rgb.flags.writeable = False
         results = self.hands.process(rgb)
-        if not results.multi_hand_landmarks:
+        idx = self._select_hand(results)
+        if idx is None:
             return None, results
 
-        lm = results.multi_hand_landmarks[0].landmark
+        lm = results.multi_hand_landmarks[idx].landmark
         thumb = np.array([lm[THUMB_TIP].x, lm[THUMB_TIP].y])
         index = np.array([lm[INDEX_TIP].x, lm[INDEX_TIP].y])
         wrist = np.array([lm[WRIST].x, lm[WRIST].y])
@@ -150,8 +197,8 @@ class HandTracker:
         roll_ref = float(np.degrees(np.arctan2(-ref[1], ref[0])))
 
         handedness = "Unknown"
-        if results.multi_handedness:
-            handedness = results.multi_handedness[0].classification[0].label
+        if results.multi_handedness and idx < len(results.multi_handedness):
+            handedness = self._physical_handedness(results.multi_handedness[idx].classification[0].label)
 
         obs = HandObservation(
             pinch=pinch,
@@ -236,7 +283,7 @@ def main() -> None:
 
     cfg = load_config(args.config)
     tracker = HandTracker(cfg)
-    cap = cv2.VideoCapture(args.cam if args.cam is not None else cfg["camera"]["index"])
+    cap = cv2.VideoCapture(args.cam if args.cam is not None else cfg["cameras"]["mount"]["device"])
     if not cap.isOpened():
         raise SystemExit("ERROR: could not open camera")
 

@@ -123,6 +123,9 @@ def write_register(ser, servo_id, address, value, size):
 
 
 def decode_sign_magnitude(value, sign_bit=SIGN_BIT):
+    """Decode a sign-magnitude register value; a failed read (None) stays None."""
+    if value is None:
+        return None
     mask = 1 << sign_bit
     return -(value & (mask - 1)) if value & mask else value
 

@@ -22,46 +22,13 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from vla_pipeline.behaviors import manipulation
+from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR, JOINT_LIMITS
+from vla_pipeline.robot.sim_arm import SimArmClient
+
 pytestmark = pytest.mark.sim
 
-_CASES = [
-    ("pipeline", "sports_ball", "sports ball"),
-    ("pipeline", "bottle", "bottle"),
-    ("workshop", "sports_ball", "sports ball"),
-    ("workshop", "bottle", "bottle"),
-]
-
-
-def _stack(stack: str):
-    if stack == "pipeline":
-        from vla_pipeline.behaviors.grip import close_with_feedback
-        from vla_pipeline.behaviors.pick_place import _box_usable, _plan_from_view, _shape_of
-        from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR
-        from vla_pipeline.robot.sim_arm import SimArmClient
-
-        def plan(cfg, view):
-            return _plan_from_view(cfg, view)
-
-        def pp(cfg):
-            return cfg["behaviors"]["pick_place"]
-
-        def grip(cfg):
-            return cfg["behaviors"]["grip"]
-
-        return plan, pp, _box_usable, _shape_of, SimArmClient, close_with_feedback, grip, GRIPPER_CLOSED_FLOOR
-    from common.manipulation import _box_usable, _plan_from_view, _shape_of, close_with_feedback
-    from common.motion import GRIPPER_CLOSED_FLOOR, SimArmClient
-
-    def plan(cfg, view):
-        return _plan_from_view(SimpleNamespace(cfg=cfg), view)
-
-    def pp(cfg):
-        return cfg["pick_place"]
-
-    def grip(cfg):
-        return cfg["grip"]
-
-    return plan, pp, _box_usable, _shape_of, SimArmClient, close_with_feedback, grip, GRIPPER_CLOSED_FLOOR
+_CASES = [("sports_ball", "sports ball"), ("bottle", "bottle")]
 
 
 def _surface_gap(m, d, geom: int, obj: int) -> float:
@@ -142,7 +109,7 @@ def _face_gaps(world, pose, centre, half: float) -> tuple[float, float]:
     return gap_fixed, gap_moving
 
 
-def _accepted(twin, cfg, stack: str, body: str, resolved: str, quat=(1.0, 0.0, 0.0, 0.0)):
+def _accepted(twin, cfg, body: str, resolved: str, quat=(1.0, 0.0, 0.0, 0.0)):
     """The first scan view, high pans then near pans as the pickup walks them,
     whose box the pickup would grasp, and where the body really is."""
     from so101_sim.camera import SimCamera
@@ -151,13 +118,12 @@ def _accepted(twin, cfg, stack: str, body: str, resolved: str, quat=(1.0, 0.0, 0
 
     from rigs import wait_settled
 
-    plan_from, pp_of, usable, shape_of, *_, floor = _stack(stack)
     world = twin.world
-    pp = pp_of(cfg)
-    shape = shape_of(resolved)
+    pp = cfg["pick_place"]
+    shape = manipulation._shape_of(resolved)
     scan = dict(pp["scan_pose"])
     truth = np.array(world.model.body(body).pos, float)
-    kin = shared_kinematics(floor)
+    kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
     views = [{**scan, "shoulder_pan": float(pan)} for pan in pp["scan_pans"]]
     views += [{**pp["scan_near_pose"], "shoulder_pan": float(pan)} for pan in pp["scan_near_pans"]]
     cam = SimCamera(world, "arm", renderer=twin.renderer, segmentation=True)
@@ -180,11 +146,11 @@ def _accepted(twin, cfg, stack: str, body: str, resolved: str, quat=(1.0, 0.0, 0
             area = (box[2] - box[0]) * (box[3] - box[1])
             if area / float(height * width) < float(pp["min_box_area_frac"]):
                 continue
-            if not usable(box, shape, width, height):
+            if not manipulation._box_usable(box, shape, width, height):
                 continue
             joints = dict(world.joint_cal())
             det = SimpleNamespace(box=box, area=area, score=dets[0][1], name=resolved)
-            plan = plan_from(cfg, {
+            plan = manipulation._plan_from_view(SimpleNamespace(cfg=cfg), {
                 "frame": frame, "det": det, "resolved": resolved, "joints": joints,
             })
             if plan is None:
@@ -201,66 +167,65 @@ def _accepted(twin, cfg, stack: str, body: str, resolved: str, quat=(1.0, 0.0, 0
     return None, None, None, truth, None, kin
 
 
-@pytest.mark.parametrize("stack,body,resolved", _CASES)
-def test_approach_clears_and_arrives_at_the_grasp(twins, pipeline_cfg, workshop_cfg, stack, body, resolved):
+@pytest.mark.parametrize("body,resolved", _CASES)
+def test_approach_clears_and_arrives_at_the_grasp(twins, pipeline_cfg, body, resolved):
     from so101_sim.kinematics import OPEN_GRIPPER
 
-    cfg = pipeline_cfg if stack == "pipeline" else workshop_cfg
-    twin = twins(stack, cfg)
-    plan, path, _joints, truth, pan, _kin = _accepted(twin, cfg, stack, body, resolved)
-    assert plan is not None, f"{stack} found no graspable view of the {body}"
+    cfg = pipeline_cfg
+    twin = twins(cfg)
+    plan, path, _joints, truth, pan, _kin = _accepted(twin, cfg, body, resolved)
+    assert plan is not None, f"found no graspable view of the {body}"
     err = float(np.linalg.norm((plan.xyz - truth)[:2]))
     assert err < 0.005, (
-        f"{stack} {body} at pan {pan:.0f}: centre {np.round(plan.xyz, 4)} is {err * 1000:.1f} mm "
+        f"{body} at pan {pan:.0f}: centre {np.round(plan.xyz, 4)} is {err * 1000:.1f} mm "
         f"from {np.round(truth, 4)}"
     )
     twin.world.place(body, truth)
     closed = [pose for pose in path if abs(float(pose["gripper"]) - OPEN_GRIPPER) > 0.5]
-    assert not closed, f"{stack} {body}: the jaw closes before the hand is at the grasp"
+    assert not closed, f"{body}: the jaw closes before the hand is at the grasp"
     visual_min = collision_min = 1e9
     for pose in path:
         visual, collision = _gaps(twin.world, pose, body)
         visual_min = min(visual_min, visual)
         collision_min = min(collision_min, collision)
     assert visual_min >= 0.0, (
-        f"{stack} {body}: the visible finger enters the object by {-visual_min * 1000:.1f} mm on the way in"
+        f"{body}: the visible finger enters the object by {-visual_min * 1000:.1f} mm on the way in"
     )
     assert collision_min > 0.0, (
-        f"{stack} {body}: a jaw collides with the object {-collision_min * 1000:.1f} mm before the close"
+        f"{body}: a jaw collides with the object {-collision_min * 1000:.1f} mm before the close"
     )
 
     top = twin.world.grasp_point(plan.poses[0], 0.04)
     for pose in plan.poses:
         point = twin.world.grasp_point(pose, 0.04)
         lateral = float(np.linalg.norm(point[:2] - top[:2]))
-        assert lateral <= 0.005, f"{stack} {body}: the descent wanders {lateral * 1000:.1f} mm off the centre"
+        assert lateral <= 0.005, f"{body}: the descent wanders {lateral * 1000:.1f} mm off the centre"
         off_object = float(np.linalg.norm(point[:2] - truth[:2]))
         assert off_object <= 0.008, (
-            f"{stack} {body}: the descent is {off_object * 1000:.1f} mm from the object"
+            f"{body}: the descent is {off_object * 1000:.1f} mm from the object"
         )
 
     half = float(twin.world.model.geom(f"{body}_collision").size[0])
     gap_fixed, gap_moving = _face_gaps(twin.world, plan.grasp, truth, half)
     assert gap_fixed > 0.001 and gap_moving > 0.001, (
-        f"{stack} {body}: a face is already on the object (fixed {gap_fixed * 1000:.1f} mm, "
+        f"{body}: a face is already on the object (fixed {gap_fixed * 1000:.1f} mm, "
         f"moving {gap_moving * 1000:.1f} mm)"
     )
     if body == "bottle":
         assert abs(gap_fixed - gap_moving) <= 0.004, (
-            f"{stack} {body}: the gaps differ by {abs(gap_fixed - gap_moving) * 1000:.1f} mm "
+            f"{body}: the gaps differ by {abs(gap_fixed - gap_moving) * 1000:.1f} mm "
             f"(fixed {gap_fixed * 1000:.1f}, moving {gap_moving * 1000:.1f})"
         )
     else:
-        want = float(_stack(stack)[1](cfg)["fixed_jaw_gap_m"])
+        want = float(cfg["pick_place"]["fixed_jaw_gap_m"])
         assert abs(gap_fixed - want) <= 0.002 and gap_moving > gap_fixed, (
-            f"{stack} {body}: the fixed finger is {gap_fixed * 1000:.1f} mm from the object, "
+            f"{body}: the fixed finger is {gap_fixed * 1000:.1f} mm from the object, "
             f"want {want * 1000:.1f} (moving {gap_moving * 1000:.1f} mm)"
         )
 
 
-@pytest.mark.parametrize("stack", ["pipeline", "workshop"])
 @pytest.mark.parametrize("lying", ["straight", "turned"])
-def test_toothbrush_descent_clears_it(twins, pipeline_cfg, workshop_cfg, stack, lying):
+def test_toothbrush_descent_clears_it(twins, pipeline_cfg, lying):
     """The jaws turn across the toothbrush and come down centred over it, then
     the hand moves sideways until the fixed finger is beside it.
 
@@ -270,20 +235,20 @@ def test_toothbrush_descent_clears_it(twins, pipeline_cfg, workshop_cfg, stack, 
     from so101_sim.kinematics import joint_line
     from so101_sim.world import _FIXED_FINGER
 
-    cfg = pipeline_cfg if stack == "pipeline" else workshop_cfg
-    twin = twins(stack, cfg)
+    cfg = pipeline_cfg
+    twin = twins(cfg)
     m = twin.world.model
     quat = (1.0, 0.0, 0.0, 0.0) if lying == "straight" else tuple(float(v) for v in m.body("toothbrush").quat)
-    plan, path, _joints, truth, pan, _kin = _accepted(twin, cfg, stack, "toothbrush", "toothbrush", quat)
-    assert plan is not None, f"{stack} found no graspable view of the {lying} toothbrush"
+    plan, path, _joints, truth, pan, _kin = _accepted(twin, cfg, "toothbrush", "toothbrush", quat)
+    assert plan is not None, f"found no graspable view of the {lying} toothbrush"
     twin.world.place("toothbrush", truth, quat)
     sideways = len(joint_line(plan.poses[-1], plan.beside)) if plan.beside is not None else 0
     down = min(_collision_gap(twin.world, pose, "toothbrush") for pose in path[: len(path) - sideways])
     assert down > 0.0, (
-        f"{stack} {lying} toothbrush at pan {pan:.0f}: a jaw lands on it "
+        f"{lying} toothbrush at pan {pan:.0f}: a jaw lands on it "
         f"({-down * 1000:.1f} mm into it) on the way down"
     )
-    assert plan.beside is not None, f"{stack} {lying} toothbrush: no sideways move to the fixed finger"
+    assert plan.beside is not None, f"{lying} toothbrush: no sideways move to the fixed finger"
 
     import mujoco
 
@@ -301,100 +266,84 @@ def test_toothbrush_descent_clears_it(twins, pipeline_cfg, workshop_cfg, stack, 
         if m.geom_contype[i] and m.geom_bodyid[i] == m.body("moving_jaw_so101_v1").id
     )
     assert fixed > -0.001 and moving > fixed, (
-        f"{stack} {lying} toothbrush: beside it the fixed finger is {fixed * 1000:+.1f} mm and the "
+        f"{lying} toothbrush: beside it the fixed finger is {fixed * 1000:+.1f} mm and the "
         f"moving finger {moving * 1000:+.1f} mm from it"
     )
 
 
-def _hold_fns(stack: str):
-    if stack == "pipeline":
-        from vla_pipeline.behaviors.grip import ease_grip, holding
-    else:
-        from common.manipulation import ease_grip, holding
-    return holding, ease_grip
-
-
-def _squeeze(twin, cfg, stack: str, body: str, resolved: str):
+def _squeeze(twin, cfg, body: str, resolved: str):
     """The hand at the grasp around ``body``, the jaws closed on it: ``(arm, gripped, hold, plan, truth)``."""
-    plan, _approach, _joints, truth, _pan, _kin = _accepted(twin, cfg, stack, body, resolved)
-    assert plan is not None, f"{stack} found no graspable view of the {body}"
-    *_, Arm, close, grip_of, _floor = _stack(stack)
+    plan, _approach, _joints, truth, _pan, _kin = _accepted(twin, cfg, body, resolved)
+    assert plan is not None, f"found no graspable view of the {body}"
     world = twin.world
     world.reset(plan.grasp)
     for other in world.objects:
         if other != body:
             world.hide(other)
     world.place(body, truth)
-    arm = Arm(cfg, world=world)
-    gripped, hold = close(arm, grip_of(cfg), start_from=75.0, ease=False)
+    arm = SimArmClient(cfg, world=world)
+    gripped, hold = manipulation.close_with_feedback(arm, cfg["grip"], start_from=75.0, ease=False)
     return arm, gripped, hold, plan, truth
 
 
-@pytest.mark.parametrize("stack,body,resolved", _CASES)
-def test_close_holds_the_object(twins, pipeline_cfg, workshop_cfg, stack, body, resolved):
+@pytest.mark.parametrize("body,resolved", _CASES)
+def test_close_holds_the_object(twins, pipeline_cfg, body, resolved):
     """The close runs after the hand is down, both jaws keep the object up to
     the pre-grasp without it moving in the gripper, the grip eases to the
     hold limit before the overload protection trips, and ``holding()`` tells
     a held object from empty jaws."""
     from rigs import LIFT_SLIP_TOL_M, Trace, hold_seconds, step_through, wait_joint_rest, wait_settled
 
-    cfg = pipeline_cfg if stack == "pipeline" else workshop_cfg
-    twin = twins(stack, cfg)
-    *_, grip_of, floor = _stack(stack)
+    cfg = pipeline_cfg
+    twin = twins(cfg)
+    floor = GRIPPER_CLOSED_FLOOR
     world = twin.world
     try:
-        arm, gripped, hold, plan, truth = _squeeze(twin, cfg, stack, body, resolved)
-        assert gripped, f"{stack} reported no contact on the {body}"
+        arm, gripped, hold, plan, truth = _squeeze(twin, cfg, body, resolved)
+        assert gripped, f"reported no contact on the {body}"
         wait_settled(world)
-        assert world.is_grasped(body), f"{stack} {body} is not held by both jaws"
+        assert world.is_grasped(body), f"{body} is not held by both jaws"
         moved = float(np.linalg.norm(world.body_pos(body)[:2] - truth[:2]))
-        assert moved < 0.02, f"{stack} {body} was shoved {moved * 1000:.0f} mm across the table"
+        assert moved < 0.02, f"{body} was shoved {moved * 1000:.0f} mm across the table"
         if body == "bottle":
             _w, x, y, _z = (float(v) for v in world.body_quat(body))
             up_z = 1.0 - 2.0 * (x * x + y * y)
-            assert up_z > 0.95, f"{stack} bottle tipped (up_z {up_z:.3f})"
-        assert hold > floor + 5.0, f"{stack} {body}: hold {hold:.1f} is the closed floor {floor:.0f}"
+            assert up_z > 0.95, f"bottle tipped (up_z {up_z:.3f})"
+        assert hold > floor + 5.0, f"{body}: hold {hold:.1f} is the closed floor {floor:.0f}"
 
-        holding, ease_grip = _hold_fns(stack)
         z0 = float(world.body_pos(body)[2])
         trace = Trace(world, time.monotonic, watch=(body,))
         trace.start()
         t0 = time.monotonic()
         arm.go_to({**plan.poses[0], "gripper": hold})
-        ease_grip(arm, grip_of(cfg))
+        manipulation.ease_grip(arm, cfg["grip"])
         step_through(world, trace, hold_seconds(world), time.monotonic())
-        assert trace.first_overload() is None, f"{stack}: the gripper overload protection tripped"
+        assert trace.first_overload() is None, "the gripper overload protection tripped"
         rise = float(world.body_pos(body)[2]) - z0
-        assert rise > 0.03, f"{stack} {body} rose only {rise * 1000:.0f} mm"
-        assert world.is_grasped(body), f"{stack} {body} is not held by both fingers after the lift"
+        assert rise > 0.03, f"{body} rose only {rise * 1000:.0f} mm"
+        assert world.is_grasped(body), f"{body} is not held by both fingers after the lift"
         moved = trace.drift(body, t0)
         assert moved <= LIFT_SLIP_TOL_M, (
-            f"{stack} {body} moved {moved * 1000:.1f} mm in the gripper on the way up"
+            f"{body} moved {moved * 1000:.1f} mm in the gripper on the way up"
         )
-        assert holding(arm, grip_of(cfg), hold), f"{stack}: holding() lost the lifted {body}"
+        assert manipulation.holding(arm, cfg["grip"], hold), f"holding() lost the lifted {body}"
         world.hide(body)
         wait_joint_rest(world, "gripper")
-        assert not holding(arm, grip_of(cfg), hold), f"{stack}: holding() with empty jaws"
+        assert not manipulation.holding(arm, cfg["grip"], hold), "holding() with empty jaws"
     finally:
         world.reset()
 
 
-@pytest.mark.parametrize("stack", ["pipeline", "workshop"])
-def test_the_jaws_open_after_a_squeeze(twins, pipeline_cfg, workshop_cfg, stack):
+def test_the_jaws_open_after_a_squeeze(twins, pipeline_cfg):
     """A squeezed jaw stops at the object while its servo setpoint goes on past it.
     The release is planned from that setpoint, so it ends within its profile."""
-    if stack == "pipeline":
-        from vla_pipeline.robot.arm_interface import JOINT_LIMITS
-    else:
-        from common.motion import JOINT_LIMITS
-
-    cfg = pipeline_cfg if stack == "pipeline" else workshop_cfg
-    twin = twins(stack, cfg)
+    cfg = pipeline_cfg
+    twin = twins(cfg)
     world = twin.world
     try:
-        arm, gripped, _hold, _plan, _truth = _squeeze(twin, cfg, stack, "sports_ball", "sports ball")
-        assert gripped, f"{stack} reported no contact on the sports_ball"
+        arm, gripped, _hold, _plan, _truth = _squeeze(twin, cfg, "sports_ball", "sports ball")
+        assert gripped, "reported no contact on the sports_ball"
         assert arm.move_to({"gripper": JOINT_LIMITS["gripper"][1]}) == "arrived"
-        assert not world.is_grasped("sports_ball"), f"{stack}: the open jaws still hold the sports_ball"
+        assert not world.is_grasped("sports_ball"), "the open jaws still hold the sports_ball"
     finally:
         world.reset()

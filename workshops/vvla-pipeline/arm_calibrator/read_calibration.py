@@ -28,51 +28,7 @@ import sys
 
 import serial
 
-REG = {
-    "Model_Number": (3, 2),
-    "Min_Position_Limit": (9, 2),
-    "Max_Position_Limit": (11, 2),
-    "Homing_Offset": (31, 2),
-    "Present_Position": (56, 2),
-}
-INSTRUCTION_READ = 0x02
-SIGN_BIT = 11
-
-JOINT_NAMES = {
-    1: "shoulder_pan",
-    2: "shoulder_lift",
-    3: "elbow_flex",
-    4: "wrist_flex",
-    5: "wrist_roll",
-    6: "gripper",
-}
-
-
-def _checksum(data):
-    return (~sum(data)) & 0xFF
-
-
-def read_register(ser, servo_id, address, size):
-    body = [servo_id, 4, INSTRUCTION_READ, address, size]
-    ser.reset_input_buffer()
-    ser.write(bytes([0xFF, 0xFF, *body, _checksum(body)]))
-    ser.flush()
-    resp = ser.read(6 + size)
-    if (
-        len(resp) < 6 + size
-        or resp[0] != 0xFF
-        or resp[1] != 0xFF
-        or resp[2] != servo_id
-    ):
-        return None
-    return int.from_bytes(resp[5 : 5 + size], "little", signed=False)
-
-
-def decode_sign_magnitude(value, sign_bit=SIGN_BIT):
-    if value is None:
-        return None
-    mask = 1 << sign_bit
-    return -(value & (mask - 1)) if value & mask else value
+from calibrate_from_reference import JOINT_ORDER, REG, decode_sign_magnitude, read_register
 
 
 def main():
@@ -103,7 +59,7 @@ def main():
 
     calibration = {}
     with ser:
-        for servo_id, name in JOINT_NAMES.items():
+        for servo_id, name in JOINT_ORDER:
             model = read_register(ser, servo_id, *REG["Model_Number"])
             if model is None:
                 print(f"{servo_id:>3}  {name:<14}  (no response)")

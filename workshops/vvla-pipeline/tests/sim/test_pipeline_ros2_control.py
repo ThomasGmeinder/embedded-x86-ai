@@ -21,20 +21,13 @@ import tempfile
 
 import pytest
 
+from rigs import LOW_GRASP_POSE, wait_until
 from twin_ros_rig import TEST_DOMAIN_ID, assert_domain_free, join_test_domain
 
 pytestmark = [pytest.mark.sim, pytest.mark.hw, pytest.mark.slow, pytest.mark.timeout(240)]
 pytest.importorskip("rclpy")
 
-# Jaws low over the table, closing axis horizontal: how the pickup grasps the ball.
-GRASP_POSE = {"shoulder_pan": 0.0, "shoulder_lift": 9.0, "elbow_flex": 20.0, "wrist_flex": 54.0, "wrist_roll": 0.0}
 
-
-def _until(world, pred) -> None:
-    """Block until ``pred()`` holds, judged after each physics pass."""
-    seen = world.next_step(world.passes)
-    while not pred():
-        seen = world.next_step(seen)
 
 
 @pytest.fixture(scope="module")
@@ -51,12 +44,12 @@ def twin(pipeline_cfg):
     lock = acquire(TEST_DOMAIN_ID)
     cfg = copy.deepcopy(pipeline_cfg)
     cfg["robot"].update(backend="sim", command_topic=HARDWARE_COMMANDS, state_topic=HARDWARE_STATES)
-    world, nodes, closers = build_nodes(cfg, stack="pipeline", view=False)
+    world, nodes, closers = build_nodes(cfg, view=False)
     host = Spinner("pipeline_twin_host")
     for node in nodes:
         host.add_node(node)
     log = tempfile.NamedTemporaryFile(prefix="so101_control_", suffix=".log", delete=False)
-    launch = start_controllers(PIPE_ROOT / "config" / "pipeline.yaml", "pipeline", log=log)
+    launch = start_controllers(PIPE_ROOT / "config" / "pipeline.yaml", log=log)
     arm = None
     try:
         arm = Ros2ArmClient(cfg)
@@ -114,7 +107,7 @@ def test_streamed_setpoints_drive_the_forward_controller(arm):
     world, client = arm
     for pan in (5.0, 10.0, 15.0, 20.0):
         client.send_joints({"shoulder_pan": pan})
-    _until(world, lambda: abs(world.joint_cal()["shoulder_pan"] - 20.0) < 1.0)
+    wait_until(world, lambda: abs(world.joint_cal()["shoulder_pan"] - 20.0) < 1.0)
     assert client.move_to(dict(REST_POSE)) == "arrived", "the trajectory controller did not take over again"
 
 
@@ -158,7 +151,7 @@ def test_a_move_right_after_streaming_waits_for_the_arm_to_stop(arm, pipeline_cf
 
     world, client = arm
     client.send_joints({"shoulder_pan": -15.0, "shoulder_lift": -58.0, "elbow_flex": 66.0, "wrist_flex": -13.0})
-    _until(world, lambda: world.joint_cal()["shoulder_lift"] > REST_POSE["shoulder_lift"] + 5.0)
+    wait_until(world, lambda: world.joint_cal()["shoulder_lift"] > REST_POSE["shoulder_lift"] + 5.0)
     assert client.move_to(dict(REST_POSE)) == "arrived"
     held = _held_by_the_trajectory_controller(pipeline_cfg)
     off = {k: round(v - REST_POSE[k], 2) for k, v in held.items() if abs(v - REST_POSE[k]) > 0.5}
@@ -185,12 +178,12 @@ def test_the_gripper_load_and_torque_limit_cross_the_wire(arm):
     from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR
 
     world, client = arm
-    assert client.move_to({**GRASP_POSE, "gripper": OPEN_GRIPPER}) == "arrived"
-    world.stage_object("sports_ball", GRASP_POSE)
+    assert client.move_to({**LOW_GRASP_POSE, "gripper": OPEN_GRIPPER}) == "arrived"
+    world.stage_object("sports_ball", LOW_GRASP_POSE)
     client.set_gripper_torque_limit(240)  # under Overload_Torque: the squeeze never trips
-    _until(world, lambda: world.bus.read("Torque_Limit", "gripper", normalize=False) == 240)
+    wait_until(world, lambda: world.bus.read("Torque_Limit", "gripper", normalize=False) == 240)
     client.send_joints({"gripper": GRIPPER_CLOSED_FLOOR})
-    _until(world, lambda: world.is_grasped("sports_ball"))
+    wait_until(world, lambda: world.is_grasped("sports_ball"))
     wait_joint_rest(world, "gripper")
 
     def twin_counts() -> float:

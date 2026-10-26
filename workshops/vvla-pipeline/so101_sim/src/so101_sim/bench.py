@@ -125,7 +125,7 @@ def bench_contention(cfg: dict | None, n: int = 12) -> dict:
         urllib.request.urlopen(f"{base}/health", timeout=2).read()
     except Exception as e:
         return {"error": f"llama-server not reachable at {base} ({e}); start it first "
-                "(the pipeline autostarts it, or workshop/start_llama_server.sh)"}
+                "(the pipeline autostarts it, or python -m vla_pipeline.llm.llama_intent --serve)"}
     prompt = ("You map robot voice commands to JSON intents.\nCommand: pick up the red ball\nJSON:")
     _llm_request(base, prompt)  # warm the prompt cache
     alone = [_llm_request(base, prompt) for _ in range(n)]

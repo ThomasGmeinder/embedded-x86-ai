@@ -8,7 +8,9 @@
 """Run a workshop notebook the way a student does in JupyterLab.
 
 Each notebook runs top to bottom in its own ``vvla-workshop`` kernel, the
-kernel ``run_notebooks.sh`` registers. A cell that loops on ``ui_events``
+kernel ``bootstrap.sh`` registers, started as VS Code starts it: ROS 2 and the
+NPU runtime come from its ``kernel.json`` alone (:func:`kernel_env`). A cell
+that loops on ``ui_events``
 (a live camera, a console, the dance controls) runs while a scripted
 student types into its text box and clicks its buttons with the widget
 messages a browser sends, then clicks the button that ends it.
@@ -19,12 +21,11 @@ and ``REPORT`` last. The rig's hardware is replaced, nothing else:
 * the arm and the arm camera: the MuJoCo digital twin (``robot.backend: sim``,
   ``cameras.arm.source: sim``),
 * the webcam: Ultralytics' ``zidane.jpg`` (two people), panned slowly,
-* the microphone: none (Whisper still loads; Llama stays real).
+* the microphone: none, a device that does not exist (``audio.mic_device``);
+  Whisper still loads and Llama stays real.
 
 ``RIG_STANDINS`` also records every ONNX Runtime session the kernel makes,
-with the provider it got, so a test can check where YOLO ran, and turns on
-``common.twin_voice.REPORT_RECORDS`` so each console command's record
-reaches the kernel's output, where :meth:`Watcher.record` finds it.
+with the provider it got, so a test can check where YOLO ran.
 """
 
 from __future__ import annotations
@@ -33,24 +34,26 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from vla_pipeline.utils.config import REPO_ROOT as PIPE_ROOT
+
 logger = logging.getLogger(__name__)
 
-PIPE_ROOT = Path(__file__).resolve().parents[2]
 NOTEBOOKS = PIPE_ROOT / "workshop" / "notebooks"
+# A line that says a model left the NPU; the notebook tests reject it.
+CPU_FALLBACK = re.compile(r"fall(s|ing)? back to (the )?cpu", re.I)
 KERNEL = "vvla-workshop"
 
 RIG_STANDINS = '''\
 # notebook test: the rig's hardware is replaced; the notebook is not
 #   arm + arm camera -> the MuJoCo digital twin (robot.backend: sim, cameras.arm.source: sim)
 #   webcam           -> Ultralytics' zidane.jpg (two people), panned slowly
-#   microphone       -> none
+#   microphone       -> none: audio.mic_device names a device that does not exist
 import importlib.util as _ilu
-import sys as _sys
-import threading as _threading
 import time as _time
 from pathlib import Path as _Path
 
@@ -70,9 +73,7 @@ class _RecordedSession(_ort.InferenceSession):
 
 _ort.InferenceSession = _RecordedSession
 
-_sys.path.insert(0, str((_Path.cwd() / ".." / ".." / "solution").resolve()))
-import common.config as _config
-import common.speech as _speech
+import vla_pipeline.utils.config as _config
 
 _load_config = _config.load_config
 
@@ -81,6 +82,7 @@ def _twin_config(path=None):
     cfg = _load_config(path)
     cfg["robot"]["backend"] = "sim"
     cfg["cameras"]["arm"]["source"] = "sim"
+    cfg["audio"]["mic_device"] = "no microphone in the notebook test"
     return cfg
 
 
@@ -138,28 +140,6 @@ class _PhotoCamera:
 
 
 _cv2.VideoCapture = _PhotoCamera
-
-
-class _NoMic:
-    error = "no microphone in the notebook test"
-    transcribing = False
-
-    def __init__(self, *args, **kwargs):
-        self.opened = _threading.Event()
-        self.opened.set()  # tried, and failed: see error
-
-    def start(self):
-        return self
-
-    def stop(self):
-        pass
-
-
-_speech.MicListener = _NoMic
-
-import common.twin_voice as _twin_voice
-
-_twin_voice.REPORT_RECORDS = True  # the test reads each command's record from the kernel's output
 '''
 
 REPORT = '''\
@@ -172,12 +152,17 @@ FINISH = ("end session", "done", "stop")
 
 
 def kernel_env() -> dict:
-    """This process's environment (the setup's), without a display: the
-    notebooks' resource HUD then fails quietly instead of opening windows."""
-    env = os.environ.copy()
-    for name in ("DISPLAY", "WAYLAND_DISPLAY"):
-        env.pop(name, None)
-    return env
+    """This process's environment without what the kernel's ``kernel.json``
+    sets (ROS 2, the NPU runtime) and without a display.
+
+    The kernel then gets ROS 2 and the NPU only from its kernelspec, as when
+    VS Code starts it, and the notebooks' resource HUD fails quietly instead
+    of opening windows.
+    """
+    from jupyter_client.kernelspec import KernelSpecManager
+
+    baked = KernelSpecManager().get_kernel_spec(KERNEL).env
+    return {k: v for k, v in os.environ.items() if k not in baked and k not in ("DISPLAY", "WAYLAND_DISPLAY")}
 
 
 class Watcher:

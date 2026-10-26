@@ -34,13 +34,11 @@ that file to
 so LeRobot, `run_pipeline.sh` and the workshop use it for
 `robot_id: my_awesome_follower_arm` without asking for their own calibration.
 
-Test the arm with the workshop's live UI, which follows you on the webcam:
+Test the arm with the pipeline: say "copy my movements" and it follows you on the webcam:
 
 ```bash
 cd ..                      # the vvla-pipeline folder
-source activate_venv.sh    # ROS 2, .venv and the NPU runtime
-cd workshop/solution
-python app.py
+./run_pipeline.sh
 ```
 
 ---

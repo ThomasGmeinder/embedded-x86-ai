@@ -7,16 +7,17 @@
 
 """Synthetic fixtures for off-hardware runs (PROVIDED).
 
-Everything the notebooks, self-tests, and the live UI need to *do something
-useful* without an NPU, a robot, cameras, or a running llama-server:
+Everything the notebooks and self-tests need to *do something useful* without
+an NPU, a robot, cameras, or a running llama-server:
 
 - a tiny embedded ONNX model (``y = 2x``) to exercise your session factory,
 - a synthetic camera producing a moving test pattern,
 - a scripted "person" pose source and hand source so the mimic chain runs
-  end-to-end with no webcam,
+  end-to-end with no webcam (:func:`open_webcam` falls back to them),
 - a mock llama-server that speaks just enough OpenAI-compatible HTTP to test
-  your intent parsing (and records what your client actually sent),
-- an offline keyword parser as a stand-in intent brain.
+  your intent parsing (and records what your client actually sent); it
+  routes with the pipeline's keyword stand-in
+  (:func:`vla_pipeline.llm.intents.offline_parse_text`).
 """
 
 from __future__ import annotations
@@ -24,13 +25,14 @@ from __future__ import annotations
 import base64
 import json
 import math
-import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import numpy as np
+
+from vla_pipeline.llm.intents import offline_parse_text
 
 # ----------------------------------------------------------------------------
 # Tiny ONNX model (y = x * 2, input [1,4] float32) - 107 bytes.
@@ -104,6 +106,8 @@ class SyntheticCamera:
     def close(self):
         pass
 
+    release = close  # cv2.VideoCapture's name: a camera node's frame source is released
+
 
 # ----------------------------------------------------------------------------
 # Scripted pose / hands (stand-ins for the NPU + MediaPipe models)
@@ -119,7 +123,7 @@ def _script_phase(t0: float) -> float:
 
 
 class ScriptedPose:
-    """Drop-in for ``models.vision.PoseEstimator`` with a scripted person.
+    """Drop-in for :class:`vla_pipeline.vision.yolo_pose_npu.PoseEstimator` with a scripted person.
 
     ``infer`` returns one full-body detection whose right wrist orbits the
     frame, so the mimic composition (wrist -> mapper -> arm) runs without
@@ -185,13 +189,13 @@ class ScriptedPose:
 
 
 class ScriptedHands:
-    """Drop-in for ``models.hands.HandTracker`` with a scripted pinch/roll."""
+    """Drop-in for :class:`vla_pipeline.vision.mediapipe_hands.HandTracker` with a scripted pinch/roll."""
 
     def __init__(self):
         self._t0 = time.monotonic()
 
     def process(self, frame_bgr):
-        from models.hands import HandObservation
+        from vla_pipeline.vision.mediapipe_hands import HandObservation
 
         t = _script_phase(self._t0)
         pinch = 0.75 + 0.65 * math.sin(t)  # oscillates open/closed
@@ -216,56 +220,36 @@ class ScriptedHands:
         pass
 
 
+def open_webcam(cfg: dict):
+    """The webcam, YOLO-pose and MediaPipe Hands: ``(camera, pose, hands)``.
+
+    A scripted person stands in when the webcam gives no frame, for example
+    because another kernel holds it.
+    """
+    from vla_pipeline.vision.camera import make_camera
+    from vla_pipeline.vision.mediapipe_hands import HandTracker
+    from vla_pipeline.vision.yolo_pose_npu import PoseEstimator
+    from vvla_workshop.quiet import QuietHands, quiet_stderr
+
+    pose = PoseEstimator(cfg)
+    # MediaPipe's C++ init writes to stderr (absl, EGL, TFLite); QuietHands
+    # keeps later detections quiet too.
+    with quiet_stderr():
+        hands = QuietHands(HandTracker(cfg))
+        hands.process(np.zeros((64, 64, 3), np.uint8))
+    cam = make_camera(cfg, "mount")
+    if cam.read()[0]:
+        return cam, pose, hands
+    cam.close()
+    hands.close()
+    device = cfg["cameras"]["mount"].get("device")
+    print(f"webcam: no frames from {device} (in use by another kernel?) - a scripted person stands in")
+    return SyntheticCamera(), ScriptedPose(), ScriptedHands()
+
+
 # ----------------------------------------------------------------------------
 # Mock llama-server
 # ----------------------------------------------------------------------------
-
-_KEYWORD_ROUTES = [
-    (r"\b(stop|halt|freeze|abort)\b", "stop", None),
-    (r"\b(release|open|drop)\b|\blet go\b", "release", None),
-    (r"\b(copy|mirror|follow|mimic)\b", "gesture_mimic", None),
-    (r"\b(block|cube)\b", "fetch_block", None),
-    (r"\b(pick|grab|bring|fetch|get)\b", "pick_place", "OBJECT"),
-    (r"\bplace\b|\b(set|put|lay)\b.*\b(down|table)\b", "place", None),
-    (r"\b(dance|groove|party|moves)\b", "dance", None),
-    (r"\b(hold|take)\b", "grip", None),
-    (r"\b(wave|hi|hello|greet)\b", "wave", None),
-    (r"\b(home|rest|reset)\b", "home", None),
-]
-
-_OBJECT_WORDS = (
-    "ball",
-    "bottle",
-    "cup",
-    "mug",
-    "phone",
-    "apple",
-    "banana",
-    "book",
-    "toothbrush",
-    "remote",
-    "orange",
-    "teddy",
-)
-
-
-def offline_parse_text(text: str) -> dict:
-    """Keyword routing → the same ``{"command", "object"}`` dict the LLM emits.
-
-    Used by the mock server below and as the app's ``--no-llm`` brain. It is a
-    *stand-in*, not the lesson - the real thing is grammar-constrained Llama.
-    """
-    low = (text or "").lower()
-    for pattern, command, obj_mode in _KEYWORD_ROUTES:
-        if re.search(pattern, low):
-            obj = ""
-            if obj_mode == "OBJECT":
-                for word in _OBJECT_WORDS:
-                    if word in low:
-                        obj = word
-                        break
-            return {"command": command, "object": obj}
-    return {"command": "unknown", "object": ""}
 
 
 class MockLlamaServer:

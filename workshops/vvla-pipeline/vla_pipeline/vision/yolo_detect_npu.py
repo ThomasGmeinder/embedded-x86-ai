@@ -9,7 +9,8 @@
 
 Same structure as :class:`vla_pipeline.vision.yolo_pose_npu.PoseEstimator`
 (letterbox → VitisAI/CPU session → de-letterboxed outputs) but for the
-80-class COCO detection head ([1, 300, 6]: xyxy, score, class). Used by:
+80-class COCO detection head (raw ``[1, 84, 8400]``: xywh, 80 class scores,
+run through NMS; end-to-end ``[1, 300, 6]``: xyxy, score, class). Used by:
 
 - ``pick_place`` - locate the object named in the voice command ("pick up
   the **ball**") in the arm/mount camera frame;
@@ -33,11 +34,12 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
 
 from vla_pipeline.utils.config import load_config
-from vla_pipeline.utils.npu_session import build_session, size_npu
-from vla_pipeline.vision.yolo_pose_npu import head_rows, letterbox, nms_keep, xywh_to_xyxy
+from vla_pipeline.utils.npu_session import active_provider, build_npu_session, size_npu
+from vla_pipeline.vision.yolo_pose_npu import LetterboxInfo, head_rows, letterbox, nms_keep, unmap_boxes, xywh_to_xyxy
 
 logger = logging.getLogger(__name__)
 
@@ -197,21 +199,55 @@ def resolve_class(spoken: str) -> str | None:
     return None
 
 
+def decode_detections(outputs, info: LetterboxInfo, orig_shape, conf: float) -> list[Detection]:
+    """Decode a YOLOv26s-detect output into :class:`Detection` s in original pixels."""
+    preds, raw = head_rows(outputs[0], 6, 84)
+    if raw:
+        boxes = xywh_to_xyxy(preds[:, :4].astype(np.float32))
+        scores, classes = preds[:, 4:].max(axis=1), preds[:, 4:].argmax(axis=1)
+    else:
+        boxes, scores, classes = preds[:, :4].astype(np.float32), preds[:, 4], preds[:, 5]
+    mask = scores > conf
+    boxes, scores, classes = boxes[mask], scores[mask], classes[mask]
+    if raw and len(boxes):
+        keep = nms_keep(boxes, scores)
+        boxes, scores, classes = boxes[keep], scores[keep], classes[keep]
+    boxes = unmap_boxes(boxes, info, orig_shape) if len(boxes) else boxes
+    out: list[Detection] = []
+    for box, score, cls in zip(boxes, scores, classes):
+        idx = int(cls)
+        name = COCO_NAMES[idx] if 0 <= idx < len(COCO_NAMES) else f"cls{idx}"
+        out.append(Detection(name=name, score=float(score), box=box))
+    return out
+
+
+def draw_detections(frame: np.ndarray, dets: list[Detection]) -> np.ndarray:
+    """Draw labelled detection boxes; returns a copy."""
+    out = frame.copy()
+    for d in dets:
+        x1, y1, x2, y2 = d.box.astype(int)
+        cv2.rectangle(out, (x1, y1), (x2, y2), (0, 160, 255), 2)
+        cv2.putText(out, f"{d.name} {d.score:.2f}", (x1, max(y1 - 5, 12)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 160, 255), 2)
+    return out
+
+
 class ObjectDetector:
-    """YOLOv26s detection ONNX inference (end-to-end head [1, 300, 6]; raw head [1, 84, 8400] + NMS)."""
+    """YOLOv26s detection ONNX inference (raw head [1, 84, 8400] + NMS; end-to-end head [1, 300, 6])."""
 
     def __init__(self, cfg: dict, device: str | None = None):
         y = cfg["yolo_detect"]
         self.imgsz: int = int(y["imgsz"])
         size_npu(cfg)
-        self.session = build_session(
+        self.session = build_npu_session(
             y["onnx"],
             device or y["device"],
             vitisai_config=y.get("vitisai_config", "config/vaiep_config.json"),
             cache_dir=cfg.get("system", {}).get("cache_dir", "cache"),
             cache_key=y["cache_key"],
         )
-        on_npu = "VitisAIExecutionProvider" in self.session.get_providers()
+        self.provider = active_provider(self.session)
+        on_npu = self.provider == "VitisAIExecutionProvider"
         self.conf_threshold: float = float(
             y.get("npu_conf_threshold", y["conf_threshold"]) if on_npu else y["conf_threshold"]
         )
@@ -223,27 +259,7 @@ class ObjectDetector:
         """Run detection on one frame and return all detections above the confidence threshold."""
         conf = self.conf_threshold if conf is None else conf
         nchw, info = letterbox(frame_bgr, self.imgsz)
-        preds, raw = head_rows(self.session.run(None, {self.input_name: nchw})[0], 6)
-        if raw:
-            boxes = xywh_to_xyxy(preds[:, :4])
-            scores, classes = preds[:, 4:].max(axis=1), preds[:, 4:].argmax(axis=1)
-        else:
-            boxes, scores, classes = preds[:, :4], preds[:, 4], preds[:, 5]
-        mask = scores > conf
-        boxes, scores, classes = boxes[mask], scores[mask], classes[mask]
-        if raw and len(boxes):
-            keep = nms_keep(boxes, scores)
-            boxes, scores, classes = boxes[keep], scores[keep], classes[keep]
-        out: list[Detection] = []
-        h, w = frame_bgr.shape[:2]
-        for (x1, y1, x2, y2), score, cls in zip(boxes, scores, classes):
-            box = np.array([x1, y1, x2, y2], dtype=np.float32)
-            box[[0, 2]] = np.clip((box[[0, 2]] - info.pad_x) / info.ratio, 0, w)
-            box[[1, 3]] = np.clip((box[[1, 3]] - info.pad_y) / info.ratio, 0, h)
-            idx = int(cls)
-            name = COCO_NAMES[idx] if 0 <= idx < len(COCO_NAMES) else f"cls{idx}"
-            out.append(Detection(name=name, score=float(score), box=box))
-        return out
+        return decode_detections(self.session.run(None, {self.input_name: nchw}), info, frame_bgr.shape, conf)
 
     def find(
         self, frame_bgr: np.ndarray, spoken_name: str, conf: float | None = None
@@ -261,23 +277,8 @@ class ObjectDetector:
         return dets, cls
 
     def draw(self, frame: np.ndarray, dets: list[Detection]) -> np.ndarray:
-        """Draw detection boxes and labels onto frame."""
-        import cv2
-
-        out = frame.copy()
-        for d in dets:
-            x1, y1, x2, y2 = d.box.astype(int)
-            cv2.rectangle(out, (x1, y1), (x2, y2), (0, 160, 255), 2)
-            cv2.putText(
-                out,
-                f"{d.name} {d.score:.2f}",
-                (x1, max(y1 - 5, 12)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (0, 160, 255),
-                2,
-            )
-        return out
+        """Draw detection boxes and labels onto a copy of ``frame``."""
+        return draw_detections(frame, dets)
 
 
 # =============================================================================
@@ -287,8 +288,6 @@ class ObjectDetector:
 
 def main() -> None:
     """CLI entry point: live camera overlay of detections, optionally filtered by --find."""
-    import cv2
-
     from vla_pipeline.vision.camera import make_camera
 
     logging.basicConfig(

@@ -14,12 +14,10 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
-
 
 def pytest_configure(config):
     del config
-    venv = (ROOT / ".venv").resolve()
+    venv = (Path(__file__).resolve().parents[2] / ".venv").resolve()
     # .venv/bin/python symlinks to the system interpreter; sys.prefix does not.
     if Path(sys.prefix).resolve() != venv:
         pytest.exit(

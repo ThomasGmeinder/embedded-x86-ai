@@ -53,23 +53,15 @@ def _poses_from_config(cfg: dict | None) -> dict:
     poses = {k: dict(v) for k, v in PIPELINE_POSES.items()}
     if not cfg:
         return poses
-    b = cfg.get("behaviors") or {}
-    pp = b.get("pick_place") or {}
+    pp = cfg.get("pick_place") or {}
     if pp.get("scan_pose"):
         poses["scan"] = dict(pp["scan_pose"])
-    fb = b.get("fetch_block") or {}
+    fb = cfg.get("fetch_block") or {}
     if fb.get("block_pose"):
         poses["block"] = {**fb["block_pose"], "gripper": 70.0}
     return poses
 
 
-def _load_cfg(path):
-    if not path:
-        return None
-    import yaml
-
-    with open(path) as f:
-        return yaml.safe_load(f)
 
 
 def _settle(world, arm, pose, seconds=2.5):
@@ -230,12 +222,14 @@ def run_mirror(cfg, port: str, robot_id: str, seconds: float = 60.0) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="SO-101 twin calibration checks")
     ap.add_argument("what", choices=["poses", "grasp", "framing", "mirror"])
-    ap.add_argument("--config", default=None, help="pipeline.yaml / workshop.yaml")
+    ap.add_argument("--config", default=None, help="the pipeline config (poses: its scan and block poses)")
     ap.add_argument("--out", default=None)
     ap.add_argument("--port", default="/dev/ttyACM0")
     ap.add_argument("--id", default="my_awesome_follower_arm")
     args = ap.parse_args()
-    cfg = _load_cfg(args.config)
+    from vla_pipeline.utils.config import load_config
+
+    cfg = load_config(args.config) if args.config else None
     if args.what == "poses":
         run_poses(cfg, args.out or "so101_poses.png")
     elif args.what == "grasp":

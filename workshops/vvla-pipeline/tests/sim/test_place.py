@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Both stacks' copies of the known objects, "place it" and "drop it", without a scene.
+"""The pipeline's known objects, "place it" and "drop it", without a scene.
 
 The pickup's scan keeps a list of the objects it detects on the table (one
 footprint each); "place it" sets a picked object that is still in the jaws
@@ -22,7 +22,6 @@ exactly.
 from __future__ import annotations
 
 import copy
-import importlib
 from types import SimpleNamespace
 
 import numpy as np
@@ -30,10 +29,6 @@ import pytest
 
 pytestmark = pytest.mark.sim
 
-STACKS = {
-    "pipeline": ("vla_pipeline.behaviors.manipulation", "vla_pipeline.robot.arm_interface"),
-    "workshop": ("common.manipulation", "common.motion"),
-}
 # Grasp point heights the pickups log ("fingers .. mm high") with the object on the table.
 GRASP_Z = {"sports ball": 0.021, "bottle": 0.049, "toothbrush": 0.021}
 # The wrist roll the pickup holds each object out with: the toothbrush grasp turns it.
@@ -43,14 +38,12 @@ _TABLE_Z = -0.005
 _SIZE = (640, 480)
 
 
-def _stack(stack: str, request):
-    manipulation, motion = (importlib.import_module(name) for name in STACKS[stack])
-    cfg = request.getfixturevalue(f"{stack}_cfg")
-    if stack == "pipeline":
-        from vla_pipeline.behaviors._ctx import flatten_cfg
+def _stack(request):
+    """The pipeline's manipulation and arm modules, and a copy of its config."""
+    from vla_pipeline.behaviors import manipulation
+    from vla_pipeline.robot import arm_interface as motion
 
-        cfg = flatten_cfg(cfg)
-    return manipulation, motion, copy.deepcopy(cfg)
+    return manipulation, motion, copy.deepcopy(request.getfixturevalue("pipeline_cfg"))
 
 
 def _kin(motion):
@@ -120,7 +113,7 @@ def _scan_joints(cfg, pan: float) -> dict:
 
 
 def _scan_frame(manipulation, kin, cfg, joints, balls=(), extra=()):
-    """One scan frame through the stack's observer, into a fresh list."""
+    """One scan frame through the pipeline's observer, into a fresh list."""
     objects = manipulation.TableObjects()
     detector = _Detector(kin, joints, balls, extra)
     ctx, _ = _ctx(cfg, None, {}, detector)
@@ -133,8 +126,8 @@ def _known(manipulation, name, xy, radius, height):
 
 
 def test_place_phrases_route_to_place_and_drop_it_stays_release():
-    """The keyword router (the mock llama-server, the app's --no-llm brain)."""
-    from common.fixtures import offline_parse_text
+    """The keyword router (the mock llama-server, the intent node's --mock brain)."""
+    from vla_pipeline.llm.intents import offline_parse_text
 
     for phrase in ("place it", "set it down", "put it down", "set it on the table"):
         assert offline_parse_text(phrase)["command"] == "place", phrase
@@ -143,9 +136,8 @@ def test_place_phrases_route_to_place_and_drop_it_stays_release():
     assert offline_parse_text("pick up the ball and place it")["command"] == "pick_place"
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_a_scan_frame_adds_each_detected_object_where_it_rests(stack, request):
-    manipulation, motion, cfg = _stack(stack, request)
+def test_a_scan_frame_adds_each_detected_object_where_it_rests(request):
+    manipulation, motion, cfg = _stack(request)
     kin = _kin(motion)
     objects = _scan_frame(manipulation, kin, cfg, _scan_joints(cfg, -10.0), balls=[(0.30, 0.02)])
     assert len(objects.items) == 1, str(objects)
@@ -155,9 +147,8 @@ def test_a_scan_frame_adds_each_detected_object_where_it_rests(stack, request):
     assert ball.evidence == manipulation._FITTED, "a sphere has a shape model"
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_a_flat_object_is_a_strip_along_its_length(stack, request):
-    manipulation, motion, cfg = _stack(stack, request)
+def test_a_flat_object_is_a_strip_along_its_length(request):
+    manipulation, motion, cfg = _stack(request)
     kin = _kin(motion)
     joints = _scan_joints(cfg, -10.0)
     top = _TABLE_Z + 0.012
@@ -171,17 +162,15 @@ def test_a_flat_object_is_a_strip_along_its_length(stack, request):
     assert strip.evidence == manipulation._FITTED, "a toothbrush is a flat class"
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_the_jaws_in_their_own_corner_are_not_an_object(stack, request):
-    manipulation, motion, cfg = _stack(stack, request)
+def test_the_jaws_in_their_own_corner_are_not_an_object(request):
+    manipulation, motion, cfg = _stack(request)
     jaws = ("knife", (400, 290, 640, 476))  # how YOLO named the open jaws in the twin
     objects = _scan_frame(manipulation, _kin(motion), cfg, _scan_joints(cfg, -10.0), extra=[jaws])
     assert objects.items == [], str(objects)
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_an_object_seen_again_replaces_its_old_footprint(stack, request):
-    manipulation, _, _ = _stack(stack, request)
+def test_an_object_seen_again_replaces_its_old_footprint(request):
+    manipulation, _, _ = _stack(request)
     objects = manipulation.TableObjects()
     objects.see(_known(manipulation, "sports ball", (0.30, 0.06), 0.02, 0.04))
     objects.see(_known(manipulation, "bottle", (0.20, 0.20), 0.02, 0.085))
@@ -191,13 +180,12 @@ def test_an_object_seen_again_replaces_its_old_footprint(stack, request):
     assert [f.name for f in objects.items] == ["orange"], str(objects)
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_a_sighting_replaces_only_what_is_known_less_well(stack, request):
+def test_a_sighting_replaces_only_what_is_known_less_well(request):
     """The scan once named the toothbrush the arm had just laid down a
     "remote", a class with no shape model, and its 10 cm guess blocked the
     table: the arm's own record stays. A ball seen where a drop left only a
     guess replaces it."""
-    m, _, _ = _stack(stack, request)
+    m, _, _ = _stack(request)
     objects = m.TableObjects()
     laid = m._held_at("toothbrush", (0.31, -0.01))
     objects.see(laid)
@@ -212,17 +200,15 @@ def test_a_sighting_replaces_only_what_is_known_less_well(stack, request):
     assert [id(f) for f in objects.items] == [id(laid), id(seen)], str(objects)
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_a_reset_forgets_the_grip_the_pickup_and_the_objects(stack, request):
-    manipulation, _, _ = _stack(stack, request)
+def test_a_reset_forgets_the_grip_the_pickup_and_the_objects(request):
+    manipulation, _, _ = _stack(request)
     state = {**_picked(), "table_objects": manipulation.TableObjects(), "other": 1}
     manipulation.forget_scene(state)
     assert state == {"other": 1}
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_the_pinch_taking_a_held_grip_forgets_the_objects(stack, request):
-    manipulation, _, _ = _stack(stack, request)
+def test_the_pinch_taking_a_held_grip_forgets_the_objects(request):
+    manipulation, _, _ = _stack(request)
     state = {**_picked(), "table_objects": manipulation.TableObjects()}
     assert manipulation.release_to_pinch(state) is True
     assert state == {}
@@ -231,9 +217,8 @@ def test_the_pinch_taking_a_held_grip_forgets_the_objects(stack, request):
     assert "table_objects" in kept
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_drop_it_opens_where_it_is_and_the_table_below_joins_the_objects(stack, request):
-    manipulation, motion, cfg = _stack(stack, request)
+def test_drop_it_opens_where_it_is_and_the_table_below_joins_the_objects(request):
+    manipulation, motion, cfg = _stack(request)
     kin = _kin(motion)
     arm = _Arm(jaw=_HOLD + 10.0, pose=_held_out(kin, motion, 0.0))
     objects = manipulation.TableObjects()
@@ -248,9 +233,8 @@ def test_drop_it_opens_where_it_is_and_the_table_below_joins_the_objects(stack, 
     assert objects.items[0].radius >= 0.05, "a dropped object can roll farther than its own size"
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_drop_it_opens_a_handed_over_object_where_it_is(stack, request):
-    manipulation, motion, cfg = _stack(stack, request)
+def test_drop_it_opens_a_handed_over_object_where_it_is(request):
+    manipulation, motion, cfg = _stack(request)
     arm = _Arm(jaw=_HOLD + 10.0)
     state = {"grip_lock": True, "grip_lock_pos": _HOLD}  # "hold this": no pickup recorded
     ctx, said = _ctx(cfg, arm, state)
@@ -264,9 +248,8 @@ def _refused(arm, said, line: str) -> None:
     assert said == [line], said
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_place_refuses_a_handed_over_object(stack, request):
-    manipulation, _, cfg = _stack(stack, request)
+def test_place_refuses_a_handed_over_object(request):
+    manipulation, _, cfg = _stack(request)
     arm = _Arm(jaw=_HOLD + 10.0)
     state = {"grip_lock": True, "grip_lock_pos": _HOLD}
     ctx, said = _ctx(cfg, arm, state)
@@ -275,9 +258,8 @@ def test_place_refuses_a_handed_over_object(stack, request):
     assert state["grip_lock"], "a refused place kept the grip"
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_place_with_empty_jaws_says_so_and_clears_the_grip(stack, request):
-    manipulation, _, cfg = _stack(stack, request)
+def test_place_with_empty_jaws_says_so_and_clears_the_grip(request):
+    manipulation, _, cfg = _stack(request)
     arm = _Arm(jaw=_HOLD)  # closed onto the held goal: the object slipped out
     state = _picked()
     ctx, said = _ctx(cfg, arm, state)
@@ -286,9 +268,9 @@ def test_place_with_empty_jaws_says_so_and_clears_the_grip(stack, request):
     assert not {"grip_lock", "grip_lock_pos", "picked"} & set(state), state
 
 
-def _place(stack, request, known, name="sports ball"):
+def _place(request, known, name="sports ball"):
     """Run "place it" from the hold-out pose with the known objects ``known(manipulation, drop)`` lists."""
-    manipulation, motion, cfg = _stack(stack, request)
+    manipulation, motion, cfg = _stack(request)
     kin = _kin(motion)
     held_out = _held_out(kin, motion, HELD_ROLL[name])
     drop = kin.world.grasp_point(held_out, 0.04)[:2]
@@ -333,9 +315,8 @@ def _closest(kin, poses, xy, radius: float, height: float) -> float:
     return min(kin.hand_clearance(q, (xy[0], xy[1], radius, _TABLE_Z + height)) for q in poses)
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_place_sets_down_under_the_drop_position_with_nothing_known_there(stack, request):
-    r = _place(stack, request, lambda m, drop: [])
+def test_place_sets_down_under_the_drop_position_with_nothing_known_there(request):
+    r = _place(request, lambda m, drop: [])
     assert r.ok is True, r.said
     assert r.said == ["Putting the sports ball down.", "Done."], r.said
     end = _set_down_at(r.kin, r.arm)
@@ -346,14 +327,13 @@ def test_place_sets_down_under_the_drop_position_with_nothing_known_there(stack,
     assert len(r.objects.items) == 1 and np.linalg.norm(r.objects.items[0].centre - end[:2]) < 0.005, str(r.objects)
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
 @pytest.mark.parametrize("neighbour", [("sports ball", 0.02, 0.04), ("bottle", 0.02, 0.085)], ids=["ball", "standing bottle"])
-def test_place_beside_an_object_under_the_drop_position_never_touches_it(stack, neighbour, request):
+def test_place_beside_an_object_under_the_drop_position_never_touches_it(neighbour, request):
     """The held ball goes down near the object, the spacing kept, and the arm
     passes the object at every pose of the put-down: carried over, down, the
     jaws opening, back up and home."""
     name, radius, height = neighbour
-    r = _place(stack, request, lambda m, drop: [_known(m, name, drop, radius, height)])
+    r = _place(request, lambda m, drop: [_known(m, name, drop, radius, height)])
     assert r.ok is True, r.said
     end = _set_down_at(r.kin, r.arm)[:2]
     gap = float(np.linalg.norm(end - r.drop))
@@ -363,19 +343,18 @@ def test_place_beside_an_object_under_the_drop_position_never_touches_it(stack, 
     assert near > 0.0, f"the arm went {-1000 * near:.1f} mm into the {name}"
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_place_keeps_the_object_off_the_arms_way_out_of_park(stack, request):
+def test_place_keeps_the_object_off_the_arms_way_out_of_park(request):
     """A tray over the drop position leaves the nearest free table toward the
     base, where the arm unfolds from its parked pose to the ready pose and its
     open jaw would sweep a standing bottle over. The bottle goes down where
     that move passes it."""
     tray = np.array([0.33, 0.0])
-    r = _place(stack, request, lambda m, drop: [_known(m, "tray", tray, 0.08, 0.02)], name="bottle")
+    r = _place(request, lambda m, drop: [_known(m, "tray", tray, 0.08, 0.02)], name="bottle")
     assert r.ok is True, r.said
     end = _set_down_at(r.kin, r.arm)[:2]
     pp = r.cfg["pick_place"]
     park = {**r.motion.REST_POSE, "gripper": r.motion.JOINT_LIMITS["gripper"][1]}
-    way_out = [park, *_line(park, {**r.manipulation._ready(pp), "gripper": park["gripper"]})]
+    way_out = [park, *_line(park, {**r.manipulation.ready_pose(pp), "gripper": park["gripper"]})]
     _half, radius, height = r.manipulation._HELD_FOOTPRINT_M["bottle"]
     assert _closest(r.kin, way_out, end, radius, height) > 0.0, f"set down at {end}, on the arm's way out of park"
     far, gap = float(pp["place_far_m"]["bottle"]), float(np.linalg.norm(end - r.drop))
@@ -389,11 +368,10 @@ def test_place_keeps_the_object_off_the_arms_way_out_of_park(stack, request):
     )
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_every_configured_scan_view_is_inside_the_arms_joint_range(stack, request):
+def test_every_configured_scan_view_is_inside_the_arms_joint_range(request):
     """A pan past the joint's range ends where the joint stops, not where the
     scan's coverage was measured: a configured -115 deg stopped at -110."""
-    m, motion, cfg = _stack(stack, request)
+    m, motion, cfg = _stack(request)
     pp = cfg["pick_place"]
     kin = _kin(motion)
     high, pans = m._high_sweep(pp)
@@ -408,8 +386,7 @@ def test_every_configured_scan_view_is_inside_the_arms_joint_range(stack, reques
     assert not outside, f"scan views outside the arm's range: {outside}"
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_every_transit_move_passes_above_a_standing_bottle(stack, request):
+def test_every_transit_move_passes_above_a_standing_bottle(request):
     """Rest, ready, work: only the way between the parked pose and the ready
     pose dips toward the table (the place keeps objects off it). From ready
     to the scan views and between them, from the hold-out back to ready, and
@@ -417,10 +394,10 @@ def test_every_transit_move_passes_above_a_standing_bottle(stack, request):
     stays above a standing bottle's top."""
     from so101_sim.kinematics import OPEN_GRIPPER
 
-    m, motion, cfg = _stack(stack, request)
+    m, motion, cfg = _stack(request)
     pp = cfg["pick_place"]
     kin = _kin(motion)
-    ready = m._ready(pp)
+    ready = m.ready_pose(pp)
     high, pans = m._high_sweep(pp)
     views = [{**high, "shoulder_pan": float(p)} for p in pans]
     views += [{**pp["scan_near_pose"], "shoulder_pan": float(p)} for p in pp["scan_near_pans"]]
@@ -442,8 +419,7 @@ def test_every_transit_move_passes_above_a_standing_bottle(stack, request):
     assert not low, f"moves that dip below a standing bottle (mm, by start and end pan): {low}"
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_the_toothbrush_fits_lengthwise_between_two_objects(stack, request):
+def test_the_toothbrush_fits_lengthwise_between_two_objects(request):
     """Balls 11 cm either side of the line out through the drop position: the
     toothbrush as a 15.6 cm disc would not fit between them, laid pointing away
     from the base it does, and its jaws open across it without touching them."""
@@ -451,7 +427,7 @@ def test_the_toothbrush_fits_lengthwise_between_two_objects(stack, request):
         across = np.array([-drop[1], drop[0]]) / np.hypot(*drop)
         return [_known(m, f"ball {side:+.0f}", drop + side * 0.11 * across, 0.02, 0.04) for side in (1.0, -1.0)]
 
-    r = _place(stack, request, flanked, name="toothbrush")
+    r = _place(request, flanked, name="toothbrush")
     assert r.ok is True, r.said
     end = _set_down_at(r.kin, r.arm)[:2]
     across = np.array([-r.drop[1], r.drop[0]]) / np.hypot(*r.drop)
@@ -461,26 +437,24 @@ def test_the_toothbrush_fits_lengthwise_between_two_objects(stack, request):
         assert near > 0.0, f"the arm went {-1000 * near:.1f} mm into the {ball.name}"
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
-def test_place_with_no_room_near_the_drop_position_stays_holding(stack, request):
+def test_place_with_no_room_near_the_drop_position_stays_holding(request):
     """Something known covers all the table near the drop position: the arm
     says so, holds the object out where "drop it" lets it go, and does not move."""
-    r = _place(stack, request, lambda m, drop: [_known(m, "tray", drop, 0.30, 0.02)])
+    r = _place(request, lambda m, drop: [_known(m, "tray", drop, 0.30, 0.02)])
     assert r.ok is False
     _refused(r.arm, r.said, "I can't find a free spot for the sports ball.")
     assert r.state["grip_lock"] and r.state["picked"]["name"] == "sports ball"
 
 
-@pytest.mark.parametrize("stack", list(STACKS))
 @pytest.mark.parametrize("name", list(GRASP_Z))
-def test_each_object_has_a_put_down_path_under_the_drop_position(stack, name, request):
+def test_each_object_has_a_put_down_path_under_the_drop_position(name, request):
     """From the hold-out pose: carried to the carry height over the point, a
     descent that ends with the grasp point back at its resting height straight
     below, and a rise of the open jaws back up; the toothbrush ends pointing
     away from the base."""
     from so101_sim.kinematics import OPEN_GRIPPER
 
-    manipulation, motion, cfg = _stack(stack, request)
+    manipulation, motion, cfg = _stack(request)
     pp = cfg["pick_place"]
     kin = _kin(motion)
     here = _held_out(kin, motion, HELD_ROLL[name])

@@ -5,17 +5,16 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The notebook, the sim tests, and ``run_pipeline.sh --digital-twin`` must
+"""The sim tests, the console and ``run_pipeline.sh --digital-twin`` must
 reset the twin the same way.
 
-The notebook button and the pytest helper are the same three lines:
-``world.reset(parked)`` then ``arm.send_joints(parked)``. The pipeline
-console, when the arm owns the world, calls that through
-``TwinConsole._restore_twin``. ``run_pipeline.sh`` does not: ``use_ros2``
-makes the orchestrator a ``Ros2ArmClient``, so the console calls
-``reset_sim()``: it parks the arm through the controllers, then the twin's
-``/sim/reset_scene`` resets the world the control loop is driving, through
-``So101ServerNode.reset_with`` (``tests/sim/test_pipeline_ros2_control.py``
+The pytest helper resets in process: ``world.reset(parked)`` then
+``arm.send_joints(parked)``. The pipeline console, when the arm owns the
+world, calls that through ``TwinConsole._restore_twin``. ``run_pipeline.sh``
+does not: ``use_ros2`` makes the orchestrator a ``Ros2ArmClient``, so the
+console calls ``reset_sim()``: it parks the arm through the controllers, then
+the twin's ``/sim/reset_scene`` resets the world the control loop is driving,
+through ``So101ServerNode.reset_with`` (``tests/sim/test_pipeline_ros2_control.py``
 runs that path).
 """
 
@@ -45,12 +44,11 @@ _HELD = {
 }
 
 
-def _notebook_reset(arm) -> None:
-    """The reset button in ``02_digital_twin.ipynb``, and the pytest helper."""
-    from common.manipulation import forget_scene
+def _helper_reset(arm) -> None:
+    """The pytest helper (``test_scenarios._press_reset``)."""
     from so101_sim.world import restore_twin
+    from vla_pipeline.behaviors.manipulation import forget_scene
 
-    arm.world  # the notebook's world and the arm's world are the same object
     state = getattr(arm, "shared_state", None)
     if isinstance(state, dict):
         forget_scene(state)
@@ -94,19 +92,15 @@ def _pipeline_console_reset(server_arm) -> dict:
         shared_state=state,
         say=lambda _message: None,
     )
-    box = SimpleNamespace(ctx=ctx)
+    box = SimpleNamespace(ctx=ctx, _restore=None)
     box._restore_twin = lambda: TwinConsole._restore_twin(box)
     TwinConsole.reset_scene(box)
     return state
 
 
-def _arm(stack: str, cfg: dict):
+def _arm(cfg: dict):
     from so101_sim.world import SimWorld
-
-    if stack == "workshop":
-        from common.motion import REST_POSE, SimArmClient
-    else:
-        from vla_pipeline.robot.sim_arm import REST_POSE, SimArmClient
+    from vla_pipeline.robot.sim_arm import REST_POSE, SimArmClient
 
     sim = dict(cfg.get("sim") or {})
     world = SimWorld({"sim": sim}, rest_pose=REST_POSE, start=False)
@@ -161,43 +155,42 @@ def test_run_pipeline_reset_calls_the_service_not_the_local_world():
 
     calls = []
     arm = SimpleNamespace(world=None, reset_sim=lambda: calls.append("service") or True)
-    assert TwinConsole._restore_twin(SimpleNamespace(ctx=SimpleNamespace(arm=arm))) is True
+    assert TwinConsole._restore_twin(SimpleNamespace(ctx=SimpleNamespace(arm=arm), _restore=None)) is True
     assert calls == ["service"]
 
 
-def test_notebook_test_and_pipeline_resets_leave_the_same_twin(workshop_cfg, pipeline_cfg):
+def test_helper_console_and_pipeline_resets_leave_the_same_twin(pipeline_cfg):
     """One disturbed twin, reset the way each entry point resets it."""
-    from common.motion import REST_POSE as workshop_pose
     from so101_sim.config import DEFAULTS
-    from vla_pipeline.robot.arm_interface import REST_POSE as pipeline_pose
+    from vla_pipeline.robot.arm_interface import REST_POSE
 
-    assert workshop_pose == pipeline_pose == DEFAULTS["rest_pose"]
-    assert workshop_pose["wrist_flex"] == 22.5
-    assert workshop_pose["gripper"] == 38.0
+    assert REST_POSE == DEFAULTS["rest_pose"]
+    assert REST_POSE["wrist_flex"] == 22.5
+    assert REST_POSE["gripper"] == 38.0
     made = []
     try:
-        notebook = _arm("workshop", workshop_cfg)
-        in_process = _arm("pipeline", pipeline_cfg)
-        server = _arm("pipeline", pipeline_cfg)
-        made.extend((notebook, in_process, server))
+        helper = _arm(pipeline_cfg)
+        in_process = _arm(pipeline_cfg)
+        server = _arm(pipeline_cfg)
+        made.extend((helper, in_process, server))
         for arm in made:
             _disturb(arm)
-        _notebook_reset(notebook)
+        _helper_reset(helper)
         # The in-process branch is what the console does when the arm owns the
         # world. run_pipeline.sh does not take it.
         from vla_pipeline.console import TwinConsole
 
-        assert TwinConsole._restore_twin(SimpleNamespace(ctx=SimpleNamespace(arm=in_process)))
+        assert TwinConsole._restore_twin(SimpleNamespace(ctx=SimpleNamespace(arm=in_process), _restore=None))
         client_state = _pipeline_console_reset(server)
-        notebook_snap = _snap(notebook)
+        helper_snap = _snap(helper)
         diffs = []
         for label, other in (
             ("pipeline in-process", _snap(in_process)),
             ("run_pipeline service", _snap(server)),
         ):
-            found = _differ(notebook_snap, other)
+            found = _differ(helper_snap, other)
             diffs.extend(f"{label}: {line}" for line in found)
-        for label, state in (("run_pipeline client", client_state), ("notebook", notebook.shared_state)):
+        for label, state in (("run_pipeline client", client_state), ("pytest helper", helper.shared_state)):
             kept = sorted(set(state) & set(_HELD))
             if kept:
                 diffs.append(f"{label} kept {kept} across the reset")

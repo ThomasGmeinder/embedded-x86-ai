@@ -12,25 +12,23 @@ shows just three numbers, colour-coded:
 
     CPU %   (burgundy)   ·   GPU %   (orange)   ·   NPU inf/s | Idle (cyan)
 
-It runs as its own process, so the notebook kernel stays free. Use it from any
-notebook (the setup cell already puts ``common`` on the path)::
+It runs as its own process, so the notebook kernel stays free::
 
-    from common.monitor import open_monitor, close_monitor
+    from vvla_workshop.monitor import open_monitor, close_monitor
     open_monitor()      # floats on top; watch the devices while a cell runs
     close_monitor()     # dismiss it (or click the window's ✕ / press Esc)
 
-The window itself lives in ``common/resource_hud.py`` and can also be launched
-straight from the workshop folder with ``./launch_monitor.sh``.
+The window is the pipeline's resource monitor in its compact mode
+(``python -m vla_pipeline.utils.resource_monitor --hud``); the workshop folder's
+``./launch_monitor.sh`` opens it too.
 """
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 
-# The HUD lives right next to this module inside the shared common/ package.
-_HUD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resource_hud.py")
+_HUD = [sys.executable, "-m", "vla_pipeline.utils.resource_monitor", "--hud"]
 _PROC = None
 
 
@@ -56,13 +54,8 @@ def open_monitor():
     if _PROC is not None and _PROC.poll() is None:
         _say("Resource monitor is already open.")
         return _PROC
-    if not os.path.isfile(_HUD):
-        _say(f"Couldn't find the HUD at {_HUD}")
-        return None
     try:
-        _PROC = subprocess.Popen(
-            [sys.executable, _HUD], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        _PROC = subprocess.Popen(_HUD, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         _say(
             "Resource monitor opened — it floats on top of every window. "
             "Close it with its ✕, Esc, or <code>close_monitor()</code>."

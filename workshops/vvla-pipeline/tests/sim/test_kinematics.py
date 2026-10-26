@@ -96,7 +96,7 @@ def _scan_view(twin, cfg, obj, pos):
     ``(joints, class, box, (w, h), true centre)``."""
     from vla_pipeline.behaviors.manipulation import _box_usable, _high_sweep, _shape_of
 
-    pp = cfg["behaviors"]["pick_place"]
+    pp = cfg["pick_place"]
     high, pans = _high_sweep(pp)
     views = [{**high, "shoulder_pan": float(p)} for p in pans]
     views += [{**pp["scan_near_pose"], "shoulder_pan": float(p)} for p in pp["scan_near_pans"]]
@@ -119,7 +119,7 @@ def _scan_view(twin, cfg, obj, pos):
 def test_locate_on_table(twins, pipeline_cfg, kin, obj, xy):
     from so101_sim.kinematics import FLAT_CLASSES, ROUND_CLASSES
 
-    twin = twins("pipeline", pipeline_cfg)
+    twin = twins(pipeline_cfg)
     pos = np.array([xy[0], xy[1], twin.world.model.body(obj).pos[2]])
     pose, cls, box, size, truth = _scan_view(twin, pipeline_cfg, obj, pos)
 
@@ -185,7 +185,7 @@ def test_descent_waypoints_stay_on_the_vertical(kin):
 
 @pytest.mark.parametrize("yaw", [20.0, 60.0, 112.9, 160.0])
 def test_ik_closes_across_the_axis(kin, yaw):
-    from common.motion import GRASP_LIMITS
+    from vla_pipeline.robot.arm_interface import GRASP_LIMITS
 
     p = np.array([0.12, -0.24, 0.011])
     axis = np.array([math.cos(math.radians(yaw)), math.sin(math.radians(yaw)), 0.0])
@@ -213,7 +213,7 @@ def _goal_list(kin, joints, box, size, shape):
     """Locate, solve, then the joint-space goals the behavior sends."""
     from so101_sim.kinematics import joint_line
 
-    from common.motion import GRASP_LIMITS
+    from vla_pipeline.robot.arm_interface import GRASP_LIMITS
 
     loc = kin.locate_on_table(box, joints, image_size=size, shape=shape)
     assert loc is not None, f"no fix for {shape} box {box}"
@@ -248,7 +248,7 @@ def _goal_list(kin, joints, box, size, shape):
 )
 def test_grasp_path_is_deterministic(twins, pipeline_cfg, kin, obj, xy, shape):
     """Same joints and the same box: the same goals. A two-pixel shift keeps the elbow."""
-    twin = twins("pipeline", pipeline_cfg)
+    twin = twins(pipeline_cfg)
     pos = np.array([xy[0], xy[1], twin.world.model.body(obj).pos[2]])
     joints, _cls, box, size, _truth = _scan_view(twin, pipeline_cfg, obj, pos)
     first = _goal_list(kin, joints, box, size, shape)
@@ -260,7 +260,7 @@ def test_grasp_path_is_deterministic(twins, pipeline_cfg, kin, obj, xy, shape):
 
 
 def test_oriented_sqp_is_deterministic_and_does_not_flip_roll_branch(kin):
-    from common.motion import GRASP_LIMITS
+    from vla_pipeline.robot.arm_interface import GRASP_LIMITS
 
     rng = np.random.default_rng(17)
     for _ in range(12):
@@ -311,7 +311,7 @@ def test_the_twin_camera_stands_in_until_both_calibrations_are_set(kin):
 
 
 def test_default_camera_model_projects_like_the_twin(twins, pipeline_cfg, kin):
-    twin = twins("pipeline", pipeline_cfg)
+    twin = twins(pipeline_cfg)
     pos = np.array([0.28, 0.06, 0.015])
     pose, _, box, _, truth = _scan_view(twin, pipeline_cfg, "sports_ball", pos)
     u, v = kin.project(truth, pose)[0]

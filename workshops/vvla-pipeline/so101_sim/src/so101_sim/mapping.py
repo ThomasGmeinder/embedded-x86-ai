@@ -26,7 +26,7 @@ from so101_sim import MOTOR_NAMES
 BODY_JOINTS = MOTOR_NAMES[:5]
 _RES = 4096
 _MID = (_RES - 1) / 2.0
-_DEG_PER_COUNT = 360.0 / (_RES - 1)
+DEG_PER_COUNT = 360.0 / (_RES - 1)
 
 
 class JointMap:
@@ -68,12 +68,12 @@ class JointMap:
     def cal_to_raw(self, name: str, cal: float) -> int:
         if name == "gripper":
             return int(round(_MID + (float(cal) - 50.0) / 100.0 * self.g_counts_span))
-        return int(round(_MID + float(cal) / _DEG_PER_COUNT))
+        return int(round(_MID + float(cal) / DEG_PER_COUNT))
 
     def raw_to_cal(self, name: str, raw: float) -> float:
         if name == "gripper":
             return 50.0 + (float(raw) - _MID) / self.g_counts_span * 100.0
-        return (float(raw) - _MID) * _DEG_PER_COUNT
+        return (float(raw) - _MID) * DEG_PER_COUNT
 
     def quantize(self, name: str, cal: float) -> float:
         """Snap to the encoder resolution, as Present_Position reads do."""

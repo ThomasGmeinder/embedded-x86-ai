@@ -1080,6 +1080,100 @@ class MonitorApp(_Tk):
         self.destroy()
 
 
+class HudApp(_Tk):
+    """The compact HUD (``--hud``): a frameless always-on-top window with CPU %,
+    GPU % and NPU inferences/s. Drag to move; Esc, right-click or the x closes
+    it; 't' toggles always-on-top."""
+
+    def __init__(self, topmost=True):
+        super().__init__()
+        self.title("Resource HUD")
+        self.overrideredirect(True)
+        self._topmost = topmost
+        self.attributes("-topmost", topmost)
+        self.configure(bg=C_CPU)  # 2 px accent border around the card
+        body = tk.Frame(self, bg=CARD, padx=12, pady=9)
+        body.pack(padx=2, pady=2)
+        head = tk.Frame(body, bg=CARD)
+        head.pack(fill="x")
+        tk.Label(head, text="RESOURCES", bg=CARD, fg=DIM, font=("TkDefaultFont", 8, "bold")).pack(side="left")
+        close = tk.Label(head, text="✕", bg=CARD, fg=DIM, cursor="hand2", font=("TkDefaultFont", 10, "bold"))
+        close.pack(side="right")
+        close.bind("<Button-1>", self._close)
+        self._rows = {}
+        for name, color in (("CPU", C_CPU), ("GPU", C_GPU), ("NPU", C_NPU)):
+            row = tk.Frame(body, bg=CARD)
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=name, bg=CARD, fg=color, width=4, anchor="w",
+                     font=("TkDefaultFont", 11, "bold")).pack(side="left")
+            bar = tk.Canvas(row, width=88, height=10, bg=BG, highlightthickness=0) if name != "NPU" else None
+            if bar is not None:
+                bar.pack(side="left", padx=(2, 8))
+            value = tk.Label(row, text="--", bg=CARD, fg=FG, width=9, anchor="e", font=("Monospace", 12, "bold"))
+            value.pack(side="right")
+            self._rows[name] = (bar, value, color)
+            for w in (row, bar, value):
+                if w is not None:
+                    w.bind("<ButtonPress-1>", self._start_move)
+                    w.bind("<B1-Motion>", self._on_move)
+        for w in (self, body, head):
+            w.bind("<ButtonPress-1>", self._start_move)
+            w.bind("<B1-Motion>", self._on_move)
+        self.bind("<Escape>", self._close)
+        self.bind("<Button-3>", self._close)
+        self.bind("<Key-t>", lambda e: self._toggle_top())
+        self.update_idletasks()
+        self.geometry(f"+{max(self.winfo_screenwidth() - self.winfo_width() - 24, 0)}+40")
+        self._cpu = self._gpu = self._npu = None
+        self._stop = threading.Event()
+        threading.Thread(target=self._sample_cpu_gpu, daemon=True).start()
+        threading.Thread(target=self._sample_npu, daemon=True).start()
+        self.after(250, self._refresh)
+        self.protocol("WM_DELETE_WINDOW", self._close)
+
+    def _start_move(self, e):
+        self._ox, self._oy = e.x_root - self.winfo_x(), e.y_root - self.winfo_y()
+
+    def _on_move(self, e):
+        self.geometry(f"+{e.x_root - self._ox}+{e.y_root - self._oy}")
+
+    def _sample_cpu_gpu(self):
+        while not self._stop.is_set():
+            self._cpu = (read_top().get("cpu") or {}).get("total")
+            busy = read_gpu_busy()
+            self._gpu = busy if busy is not None else (read_radeontop() or {}).get("pipes", {}).get("gpu")
+            self._stop.wait(UPDATE_INTERVAL)
+
+    def _sample_npu(self):
+        while not self._stop.is_set():
+            self._npu = read_xrt_util().get("ips") if _XRT_SMI else None
+            self._stop.wait(NPU_UTIL_INTERVAL)
+
+    def _refresh(self):
+        if self._topmost:  # re-assert so window managers don't drop it
+            self.lift()
+            self.attributes("-topmost", True)
+        for name, pct in (("CPU", self._cpu), ("GPU", self._gpu)):
+            bar, value, color = self._rows[name]
+            bar.delete("all")
+            if pct is not None:
+                bar.create_rectangle(0, 0, min(max(pct, 0.0), 100.0) / 100.0 * 88, 10, fill=color, outline="")
+            value.config(text="N/A" if pct is None else f"{pct:.0f}%")
+        _bar_, value, color = self._rows["NPU"]
+        idle = not self._npu
+        value.config(text="Idle" if idle else f"{self._npu:.0f} inf/s", fg=DIM if idle else color)
+        self.after(500, self._refresh)
+
+    def _toggle_top(self):
+        self._topmost = not self._topmost
+        self.attributes("-topmost", self._topmost)
+
+    def _close(self, *_):
+        self._stop.set()
+        self.destroy()
+        return "break"
+
+
 # ================================================================== headless
 
 
@@ -1212,7 +1306,12 @@ def main(argv=None):
         default=UPDATE_INTERVAL,
         help="seconds between refreshes in headless mode",
     )
+    parser.add_argument("--hud", action="store_true", help="the compact always-on-top CPU/GPU/NPU window")
+    parser.add_argument("--no-top", action="store_true", help="with --hud: do not keep the window on top")
     args = parser.parse_args(argv)
+    if args.hud:
+        HudApp(topmost=not args.no_top).mainloop()
+        return
 
     want_headless = args.headless or args.once or tk is None
     # No X display (typical over SSH) -> the Tk GUI can't open, so don't try.

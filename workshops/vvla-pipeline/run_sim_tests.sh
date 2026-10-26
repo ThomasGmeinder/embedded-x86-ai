@@ -15,11 +15,11 @@
 #   ./run_sim_tests.sh --sim-yolo-device cpu
 #   ./run_sim_tests.sh --sim-video failed
 #   ./run_sim_tests.sh --sim-eyes seg
-#   PROJECT=project ./run_sim_tests.sh -k workshop  # students' workshop code
+#
+# ./bootstrap.sh installs everything these tests import.
 set -euo pipefail
 
 say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m warn:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 say "run_sim_tests.sh${*:+ $*}"
@@ -41,13 +41,6 @@ set +u +e
 # shellcheck disable=SC1090
 source "$ROS_SETUP" || die "ROS 2 setup failed"
 set -e -u
-
-say "Installing so101_sim from this clone"
-"$PY" -m pip install --no-deps --upgrade --force-reinstall -e "${REPO_ROOT}/so101_sim"
-"$PY" -m so101_sim.assets || die "could not fetch the SO-101 meshes"
-
-"$PY" -c 'import pytest' || "$PY" -m pip install pytest
-"$PY" -c 'import pytest_timeout' || "$PY" -m pip install pytest-timeout
 
 export VVLA_TEST_STRICT=1
 RC=0

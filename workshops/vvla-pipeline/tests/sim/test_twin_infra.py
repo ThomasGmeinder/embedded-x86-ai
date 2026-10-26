@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The notebook twin's plumbing: ``so101_sim.node --notebook-twin`` and ``common.twin_ros``.
+"""The notebook twin's plumbing: ``so101_sim.node --notebook-twin`` and ``vvla_workshop.twin_ros``.
 
 Tier 2 (ROS 2): ``./run_sim_tests.sh``.
 """
@@ -27,10 +27,8 @@ from twin_ros_rig import (
     BODY_JOINTS,
     EXTENDED,
     TEST_DOMAIN_ID,
-    Probe,
     assert_domain_free,
     default_scene_snapshot,
-    join_test_domain,
     quat_close,
     wait_exit,
     xml_poses,
@@ -38,16 +36,6 @@ from twin_ros_rig import (
 
 pytestmark = [pytest.mark.sim, pytest.mark.hw, pytest.mark.slow, pytest.mark.timeout(240)]
 pytest.importorskip("rclpy")
-
-SOLUTION = Path(__file__).resolve().parents[2] / "workshop" / "solution"
-
-
-@pytest.fixture(scope="module")
-def probe(workshop_cfg):
-    join_test_domain()
-    p = Probe(workshop_cfg)
-    yield p
-    p.close()
 
 
 @pytest.fixture
@@ -59,10 +47,10 @@ def no_twin():
 
 
 @pytest.fixture
-def twin(workshop_cfg, no_twin):
-    from common.twin_ros import TwinSession
+def twin(pipeline_cfg, no_twin):
+    from vvla_workshop.twin_ros import TwinSession
 
-    session = TwinSession(workshop_cfg)
+    session = TwinSession(pipeline_cfg)
     yield session
     session.close()
 
@@ -85,33 +73,32 @@ def _first_state_or_exit(probe, proc: subprocess.Popen) -> None:
         unsubscribe()
 
 
-def test_default_launch_is_unchanged(workshop_cfg, probe, no_twin):
-    """Without --notebook-twin: the workshop CameraNode, no scene topic, the
-    live-mimic clamp. The reset service is every twin's."""
-    from common.config import DEFAULT_CONFIG
-    from common.motion import GRASP_LIMITS
-    from ros.arm_client import Ros2ArmClient
+def test_default_launch_is_unchanged(pipeline_cfg, probe, no_twin):
+    """Without --notebook-twin: the pipeline's CameraNode, no scene topic, and
+    the server's clamp to the grasp envelope. The reset service is every twin's."""
     from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
     from so101_sim.node import PROPS_SETTLED_TOPIC, RESET_SERVICE
+    from vla_pipeline.robot.arm_interface import GRASP_LIMITS
+    from vla_pipeline.robot.robot_node import Ros2ArmClient
+    from vla_pipeline.utils.config import DEFAULT_CONFIG
 
     from std_msgs.msg import Bool
 
-    r = workshop_cfg["robot"]
+    r = pipeline_cfg["robot"]
     log = tempfile.NamedTemporaryFile(prefix="twin_default_", suffix=".log", delete=False)
     proc = subprocess.Popen(
-        [sys.executable, "-m", "so101_sim.node", "--config", str(DEFAULT_CONFIG),
-         "--stack", "workshop", "--sim-cameras", "arm",
+        [sys.executable, "-m", "so101_sim.node", "--config", str(DEFAULT_CONFIG), "--sim-cameras", "arm",
          "--ros-args", "-r", f"{r['command_topic']}:={HARDWARE_COMMANDS}",
          "-r", f"{r['state_topic']}:={HARDWARE_STATES}"],
         stdout=log, stderr=subprocess.STDOUT, env=os.environ.copy(),
     )
-    controllers = start_controllers(DEFAULT_CONFIG, "workshop", log=log)
+    controllers = start_controllers(DEFAULT_CONFIG, log=log)
     try:
         _first_state_or_exit(probe, proc)
         assert proc.poll() is None, Path(log.name).read_text()
         probe.first_message("/cameras/arm/healthy", Bool)
         assert PROPS_SETTLED_TOPIC not in probe.topics()
-        arm = Ros2ArmClient(workshop_cfg)
+        arm = Ros2ArmClient(pipeline_cfg)
         try:
             assert RESET_SERVICE in probe.services()
             arm.go_to(EXTENDED)
@@ -119,8 +106,8 @@ def test_default_launch_is_unchanged(workshop_cfg, probe, no_twin):
             wrist = arm.get_joints()["wrist_flex"]
         finally:
             arm.close()
-        # LIVE_MIMIC_LIMITS caps the wrist at 84.4 in the server, so the 90 deg goal ends there
-        assert 81.0 <= wrist <= 84.9, f"wrist settled at {wrist:.1f}"
+        # The pipeline's server clamps a goal to GRASP_LIMITS, so the 90 deg wrist reaches the twin
+        assert wrist >= 87.5, f"wrist settled at {wrist:.1f}"
     finally:
         stop_controllers(controllers)
         _stop(proc)
@@ -129,7 +116,7 @@ def test_default_launch_is_unchanged(workshop_cfg, probe, no_twin):
 
 
 def test_grasp_moves_keep_the_grasp_envelope(twin):
-    from common.motion import GRASP_LIMITS
+    from vla_pipeline.robot.arm_interface import GRASP_LIMITS
 
     twin.arm.go_to(EXTENDED)
     twin.arm.go_to({"wrist_flex": 90.0}, limits=GRASP_LIMITS)
@@ -142,7 +129,7 @@ def test_grasp_moves_keep_the_grasp_envelope(twin):
 
 
 def test_frames_are_stamped_after_the_arm_settles(twin):
-    from common.twin_console import FanoutCamera
+    from vla_pipeline.console import FanoutCamera
 
     twin.arm.go_to({"shoulder_pan": 20.0})
     settled_at = time.time()
@@ -169,10 +156,9 @@ def test_the_props_are_tf_frames_with_a_typed_status(twin, probe):
     from std_msgs.msg import Bool
     from tf2_ros import Buffer, TransformListener
 
-    from common.motion import GRIPPER_TORQUE_LIMIT
-    from common.ros2_control_arm import REPLY_S
-    from common.ros_helpers import Spinner
     from so101_sim.node import PROPS_SETTLED_TOPIC, WORLD_FRAME
+    from vla_pipeline.robot.arm_interface import GRIPPER_TORQUE_LIMIT
+    from vla_pipeline.robot.ros2_control_arm import REPLY_S, Spinner
 
     scene = twin.scene.latest(after=time.time(), settled=True, timeout=None)
     spin = Spinner("tf_probe")
@@ -226,11 +212,11 @@ except ExternalShutdownException:
 """
 
 
-def test_the_twin_domain_is_private(workshop_cfg, no_twin):
+def test_the_twin_domain_is_private(pipeline_cfg, no_twin):
     """A joint-state publisher on another domain is invisible to the twin, and the
     twin to it: once the twin and its clients are up, that domain lists none of its topics."""
-    from common.twin_ros import TwinSession
     from so101_sim.node import PROPS_SETTLED_TOPIC
+    from vvla_workshop.twin_ros import TwinSession
 
     env = {**os.environ, "ROS_DOMAIN_ID": str(TEST_DOMAIN_ID + 1)}
     other = subprocess.Popen(
@@ -243,7 +229,7 @@ def test_the_twin_domain_is_private(workshop_cfg, no_twin):
                 break
         else:
             pytest.fail("the other domain's publisher exited before it started")
-        session = TwinSession(workshop_cfg)
+        session = TwinSession(pipeline_cfg)
         try:
             joints = session.arm.get_joints()
             assert joints["shoulder_lift"] == pytest.approx(-96.5, abs=2.0), joints
@@ -260,11 +246,11 @@ def test_the_twin_domain_is_private(workshop_cfg, no_twin):
     assert PROPS_SETTLED_TOPIC not in seen and "/cameras/arm/image_raw" not in seen, seen
 
 
-def test_a_second_twin_on_the_domain_is_refused(workshop_cfg, twin):
-    from common.twin_ros import TwinSession
+def test_a_second_twin_on_the_domain_is_refused(pipeline_cfg, twin):
+    from vvla_workshop.twin_ros import TwinSession
 
     with pytest.raises(RuntimeError, match="already runs on ROS domain"):
-        TwinSession(workshop_cfg)
+        TwinSession(pipeline_cfg)
     assert twin.scene.latest(after=time.time(), timeout=None) is not None, "the first twin stopped"
     assert twin.armcam.read()[0]
 
@@ -280,9 +266,8 @@ def test_the_node_dies_with_its_kernel(no_twin):
     try:
         kc.wait_for_ready(timeout=None)
         code = (
-            f"import sys; sys.path.insert(0, {str(SOLUTION)!r})\n"
-            "from common.config import load_config\n"
-            "from common.twin_ros import TwinSession\n"
+            "from vla_pipeline.utils.config import load_config\n"
+            "from vvla_workshop.twin_ros import TwinSession\n"
             "twin = TwinSession(load_config())\n"
             "print('TWIN_PID', twin.pid, twin.controllers_pid)\n"
         )
@@ -307,16 +292,16 @@ def test_the_node_dies_with_its_kernel(no_twin):
             pass
 
 
-def test_reset_service_restores_the_scene_and_parks_the_arm(workshop_cfg, probe, no_twin):
+def test_reset_service_restores_the_scene_and_parks_the_arm(pipeline_cfg, probe, no_twin):
     """The reset parks the arm through the controllers, then puts the props
     back, so the server's first report after it shows the arm parked."""
-    from common.motion import REST_POSE
-    from common.twin_ros import TwinSession
+    from vla_pipeline.robot.arm_interface import REST_POSE
+    from vvla_workshop.twin_ros import TwinSession
 
-    moved = default_scene_snapshot(workshop_cfg)
+    moved = default_scene_snapshot(pipeline_cfg)
     moved["bodies"]["sports_ball"][:3] = [0.22, -0.04, 0.015]
-    home = xml_poses(workshop_cfg)
-    session = TwinSession(workshop_cfg, scene=moved)
+    home = xml_poses(pipeline_cfg)
+    session = TwinSession(pipeline_cfg, scene=moved)
     try:
         start = session.scene.latest(timeout=None)
         assert start["bodies"]["sports_ball"]["xyz"][:2] == pytest.approx([0.22, -0.04], abs=0.01)
@@ -352,9 +337,8 @@ _DISCOVERY_SUB = """
 import os, sys
 os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"] = "LOCALHOST"
 os.environ["FASTDDS_BUILTIN_TRANSPORTS"] = "LARGE_DATA"
-sys.path.insert(0, sys.argv[1])
-from common.twin_ros import use_private_domain
-use_private_domain(int(sys.argv[2]))
+from vvla_workshop.twin_ros import use_private_domain
+use_private_domain(int(sys.argv[1]))
 import rclpy
 from std_msgs.msg import String
 node = rclpy.create_node("twin_discovery_sub")
@@ -370,9 +354,8 @@ import os, sys
 from pathlib import Path
 os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"] = "LOCALHOST"
 os.environ["FASTDDS_BUILTIN_TRANSPORTS"] = "LARGE_DATA"
-sys.path.insert(0, sys.argv[1])
-from common.twin_ros import use_private_domain
-use_private_domain(int(sys.argv[2]))
+from vvla_workshop.twin_ros import use_private_domain
+use_private_domain(int(sys.argv[1]))
 assert os.environ.get("ROS_AUTOMATIC_DISCOVERY_RANGE") != "LOCALHOST"
 assert os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"].endswith("twin_localhost.xml")
 assert os.environ.get("FASTDDS_BUILTIN_TRANSPORTS") == "LARGE_DATA"
@@ -417,14 +400,14 @@ def test_localhost_discovery_keeps_large_data_transports():
     """
     domain = "94"
     sub = subprocess.Popen(
-        [sys.executable, "-c", _DISCOVERY_SUB, str(SOLUTION), domain],
+        [sys.executable, "-c", _DISCOVERY_SUB, domain],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=os.environ.copy(),
     )
     pub = None
     try:
         assert _line(sub, "READY") == "READY"
         pub = subprocess.Popen(
-            [sys.executable, "-c", _DISCOVERY_PUB, str(SOLUTION), domain],
+            [sys.executable, "-c", _DISCOVERY_PUB, domain],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=os.environ.copy(),
         )
         tcp = _line(pub, "TCP")

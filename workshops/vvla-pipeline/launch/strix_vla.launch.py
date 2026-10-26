@@ -30,7 +30,6 @@ terminal once the nodes are up.
 """
 
 import sys
-from pathlib import Path
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, OpaqueFunction
@@ -38,7 +37,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+from vla_pipeline.utils.config import DEFAULT_CONFIG, REPO_ROOT
 PY = sys.executable  # the venv's python (launch must run inside .venv)
 
 
@@ -46,8 +45,6 @@ def _arm(context):
     """The bus owner - the twin or the arm server - on the hardware topics, and its controllers."""
     if LaunchConfiguration("arm").perform(context) != "true":
         return []
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
     from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, LAUNCH_FILE
     from vla_pipeline.utils.config import load_config
 
@@ -62,7 +59,7 @@ def _arm(context):
     ]
     if twin:
         # The twin hosts the arm server and renders the arm camera (they share the physics).
-        cmd = [PY, "-m", "so101_sim.node", "--config", config, "--stack", "pipeline", "--sim-cameras", "arm"]
+        cmd = [PY, "-m", "so101_sim.node", "--config", config, "--sim-cameras", "arm"]
         name = "so101_sim"
     else:
         cmd = [PY, "-m", "vla_pipeline.robot.robot_node", "--server", *(["--dry-run"] if dry_run else []),
@@ -72,7 +69,7 @@ def _arm(context):
         ExecuteProcess(cmd=[*cmd, *remaps], cwd=str(REPO_ROOT), output="screen", name=name),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(LAUNCH_FILE)),
-            launch_arguments={"config": config, "stack": "pipeline"}.items(),
+            launch_arguments={"config": config}.items(),
         ),
     ]
 
@@ -88,7 +85,7 @@ def generate_launch_description() -> LaunchDescription:
         [
             DeclareLaunchArgument(
                 "config",
-                default_value=str(REPO_ROOT / "config" / "pipeline.yaml"),
+                default_value=str(DEFAULT_CONFIG),
                 description="pipeline YAML with cameras/robot parameters",
             ),
             DeclareLaunchArgument(

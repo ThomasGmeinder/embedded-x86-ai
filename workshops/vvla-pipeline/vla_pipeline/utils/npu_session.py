@@ -8,8 +8,9 @@
 """ONNX Runtime session factory for the Ryzen AI NPU (VitisAIExecutionProvider).
 
 YOLO-pose and YOLO-detect build their NPU sessions through
-:func:`build_session` so the VitisAI compiler config, cache directory, and
-provider verification live in exactly one place.
+:func:`build_npu_session` so the VitisAI compiler config, cache directory, and
+provider verification live in exactly one place. ``npu_available``,
+``build_npu_session`` and ``active_provider`` are the workshop's TODOs 1.1-1.3.
 
 Notes for Ryzen AI SW 1.7.1 on Linux (Strix Halo / XDNA2):
 - ``onnxruntime`` must be the Ryzen AI build that ships
@@ -107,7 +108,7 @@ def size_npu(cfg: dict) -> None:
         logger.warning("Could not size the NPU buffers with %s (%s)", onnx_path.name, e)
 
 
-def build_session(
+def build_npu_session(
     onnx_path: str | Path,
     device: str = "npu",
     *,

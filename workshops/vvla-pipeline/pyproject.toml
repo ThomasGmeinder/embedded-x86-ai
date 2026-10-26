@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vvla-pipeline"
+version = "0.1.0"
+description = "Voice-driven SO-101 pipeline on Ryzen AI, and the workshop that teaches it"
+requires-python = ">=3.10"
+license = { text = "BSD-3-Clause" }
+
+# The workshop's teaching harness installs as vvla_workshop, and the files
+# students edit as vvla_workshop.project, so a notebook imports both the same
+# way from any kernel, whatever started it.
+[tool.setuptools]
+packages = [
+    "vla_pipeline",
+    "vla_pipeline.audio",
+    "vla_pipeline.behaviors",
+    "vla_pipeline.llm",
+    "vla_pipeline.robot",
+    "vla_pipeline.utils",
+    "vla_pipeline.vision",
+    "vvla_workshop",
+    "vvla_workshop.project",
+    "vvla_workshop.project.integration",
+    "vvla_workshop.project.models",
+    "vvla_workshop.project.ros",
+]
+
+[tool.setuptools.package-dir]
+vla_pipeline = "vla_pipeline"
+vvla_workshop = "workshop/common"
+"vvla_workshop.project" = "workshop/project"

@@ -7,9 +7,8 @@
 
 """Component 2 - ROS 2 nodes and topics.
 
-Your TODOs live in ``camera_node.py`` / ``camera_client.py`` (frames),
-``arm_node.py`` / ``arm_client.py`` (joint commands and state), and
-``intent_node.py`` (the Llama intent node). Run the harness with:
+Your TODOs live in ``camera_client.py`` (frames) and ``intent_node.py`` (the
+Llama intent node). Check them with:
 
-    python -m ros.selftest            # over ROS 2 (source /opt/ros/jazzy/setup.bash first)
+    python -m vvla_workshop.selftest_ros     # over ROS 2 (source /opt/ros/jazzy/setup.bash first)
 """

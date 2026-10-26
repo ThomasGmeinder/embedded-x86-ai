@@ -21,12 +21,15 @@ This module replaces that with a proper VAD front end:
   real microphone, so phrases stayed open and were never transcribed;
 - backend ``webrtcvad`` when installed (config ``audio.vad.backend: auto``),
   else an adaptive-noise-floor energy detector (no new hard dependency);
-- minimum speech length to reject coughs/keyboard clacks.
+- minimum speech length to reject coughs/keyboard clacks, counted without
+  the pre-roll the utterance actually started with (the ring restarts empty
+  after each utterance).
 
 Latency budget (whisper-base on the NPU, llama on iGPU): hangover 1.2 s +
 ASR ~0.2-0.4 s + intent ~0.1 s from end-of-speech to behavior dispatch.
 Transcription runs off the microphone thread, so capture keeps going while
-Whisper decodes.
+Whisper decodes. :class:`FastListener` reports every sound that never
+becomes text (``on_drop``): too short, no words, microphone audio lost.
 
 The detection core (:class:`SpeechSegmenter`) is pure block-in/segment-out so
 it unit-tests without a microphone:
@@ -144,18 +147,22 @@ class SpeechSegmenter:
         )
         self._speech: list[np.ndarray] = []
         self._silence_blocks = 0
+        self._lead = 0  # pre-roll blocks the current utterance started with
         self.in_speech = False
+        self.dropped_s = 0.0  # speech in a segment the last push() dropped as too short, else 0
 
     def reset(self) -> None:
         """Clear all segmenter state back to the not-in-speech starting point."""
         self._pre_roll.clear()
         self._speech.clear()
         self._silence_blocks = 0
+        self._lead = 0
         self.in_speech = False
 
     def push(self, block: np.ndarray) -> np.ndarray | None:
         """Feed one audio block; return the completed utterance once end-of-speech is confirmed, else None."""
         c = self.cfg
+        self.dropped_s = 0.0
         speechy = self._vad.is_speech(block)
 
         if not self.in_speech:
@@ -163,6 +170,10 @@ class SpeechSegmenter:
             if speechy:
                 self.in_speech = True
                 self._speech = list(self._pre_roll)
+                # The ring restarts empty after each utterance, so speech soon
+                # after one starts with less pre-roll than its maximum. The
+                # block that started it is speech.
+                self._lead = len(self._pre_roll) - 1
                 self._silence_blocks = 0
             return None
 
@@ -181,21 +192,31 @@ class SpeechSegmenter:
             return None
 
         audio = np.concatenate(self._speech)
+        voiced_s = (len(self._speech) - self._silence_blocks - self._lead) * self.block_s
         self.reset()
-        voiced_s = (len(audio) / SAMPLE_RATE) - c.hangover_s - c.pre_roll_s
         if voiced_s < c.min_speech_s:
-            return None  # too short - likely a click/cough
+            self.dropped_s = max(voiced_s, 0.0)  # too short - likely a click/cough
+            return None
         return audio
 
 
 class FastListener:
-    """Microphone loop around :class:`SpeechSegmenter` + a transcriber.
+    """Microphone thread around :class:`SpeechSegmenter`: each utterance → ``on_transcript(text)``.
 
     ``transcriber`` is any callable ``np.ndarray → str`` - in the pipeline
     it's ``WhisperNPU.transcribe`` (NPU sessions stay warm between
-    utterances). Designed to run on a background thread; utterances appear on
-    :meth:`listen_once`'s return or via a callback in :meth:`run_forever`.
+    utterances). :meth:`start` opens the microphone on its own thread and
+    keeps it hot until :meth:`stop`, so a spoken "stop" can interrupt a
+    running behavior. ``on_level(rms, in_speech)`` gets every block (for a
+    level meter), ``on_busy(True/False)`` brackets each decode, and
+    ``on_drop(reason)`` hears about every utterance that never becomes text:
+    speech too short to count, a transcript with no words, and microphone
+    audio lost because the CPU was too busy to read it. ``opened`` is set
+    once the microphone was tried; ``error`` then holds the reason if it
+    could not be opened.
     """
+
+    OVERFLOW_REPORT_S = 2.0  # at most one "audio lost" report per this many seconds
 
     def __init__(self, cfg: dict, transcriber, mic_device=None):
         self.vcfg = VadConfig.from_cfg(cfg)
@@ -205,63 +226,76 @@ class FastListener:
             if mic_device is not None
             else cfg.get("audio", {}).get("mic_device")
         )
+        self.error: str | None = None
+        self.opened = threading.Event()
+        self.overflows = 0  # microphone blocks lost since start
+        self._thread: threading.Thread | None = None
 
-    def _stream(self):
-        """Open the microphone input stream and the queue its callback feeds."""
-        import sounddevice as sd
-
-        q_audio: queue.Queue[np.ndarray] = queue.Queue(maxsize=_AUDIO_QUEUE_BLOCKS)
-
-        def callback(indata, frames, t, status):
-            """sounddevice callback: push each captured block onto q_audio."""
-            if status:
-                logger.warning("sounddevice status: %s", status)
+    def _dropped(self, reason: str) -> None:
+        logger.info("utterance dropped: %s", reason)
+        if self._on_drop is not None:
             try:
-                q_audio.put_nowait(indata.copy().squeeze())
-            except queue.Full:
-                try:
-                    q_audio.get_nowait()
-                except queue.Empty:
-                    pass
-                try:
-                    q_audio.put_nowait(indata.copy().squeeze())
-                except queue.Full:
-                    pass
+                self._on_drop(reason)
+            except Exception:
+                logger.exception("on_drop failed")
 
-        stream = sd.InputStream(
-            samplerate=SAMPLE_RATE,
-            channels=1,
-            dtype="float32",
-            blocksize=BLOCK_SAMPLES,
-            callback=callback,
-            device=self.mic_device,
-        )
-        return stream, q_audio
-
-    def listen_once(
-        self, timeout_s: float | None = None, stop_check=None
-    ) -> str | None:
-        """Block until one utterance is captured + transcribed (or timeout)."""
-        seg = SpeechSegmenter(self.vcfg)
+    def _audio_in(self, indata, frames, time_info, status) -> None:
+        """sounddevice callback: queue the block, dropping the oldest when full; count lost blocks."""
+        if status.input_overflow:
+            self.overflows += 1
+        block = indata[:, 0].copy()
         try:
-            stream, q_audio = self._stream()
-        except Exception as e:
-            logger.error("Microphone unavailable: %s", e)
+            self._blocks.put_nowait(block)
+        except queue.Full:
+            self.overflows += 1
+            try:
+                self._blocks.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._blocks.put_nowait(block)
+            except queue.Full:
+                pass
+
+    def start(self, on_transcript, on_level=None, on_busy=None, on_drop=None) -> "FastListener":
+        """Open the microphone and listen on a thread until :meth:`stop`."""
+        self._on_transcript, self._on_level, self._on_busy, self._on_drop = on_transcript, on_level, on_busy, on_drop
+        self.error = None
+        self.overflows = 0
+        self.opened.clear()
+        self._blocks: queue.Queue = queue.Queue(maxsize=_AUDIO_QUEUE_BLOCKS)  # None ends the listener
+        self._jobs: queue.Queue = queue.Queue(maxsize=_DECODE_QUEUE_UTTERANCES)  # None ends the decoder
+        self._thread = threading.Thread(target=self._run, daemon=True, name="mic")
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        """End the listener; the microphone closes and the last decode finishes."""
+        if self._thread is None:
+            return
+        self._blocks.put(None)
+        self._thread.join()
+        self._thread = None
+
+    def listen_once(self, timeout_s: float | None = None, on_drop=None) -> str | None:
+        """One transcribed utterance, or None when ``timeout_s`` passes first or the microphone fails."""
+        heard: queue.Queue[str] = queue.Queue()
+        self.start(heard.put, on_drop=on_drop)
+        try:
+            self.opened.wait()
+            if self.error is not None:
+                return None
+            return heard.get(timeout=timeout_s)
+        except queue.Empty:
             return None
-        deadline = time.time() + timeout_s if timeout_s else None
-        with stream:
-            while True:
-                if stop_check and stop_check():
-                    return None
-                if deadline and time.time() > deadline and not seg.in_speech:
-                    return None
-                try:
-                    block = q_audio.get(timeout=0.2)
-                except queue.Empty:
-                    continue
-                audio = seg.push(block)
-                if audio is None:
-                    continue
+        finally:
+            self.stop()
+
+    def _decode(self) -> None:
+        while (audio := self._jobs.get()) is not None:
+            if self._on_busy is not None:
+                self._on_busy(True)
+            try:
                 t0 = time.perf_counter()
                 text = (self.transcriber(audio) or "").strip()
                 logger.info(
@@ -270,77 +304,73 @@ class FastListener:
                     (time.perf_counter() - t0) * 1e3,
                     text,
                 )
-                return text or None
+            except Exception as e:
+                logger.exception("transcription failed")
+                self._dropped(f"transcription failed ({e})")
+                continue
+            finally:
+                if self._on_busy is not None:
+                    self._on_busy(False)
+            if not text:
+                self._dropped("Whisper heard no words")
+                continue
+            try:
+                self._on_transcript(text)
+            except Exception:
+                logger.exception("transcript callback failed")
 
-    def run_forever(self, on_transcript, stop_check=None, on_level=None, on_busy=None) -> None:
-        """Continuous loop: every finished utterance → ``on_transcript(text)``.
-
-        Used by the orchestrator's listener thread so the mic stays hot while
-        behaviors run (lets "stop" interrupt a running behavior).
-        ``on_level(rms, in_speech)``, if given, is called once per audio block.
-        Whisper runs on its own thread: the microphone keeps feeding the
-        segmenter while a phrase is decoded. ``on_busy(True/False)`` brackets
-        that decode.
-        """
-        seg = SpeechSegmenter(self.vcfg)
-        jobs: queue.Queue[np.ndarray] = queue.Queue(maxsize=_DECODE_QUEUE_UTTERANCES)
-
-        def _decode() -> None:
-            while not (stop_check and stop_check()):
-                try:
-                    audio = jobs.get(timeout=0.2)
-                except queue.Empty:
-                    continue
-                if on_busy is not None:
-                    on_busy(True)
-                try:
-                    t0 = time.perf_counter()
-                    text = (self.transcriber(audio) or "").strip()
-                    logger.info(
-                        "ASR %.1fs audio in %.0f ms: %r",
-                        len(audio) / SAMPLE_RATE,
-                        (time.perf_counter() - t0) * 1e3,
-                        text,
-                    )
-                except Exception:
-                    logger.exception("transcription failed")
-                    text = ""
-                finally:
-                    if on_busy is not None:
-                        on_busy(False)
-                if text:
-                    try:
-                        on_transcript(text)
-                    except Exception:
-                        logger.exception("transcript callback failed")
-
-        threading.Thread(target=_decode, daemon=True, name="asr").start()
+    def _queue_job(self, audio: np.ndarray) -> None:
+        """An utterance for Whisper; when it is behind, the oldest waiting one goes."""
         try:
-            stream, q_audio = self._stream()
+            self._jobs.put_nowait(audio)
+        except queue.Full:
+            try:
+                self._jobs.get_nowait()
+            except queue.Empty:
+                pass
+            self._jobs.put_nowait(audio)
+
+    def _run(self) -> None:
+        import sounddevice as sd
+
+        seg = SpeechSegmenter(self.vcfg)
+        try:
+            stream = sd.InputStream(
+                samplerate=SAMPLE_RATE,
+                channels=1,
+                dtype="float32",
+                blocksize=BLOCK_SAMPLES,
+                callback=self._audio_in,
+                device=self.mic_device,
+            )
+            stream.start()
         except Exception as e:
+            self.error = str(e)
             logger.error("Microphone unavailable: %s - voice control disabled.", e)
             return
-        with stream:
-            while not (stop_check and stop_check()):
-                try:
-                    block = q_audio.get(timeout=0.2)
-                except queue.Empty:
-                    continue
+        finally:
+            self.opened.set()
+        decoder = threading.Thread(target=self._decode, daemon=True, name="asr")
+        decoder.start()
+        reported, reported_at = 0, 0.0
+        try:
+            while (block := self._blocks.get()) is not None:
                 audio = seg.push(block)
-                if on_level is not None:
-                    on_level(float(np.sqrt(np.mean(np.square(block)))), seg.in_speech)
+                if self._on_level is not None:
+                    self._on_level(float(np.sqrt(np.mean(np.square(block)))), seg.in_speech)
+                now = time.monotonic()
+                if self.overflows > reported and now - reported_at >= self.OVERFLOW_REPORT_S:
+                    self._dropped(f"microphone audio lost {self.overflows - reported} times (CPU busy)")
+                    reported, reported_at = self.overflows, now
+                if seg.dropped_s:
+                    self._dropped(f"too short to hear ({seg.dropped_s:.2f} s of speech)")
                 if audio is not None:
-                    try:
-                        jobs.put_nowait(audio)
-                    except queue.Full:
-                        try:
-                            jobs.get_nowait()
-                        except queue.Empty:
-                            pass
-                        try:
-                            jobs.put_nowait(audio)
-                        except queue.Full:
-                            pass
+                    self._queue_job(audio)
+        finally:
+            stream.stop()
+            stream.close()
+            self._jobs.put(None)
+            decoder.join()
 
 
 # =============================================================================
@@ -475,10 +505,17 @@ def main() -> None:
         cfg = load_config(args.config)
         model = WhisperNPU(cfg)
         listener = FastListener(cfg, model.transcribe)
+        listener.start(lambda text: print(f"→ {text!r}"), on_drop=lambda reason: print(f"(not heard: {reason})"))
+        listener.opened.wait()
+        if listener.error is not None:
+            raise SystemExit(f"no microphone: {listener.error}")
         print("Speak - Ctrl-C to quit.")
-        while True:
-            t = listener.listen_once()
-            print(f"→ {t!r}")
+        try:
+            threading.Event().wait()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            listener.stop()
         return
     parser.print_help()
 

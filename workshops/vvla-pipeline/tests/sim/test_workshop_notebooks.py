@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from notebook_harness import NOTEBOOKS, PIPE_ROOT, run_notebook
+from notebook_harness import CPU_FALLBACK, NOTEBOOKS, PIPE_ROOT, run_notebook
 from twin_ros_rig import join_test_domain
 
 pytestmark = [pytest.mark.sim, pytest.mark.hw, pytest.mark.docs, pytest.mark.slow, pytest.mark.timeout(900)]
@@ -79,7 +79,6 @@ EXPECT = {
 # Notebooks that run YOLO.
 YOLO = {"01_npu_yolo", "01_behavior", "02_digital_twin"}
 
-_FALLBACK = re.compile(r"fall(s|ing)? back to (the )?cpu", re.I)
 
 
 def test_readme_lists_every_notebook_folder():
@@ -99,7 +98,7 @@ def test_notebook_runs(path: Path):
         assert yolo, f"{path.name} made no YOLO session"
     off_npu = [(Path(model).name, provider) for model, provider in yolo if provider != "VitisAIExecutionProvider"]
     assert not off_npu, f"{path.name}: YOLO ran off the NPU: {off_npu}"
-    fallback = [line.strip() for line in run.output.splitlines() if _FALLBACK.search(line)]
+    fallback = [line.strip() for line in run.output.splitlines() if CPU_FALLBACK.search(line)]
     assert not fallback, f"{path.name} fell back to the CPU: {fallback}"
     for phrase in EXPECT.get(path.stem, ()):
         assert phrase in run.output, f"{path.name} never showed {phrase!r}"

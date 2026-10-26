@@ -7,8 +7,10 @@
 
 """Simple one-shot behaviors: wave and home.
 
-Both are deliberately tiny - they exist mostly as the template for adding new
-voice commands (see :mod:`vla_pipeline.llm.intents`).
+Both are deliberately tiny: they are the canonical shape of a behavior
+handler - ``(ctx, cmd)`` in, motion through ``ctx.arm``, ``ctx.stop_check``
+polled so a spoken "stop" interrupts mid-move, park at the end - and the
+template for adding new voice commands (see :mod:`vla_pipeline.llm.intents`).
 
 Independent test
 ----------------
@@ -21,7 +23,8 @@ from __future__ import annotations
 import argparse
 import logging
 
-from vla_pipeline.robot.arm_interface import ArmClient, DryRunArm, make_arm
+from vla_pipeline.dispatch import PipelineContext
+from vla_pipeline.robot.arm_interface import DryRunArm, make_arm
 from vla_pipeline.utils.config import load_config
 
 logger = logging.getLogger(__name__)
@@ -42,24 +45,24 @@ WAVE_RIGHT = {"shoulder_pan": 25.0}
 
 
 
-def run_wave(cfg: dict, arm: ArmClient, stop_check=None) -> None:
-    """Raise the arm and wave the wrist ``behaviors.wave.cycles`` times."""
-    cycles = int(cfg["behaviors"].get("wave", {}).get("cycles", 3))
+def run_wave(ctx, cmd=None) -> None:
+    """Raise the arm and wave ``wave.cycles`` times."""
+    cycles = int((ctx.cfg.get("wave") or {}).get("cycles", 3))
     logger.info("[wave] waving %d times", cycles)
-    arm.go_to(WAVE_UP, duration_s=2.0, stop_check=stop_check)
+    ctx.arm.go_to(WAVE_UP, duration_s=2.0, stop_check=ctx.stop_check)
     for _ in range(cycles):
-        if stop_check and stop_check():
+        if ctx.stop_check():
             break
-        arm.go_to(WAVE_LEFT, duration_s=0.4, stop_check=stop_check)
-        arm.go_to(WAVE_RIGHT, duration_s=0.4, stop_check=stop_check)
-    arm.go_to_rest()
+        ctx.arm.go_to(WAVE_LEFT, duration_s=0.4, stop_check=ctx.stop_check)
+        ctx.arm.go_to(WAVE_RIGHT, duration_s=0.4, stop_check=ctx.stop_check)
+    ctx.arm.go_to_rest()
 
 
-def run_home(cfg: dict, arm: ArmClient, stop_check=None) -> None:
+def run_home(ctx, cmd=None) -> None:
     """Return to the rest pose. A locked grip stays locked: "release" opens
     it, and gesture-mimic hands the gripper to the pinch."""
     logger.info("[home] returning to rest pose")
-    arm.go_to_rest(stop_check=stop_check)
+    ctx.arm.go_to_rest(stop_check=ctx.stop_check)
 
 
 def main() -> None:
@@ -74,9 +77,9 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    arm: ArmClient = DryRunArm() if args.dry_run else make_arm(cfg)
+    arm = DryRunArm() if args.dry_run else make_arm(cfg)
     try:
-        {"wave": run_wave, "home": run_home}[args.behavior](cfg, arm)
+        {"wave": run_wave, "home": run_home}[args.behavior](PipelineContext(cfg=cfg, arm=arm))
         print(f"\n{args.behavior} PASSED")
     finally:
         arm.close()

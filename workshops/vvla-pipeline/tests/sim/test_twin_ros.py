@@ -5,12 +5,12 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The workshop behaviors on the notebook twin, over ROS 2.
+"""The pipeline's behaviors on the notebook twin, over ROS 2.
 
-The context is the section 5 console's (``TwinRig``): ``ros.arm_client.Ros2ArmClient``
+The context is the section 5 console's (``TwinRig``): ``Ros2ArmClient``
 on the controllers, the arm camera behind ``FanoutCamera``, the YOLO eyes,
 and the keyword parser through ``handle_transcript``. The checks mirror the
-in-process workshop scenarios in ``test_scenarios.py``. Every reading of the twin comes
+in-process scenarios in ``test_scenarios.py``. Every reading of the twin comes
 from the twin's props (their TF frames and ``/diagnostics``) and the arm
 server's ``/so101/hardware/*`` topics.
 
@@ -28,32 +28,22 @@ import pytest
 
 from twin_ros_rig import (
     BODY_JOINTS,
-    Probe,
     TwinRig,
     assert_domain_free,
     default_scene_snapshot,
-    join_test_domain,
 )
 
 pytestmark = [pytest.mark.sim, pytest.mark.hw, pytest.mark.slow, pytest.mark.timeout(300)]
 pytest.importorskip("rclpy")
 
 
-@pytest.fixture(scope="module")
-def probe(workshop_cfg):
-    join_test_domain()
-    p = Probe(workshop_cfg)
-    yield p
-    p.close()
-
-
 @pytest.fixture
-def rig(workshop_cfg, eyes, probe):
-    detector = eyes("workshop")
+def rig(pipeline_cfg, eyes, probe):
+    detector = eyes()
     if detector is None:
         pytest.skip("--sim-eyes seg reads the in-process twin's segmentation; this twin is over ROS")
     assert_domain_free("a twin already runs on the test domain")
-    r = TwinRig(workshop_cfg, detector, scene=default_scene_snapshot(workshop_cfg))
+    r = TwinRig(pipeline_cfg, detector, scene=default_scene_snapshot(pipeline_cfg))
     yield r
     r.close()
     assert_domain_free("the twin node outlived its test", wait=True)
@@ -100,7 +90,7 @@ class _GripLog(logging.Handler):
 @pytest.fixture
 def grip_log():
     handler = _GripLog()
-    log = logging.getLogger("common.manipulation")
+    log = logging.getLogger("vla_pipeline.behaviors.manipulation")
     level = log.level
     log.setLevel(logging.INFO)
     log.addHandler(handler)
@@ -159,7 +149,7 @@ def test_twin_drop_it_opens_the_jaws(rig, probe):
 
 
 def test_twin_go_home_parks_the_arm(rig, probe):
-    from common.motion import REST_POSE
+    from vla_pipeline.robot.arm_interface import REST_POSE
 
     rig.twin.arm.go_to({"shoulder_pan": 35.0, "shoulder_lift": -40.0, "elbow_flex": 40.0})
     rig.run("go home")
@@ -181,7 +171,7 @@ def test_twin_wave_swings_the_base(rig, probe):
 
 
 def test_twin_dance_finishes_parked(rig, probe):
-    from common.motion import REST_POSE
+    from vla_pipeline.robot.arm_interface import REST_POSE
 
     rig.run("dance")
     joints = probe.joints(after=time.time())
@@ -200,10 +190,10 @@ def test_twin_mimic_drives_the_arm_then_stop_holds(rig, probe):
     The scripted wrist orbits and the pinch cycles once per
     ``SCRIPT_PERIOD_S``, so each check waits at most one cycle.
     """
-    from common.fixtures import SCRIPT_PERIOD_S
-    from common.motion import REST_POSE
-    from common.ros2_control_arm import REPLY_S
-    from common.servo_profile import shared_profiler
+    from vla_pipeline.robot.arm_interface import REST_POSE
+    from vla_pipeline.robot.ros2_control_arm import REPLY_S
+    from vla_pipeline.robot.servo_profile import shared_profiler
+    from vvla_workshop.fixtures import SCRIPT_PERIOD_S
 
     rig.ctx.shared_state.update(grip_lock=True, grip_lock_pos=45.0)
     start = probe.joints()

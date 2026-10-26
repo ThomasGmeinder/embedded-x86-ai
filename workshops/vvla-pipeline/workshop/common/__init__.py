@@ -5,11 +5,12 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""PROVIDED helpers for the Ryzen AI VVLA workshop.
+"""The workshop's teaching harness, installed as ``vvla_workshop``.
 
-ONE shared copy for ``project/`` and ``solution/`` - each tree's
-``common/__init__.py`` points its package here. Everything in it is generic
-plumbing (image codecs, motion math, message conversion, harness reporting)
-that would look the same in any project. Your work lives in ``models/``,
-``ros/``, and ``integration/``.
+Only what the pipeline has no counterpart for lives here: the TODO index and
+reporter (``feedback``), the TODO scanner (``todos``), the self-tests, the
+off-hardware stand-ins (``fixtures``), warning hushing (``quiet``), widget
+polling (``ui_poll``) and the resource monitor launcher (``monitor``).
+Everything else comes from ``vla_pipeline``. Your work lives in
+``vvla_workshop.project`` (``workshop/project/``).
 """

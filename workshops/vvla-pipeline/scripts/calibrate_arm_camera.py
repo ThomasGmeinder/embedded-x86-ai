@@ -16,8 +16,7 @@ the pipeline stopped (the script opens the arm and the camera directly):
 
 1. ``intrinsics`` - hold a printed checkerboard in front of the arm camera
    at 12+ distances and angles, SPACE captures a view, ENTER solves. Paste
-   the printed ``intrinsics`` into ``cameras.arm`` of config/pipeline.yaml
-   (and workshop/*/config/workshop.yaml).
+   the printed ``intrinsics`` into ``cameras.arm`` of config/pipeline.yaml.
 2. ``mount`` - tape the checkerboard flat on the table. Jog the arm (keys
    below) to ~8 poses that see the whole board from different angles,
    SPACE at each, ENTER solves. Paste the printed ``extrinsics``.
@@ -38,14 +37,10 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import sys
 import time
 from pathlib import Path
 
 import numpy as np
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
 
 JOG = {
     ord("a"): ("shoulder_pan", +1), ord("d"): ("shoulder_pan", -1),
@@ -214,7 +209,7 @@ def cmd_mount(args) -> int:
     views, step = [], 3.0
     save = Path(args.save or "calibration_mount_views.json")
     try:
-        arm.go_to({**cfg["behaviors"]["pick_place"]["scan_pose"]}, duration_s=2.5)
+        arm.go_to({**cfg["pick_place"]["scan_pose"]}, duration_s=2.5)
         K = dist = None
         while True:
             ok, frame = cam.read()
@@ -269,7 +264,7 @@ def cmd_check(args) -> int:
     from vla_pipeline.vision.yolo_detect_npu import ObjectDetector
 
     cfg = _config(args)
-    pp = cfg["behaviors"]["pick_place"]
+    pp = cfg["pick_place"]
     cam_cfg = cfg["cameras"]["arm"]
     kin = shared_kinematics(GRIPPER_CLOSED_FLOOR)
     detector = ObjectDetector(cfg, device=args.device)

@@ -29,15 +29,6 @@ pytestmark = pytest.mark.sim
 _KEYS = {"xyz", "yaw", "tilt", "speed", "spin", "grasped", "touching"}
 
 
-@pytest.fixture
-def world():
-    from so101_sim.world import SimWorld
-
-    sim = SimWorld(start=False)
-    yield sim
-    sim.close()
-
-
 def test_props_report_gives_pose_motion_grasp_and_contacts(world):
     """A bottle on its side with the ball against it, the toothbrush between
     the rest pose's nearly closed jaws, the book where the scene file has it."""
@@ -72,7 +63,7 @@ def test_the_timeline_records_objects_touches_logs_and_the_whole_result(twins, p
     """A real recording: the ball resting on the book, one log line, a long failure message."""
     from so101_sim.record import SimRecorder, _TimelineLog
 
-    twin = twins("pipeline", pipeline_cfg)
+    twin = twins(pipeline_cfg)
     w = twin.world
     w.reset()
     book = w.body_pos("book")

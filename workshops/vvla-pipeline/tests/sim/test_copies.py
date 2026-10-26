@@ -5,185 +5,149 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The pipeline's copies of the workshop's code still match it.
+"""One implementation: the student stubs mirror the pipeline, and nothing else is copied.
 
-The pipeline runs on its own and the workshop is a lesson students edit, so
-each keeps its own copy of the arm layer, the servo profile planner, the
-ros2_control client, the manipulation behaviors, the gesture mapper, the
-console's camera fan-out and the stop keywords. Every definition both copies
-hold is compared as code: docstrings, and the names each copy uses for the
-other's modules (and ``DirectArm`` for the workshop's ``LeRobotArm``), are set
-aside. A change to one copy fails here until the other matches it.
+The pipeline (``vla_pipeline/``) is the only implementation and the answer
+key. ``workshop/project/`` holds one stub per TODO in
+``vvla_workshop.feedback.TODO_INDEX``, with the name and parameters of the
+pipeline's finished function (a method TODO is a method of a subclass of
+the pipeline's class). That stub is the only duplicate allowed:
 
-The scenarios that run on both stacks (``test_scenarios.py``) check the same
-copies by what the arm does.
+- every TODO stub has its reference's signature;
+- no top-level function, class or constant is defined twice: the same name,
+  at least 75 % alike once docstrings are set aside (the rip-out baseline's
+  measure);
+- no file is a byte-for-byte copy of another.
 """
 
 from __future__ import annotations
 
 import ast
-import copy
+import collections
 import difflib
+import hashlib
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from vla_pipeline.utils.config import REPO_ROOT as ROOT
+
 pytestmark = pytest.mark.sim
 
-ROOT = Path(__file__).resolve().parents[2]
-EVERY = "every definition"
-
-# (workshop module, pipeline module): the definitions both copies hold.
-MIRRORS = {
-    ("common.motion", "vla_pipeline.robot.arm_interface"): (
-        "GRIPPER_CLOSED_FLOOR", "GRIPPER_TORQUE_LIMIT", "REST_POSE", "joints_text", "JOINT_LIMITS",
-        "_PIPELINE_BACKSTOP", "GRASP_LIMITS", "_LIVE_LIMIT_SCALE", "_extended_limits", "LIVE_MIMIC_LIMITS",
-        "_active_limits", "set_active_limits", "clamp_joints", "OVERLOAD_BIT", "MotionTimeout", "settled",
-        "ArmClient", "DryRunArm", "BUS_RETRIES", "BUS_RETRY_DELAY_S", "_SPEED_REGISTERS", "_ACCEL_REGISTERS",
-        "DEFAULT_CONTROL_HZ", "LeRobotArm", "_EFFORT_EVERY_N_TICKS", "OWNER_REPLY_S", "BusOwnerArm",
-        "bus_owner",
-    ),
-    ("common.motion", "vla_pipeline.robot.sim_arm"): ("sim_world", "SimArmClient"),
-    ("common.motion", "vla_pipeline.utils.gesture_map"): ("_LowPass", "OneEuro", "_axis", "MimicMapper"),
-    ("common.motion", "vla_pipeline.behaviors.dance"): ("DANCE_MOVES",),
-    ("common.motion", "vla_pipeline.behaviors.simple"): ("WAVE_UP", "WAVE_LEFT", "WAVE_RIGHT"),
-    ("common.servo_profile", "vla_pipeline.robot.servo_profile"): EVERY,
-    ("common.ros2_control_arm", "vla_pipeline.robot.ros2_control_arm"): EVERY,
-    ("common.ros_helpers", "vla_pipeline.robot.ros2_control_arm"): ("Spinner",),
-    ("common.manipulation", "vla_pipeline.behaviors.manipulation"): EVERY,
-    ("common.twin_console", "vla_pipeline.console"): (
-        "IDLE_AFTER_S", "FanoutCamera", "ModelTap", "_fit", "_title", "_bar", "PROCESSOR", "provider_name",
-    ),
-    ("common.intents", "vla_pipeline.llm.intents"): ("STOP_KEYWORDS",),
-    ("common.intents", "vla_pipeline.main"): ("_STOP_RE", "is_stop"),
-}
-
-# Definitions one copy has and the other does not, and why.
-ONLY_IN = {
-    "common.motion": {
-        "make_arm_backend": "the workshop's backend factory; the pipeline's are make_arm and make_bus_arm",
-        "mapper_from_config": "reads the workshop's mimic: section; the pipeline's reads behaviors.gesture_mimic",
-    },
-    "common.manipulation": {
-        "register_manipulation": "fills the workshop's registry; the pipeline registers handlers in main.py",
-    },
-    "vla_pipeline.robot.ros2_control_arm": {
-        "Spinner": "the workshop's is common.ros_helpers.Spinner, compared there",
-    },
-}
-
-# Each pipeline module, and DirectArm, under the workshop's name.
-MODULE_NAMES = {
-    "vla_pipeline.robot.arm_interface": "common.motion",
-    "vla_pipeline.robot.servo_profile": "common.servo_profile",
-    "vla_pipeline.robot.ros2_control_arm": "common.ros2_control_arm",
-    "vla_pipeline.behaviors.manipulation": "common.manipulation",
-    "vla_pipeline.vision.yolo_pose_npu": "common.imaging",
-}
-NAMES = {"DirectArm": "LeRobotArm"}
-SKIP = {"logger"}
+SCANNED = ("vla_pipeline", "workshop", "so101_sim/src/so101_sim", "scripts", "tests", "arm_calibrator", "launch")
+SIMILAR = 0.75
 
 
-def _path(module: str) -> Path:
-    if module.startswith("common."):
-        return ROOT / "workshop" / "common" / (module.split(".", 1)[1] + ".py")
-    return ROOT / (module.replace(".", "/") + ".py")
+def _todo_index() -> dict:
+    from vvla_workshop.feedback import TODO_INDEX
+
+    return TODO_INDEX
 
 
-def _name(node) -> str | None:
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-        return node.name
-    if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-        return node.targets[0].id
-    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-        return node.target.id
-    return None
+def _definition(path: Path, what: str) -> ast.FunctionDef:
+    """``what`` (``name`` or ``Class.method``) in ``path``, found in its syntax tree."""
+    body = ast.parse(path.read_text(encoding="utf-8")).body
+    for part in what.split("."):
+        node = next((n for n in body if getattr(n, "name", None) == part), None)
+        assert node is not None, f"{path.relative_to(ROOT)} does not define {what}"
+        body = getattr(node, "body", [])
+    return node
 
 
-def _definitions(module: str) -> dict:
-    tree = ast.parse(_path(module).read_text(), filename=str(_path(module)))
-    return {name: node for node in tree.body if (name := _name(node)) and name not in SKIP}
+def _parameters(fn: ast.FunctionDef) -> list:
+    """Each parameter's kind, name and default; annotations set aside."""
+    a = fn.args
+    positional = [*a.posonlyargs, *a.args]
+    defaults = [None] * (len(positional) - len(a.defaults)) + list(a.defaults)
+    out = [("positional", p.arg, ast.dump(d) if d else None) for p, d in zip(positional, defaults)]
+    out += [("*", a.vararg.arg, None)] if a.vararg else []
+    out += [("keyword", p.arg, ast.dump(d) if d else None) for p, d in zip(a.kwonlyargs, a.kw_defaults)]
+    out += [("**", a.kwarg.arg, None)] if a.kwarg else []
+    return out
 
 
-class _Normalize(ast.NodeTransformer):
-    """Drop docstrings; give the pipeline's names the workshop's."""
-
-    def __init__(self, rename: bool):
-        self.names = NAMES if rename else {}
-        self.modules = MODULE_NAMES if rename else {}
-
-    def _scope(self, node):
-        body = node.body
-        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
-                and isinstance(body[0].value.value, str):
-            node.body = body[1:] or [ast.Pass()]
-        node.name = self.names.get(node.name, node.name)
-        self.generic_visit(node)
-        return node
-
-    visit_FunctionDef = visit_AsyncFunctionDef = visit_ClassDef = _scope
-
-    def visit_Name(self, node):
-        node.id = self.names.get(node.id, node.id)
-        return node
-
-    def visit_ImportFrom(self, node):
-        node.module = self.modules.get(node.module, node.module)
-        return node
-
-
-def _normal(node, rename: bool):
-    return ast.fix_missing_locations(_Normalize(rename).visit(copy.deepcopy(node)))
-
-
-def _mirrored(workshop: str, pipeline: str) -> list[str]:
-    names = MIRRORS[(workshop, pipeline)]
-    if names != EVERY:
-        return list(names)
-    ours, theirs = _definitions(workshop), _definitions(pipeline)
-    theirs = {NAMES.get(n, n) for n in theirs}
-    return sorted((set(ours) | theirs) - set(ONLY_IN.get(workshop, {})) - set(ONLY_IN.get(pipeline, {})))
-
-
-@pytest.mark.parametrize("workshop,pipeline", sorted(MIRRORS), ids=lambda m: m)
-def test_the_copies_match(workshop, pipeline):
-    ours = _definitions(workshop)
-    theirs = {NAMES.get(n, n): node for n, node in _definitions(pipeline).items()}
-    missing, differ = [], []
-    for name in _mirrored(workshop, pipeline):
-        if name not in ours or name not in theirs:
-            where = workshop if name not in ours else pipeline
-            missing.append(f"{name} is not in {where}")
-            continue
-        a, b = _normal(ours[name], rename=False), _normal(theirs[name], rename=True)
-        if ast.dump(a) != ast.dump(b):
-            diff = difflib.unified_diff(
-                ast.unparse(a).splitlines(), ast.unparse(b).splitlines(),
-                f"{workshop}.{name}", f"{pipeline}.{name}", lineterm="", n=2,
-            )
-            differ.append("\n".join(diff))
-    assert not missing and not differ, "the copies drifted apart:\n" + "\n".join(missing + differ)
-
-
-@pytest.mark.parametrize(
-    "workshop", ["common.motion", "common.servo_profile", "common.ros2_control_arm", "common.manipulation"],
-)
-def test_every_workshop_definition_has_a_pipeline_copy_or_a_reason(workshop):
-    mirrored = set().union(*(_mirrored(w, p) for w, p in MIRRORS if w == workshop))
-    unaccounted = set(_definitions(workshop)) - mirrored - set(ONLY_IN.get(workshop, {}))
-    assert not unaccounted, (
-        f"{workshop} defines {sorted(unaccounted)} with no pipeline copy: copy it to the pipeline "
-        "and list it in MIRRORS, or say in ONLY_IN why only the workshop has it"
+@pytest.mark.parametrize("todo_id", sorted(_todo_index(), key=lambda t: [int(x) for x in t.split(".")]))
+def test_every_todo_stub_has_its_references_signature(todo_id):
+    where, what, reference, _notebook = _todo_index()[todo_id]
+    stub = _definition(ROOT / "workshop" / "project" / where, what)
+    finished = _definition(ROOT / reference, what)
+    assert _parameters(stub) == _parameters(finished), (
+        f"TODO {todo_id}: {what} in project/{where} takes {_parameters(stub)}, "
+        f"the pipeline's in {reference} takes {_parameters(finished)}"
     )
 
 
-def test_the_twin_defaults_are_the_stacks_arm():
-    """The twin's own rest pose and jaw closed point, for a world built without a stack's."""
-    from common.motion import GRIPPER_CLOSED_FLOOR as workshop_floor
-    from common.motion import REST_POSE as workshop_rest
-    from so101_sim.config import DEFAULTS
-    from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR as pipeline_floor
-    from vla_pipeline.robot.arm_interface import REST_POSE as pipeline_rest
+def _python_files() -> list[Path]:
+    listed = subprocess.run(["git", "ls-files", "-co", "--exclude-standard", "--", *SCANNED],
+                            cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+    return [ROOT / f for f in listed if f.endswith(".py") and (ROOT / f).is_file()]
 
-    assert DEFAULTS["rest_pose"] == workshop_rest == pipeline_rest
-    assert DEFAULTS["gripper_map"]["closed_cal"] == workshop_floor == pipeline_floor
+
+def _without_docstrings(node) -> str:
+    node = ast.parse(ast.unparse(node)).body[0]
+    for n in ast.walk(node):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.body \
+                and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant) \
+                and isinstance(n.body[0].value.value, str):
+            n.body = n.body[1:] or [ast.Pass()]
+    return ast.unparse(node)
+
+
+def _stub_names() -> set:
+    """The project files' TODO definitions (a method TODO's class included): the allowed duplicates."""
+    return {(f"workshop/project/{where}", part) for where, what, _ref, _nb in _todo_index().values()
+            for part in what.split(".")}
+
+
+def test_no_definition_is_written_twice():
+    defs = collections.defaultdict(list)
+    for path in _python_files():
+        rel = str(path.relative_to(ROOT))
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                name = node.name
+            elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) \
+                    and node.targets[0].id.isupper():
+                name = node.targets[0].id
+            else:
+                continue
+            defs[name].append((rel, _without_docstrings(node), node.end_lineno - node.lineno + 1))
+    allowed = _stub_names()
+    copies = []
+    for name, found in defs.items():
+        for i, (a, text_a, lines_a) in enumerate(found):
+            for b, text_b, lines_b in found[i + 1:]:
+                if a == b or (a, name) in allowed or (b, name) in allowed:
+                    continue
+                ratio = difflib.SequenceMatcher(None, text_a, text_b).ratio()
+                if ratio >= SIMILAR:
+                    copies.append((min(lines_a, lines_b), f"{name} ({ratio:.0%} alike): {a} and {b}"))
+    total = sum(lines for lines, _ in copies)
+    assert not copies, f"{total} duplicated lines; keep one and import it:\n" + "\n".join(
+        line for _lines, line in sorted(copies, reverse=True)
+    )
+
+
+def test_no_file_is_a_copy():
+    listed = subprocess.run(["git", "ls-files", "-co", "--exclude-standard"], cwd=ROOT,
+                            capture_output=True, text=True, check=True).stdout.split()
+    by_content = collections.defaultdict(list)
+    for rel in listed:
+        path = ROOT / rel
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        if data.count(b"\n") >= 5:
+            by_content[hashlib.sha256(data).hexdigest()].append(rel)
+    copies = [names for names in by_content.values() if len(names) > 1]
+    assert not copies, "files with the same bytes; keep one:\n" + "\n".join(", ".join(c) for c in copies)
+
+
+def test_the_twin_defaults_are_the_pipelines_arm():
+    """The twin's own rest pose and jaw closed point, for a world built without the pipeline's."""
+    from so101_sim.config import DEFAULTS
+    from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR, REST_POSE
+
+    assert DEFAULTS["rest_pose"] == REST_POSE
+    assert DEFAULTS["gripper_map"]["closed_cal"] == GRIPPER_CLOSED_FLOOR

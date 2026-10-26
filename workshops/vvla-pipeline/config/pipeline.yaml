@@ -73,7 +73,7 @@ yolo_pose:
   cache_key: yolo26s_pose_fp32
 
 yolo_detect:                  # object detection for voice pick-and-place
-  onnx: models/yolo26s/yolo26s.onnx        # exported by scripts/export_yolo26s_detect.py
+  onnx: models/yolo26s/yolo26s.onnx        # exported by scripts/export_yolo26s.py detect
   device: npu                 # npu | cpu
   vitisai_config: config/vaiep_config.json
   imgsz: 640
@@ -82,7 +82,9 @@ yolo_detect:                  # object detection for voice pick-and-place
   cache_key: yolo26s_detect_fp32
 
 mediapipe:
-  max_num_hands: 1
+  max_num_hands: 2            # both, so the tracked hand is found beside the other
+  track_hand: right           # the physical hand that drives the arm: right | left | any
+  frames_mirrored: false      # true if frames are pre-flipped (selfie view)
   min_detection_confidence: 0.5
   min_tracking_confidence: 0.5
   roll_ti_full_px: 40.0       # thumb↔index pixel gap at which the line-angle roll
@@ -129,155 +131,157 @@ robot:
   command_topic: /so101/joint_command
   state_topic: /so101/joint_state
 
-behaviors:
-  gesture_mimic:               # direct camera-frame → joint mapping (utils/gesture_map.py)
-    # --- Neutral "ready" anchor pose (deg): RE-CENTERED on each joint's
-    #     mid-range so the input envelope can drive every actuator to BOTH of its
-    #     limits. The arm rests centered rather than reaching forward.
-    #     wrist_roll0 = 0 is the forward-most pose (the calibration midpoint).
-    shoulder_pan0: 0.0
-    shoulder_lift0: -5.0
-    elbow_flex0: 10.0
-    wrist_flex0: -10.0
-    wrist_roll0: 0.0
-    # --- Per-axis gains (deg per unit of the normalized [-1,1] axis). Tuned on
-    #     the real rig; keep equal to the workshop's mimic: section
-    #     (workshop/solution/config/workshop.yaml). Over-driven so every limit is
-    #     reachable; the excess saturates at MIMIC_LIMITS (utils/gesture_map.py).
-    pan_gain: 150.0            # left/right (x) → shoulder_pan
-    # forward/back (z): shoulder_lift is the PRIMARY driver; elbow_flex goes
-    # negative to reach out.
-    sl_fwd_gain: 110.0         # toward the camera → shoulder_lift
-    sl_fwd_away_gain: 165.0    # away from the camera → shoulder_lift (+50%)
-    ef_fwd_gain: -75.0         # forward/back → elbow_flex (- forward)
-    # up/down (y): shoulder_lift and elbow_flex move as a locked pair.
-    sl_up_gain: 58.0           # up/down → shoulder_lift
-    ef_up_gain: -55.0          #         → elbow_flex (opens as the hand rises)
-    # wrist_flex follows the operator's wrist BEND (hand direction vs the
-    # elbow→wrist forearm), not the hand height.
-    wf_up_gain: 135.0          # wrist bend → wrist_flex (flip sign to invert)
-    wrist_half_deg: 45.0       # ±this hand-vs-forearm bend → full wrist_flex
-    roll_gain: 128.0           # hand roll → wrist_roll (saturates at the clamp)
-    # --- How raw camera signals normalize to the control axes.
-    x_center: 0.5              # frame fraction that is "centered" L/R
-    x_half: 0.384              #   ±this fraction → full left/right
-    y_center: 0.5
-    y_half: 0.336              #   ±this fraction → full up/down
-    deadzone: 0.05             # |axis| below this → 0 (kills resting jitter)
-    mirror: true               # mount camera faces the user → mirror left/right
-    # --- Forward/back depth from MediaPipe hand size (fraction of frame height).
-    hand_size_neutral: 0.0     # 0 = auto-calibrate from the first frames;
-                               #   set via --calibrate-depth for a fixed neutral
-    # Lower this if you can't reach the forward limit; raise it if depth feels
-    # twitchy.
-    depth_rel_span: 0.30       # ±30% size change → full forward/back
-    depth_baseline_frames: 8   # frames of hand size to median for the auto neutral
-    # --- Wrist roll: primary cue is the DIRECTED thumb→index vector. The angle is
-    #     measured RELATIVE to a center that AUTO-CALIBRATES to however you're
-    #     holding your hand the first time it's seen (and after each reset), so
-    #     that orientation becomes wrist_roll 0 and rotating from there drives the
-    #     joint. (This fixes roll "not working" when a fixed 0° center left the
-    #     mapping saturated.) When the fingers pinch too close to read the line
-    #     reliably (weight < roll_ti_min_weight), the steady knuckle-line
-    #     reference takes over, then the wrist→knuckle angle; all unwrapped so
-    #     wrist_roll only moves on a real rotation (no spurious 180° flips).
-    roll_auto_center: true     # first reliable hand angle becomes wrist_roll 0
-    roll_center_deg: 0.0       # used only when roll_auto_center is false
-    roll_half_deg: 75.0        # ±this human tilt (from center) → full wrist_roll
-    roll_ti_min_weight: 0.4    # below this thumb↔index reliability → use reference
-    roll_invert: false         # flip if the gripper rolls the wrong way
-    # --- Gripper from the thumb↔index DISTANCE: a CONTINUOUS ramp. The raw
-    #     distance is normalized to [0,1] against grip_min..grip_max (set via
-    #     --calibrate-grip), then mapped to the gripper opening:
-    #       norm <= grip_close_frac      -> CLOSED (held at the calibrated jaw
-    #                                       floor 43 - the physical closed point,
-    #                                       matching the workshop rig)
-    #       grip_close_frac < norm <= 1  -> opens LINEARLY up to grip_open_pos
-    #     So fingers within the closest 10% of the range keep the gripper shut,
-    #     and spreading them past that opens it smoothly to ~90.
-    #     The gripper HOLDS its position whenever the hand isn't seen and only
-    #     moves when a new thumb↔index distance is measured.
-    grip_min: 0.10             # calibrated: fingers touching  -> normalized 0
-    grip_max: 1.40             # calibrated: spread wide apart -> normalized 1
-    grip_close_frac: 0.10      # within the closest 10% of the range -> fully closed
-    grip_open_pos: 90.0        # gripper opening (0-100) at full spread (norm 1.0)
-    # Until the first thumb↔index distance is measured the gripper is not
-    # commanded, so a held object stays held.
-    # --- One Euro smoothing on the five control axes.
-    smoothing:
-      min_cutoff: 1.5          # Hz, lower = smoother at rest
-      beta: 0.03               # higher = less lag during fast motion
-      d_cutoff: 1.0
-  fetch_block:
-    block_pose:  {shoulder_pan: 35.0, shoulder_lift: -45.0, elbow_flex: 60.0, wrist_flex: 40.0, wrist_roll: 0.0, gripper: 35.0}
-    lift_pose:   {shoulder_pan: 35.0, shoulder_lift: -80.0, elbow_flex: 85.0, wrist_flex: 50.0, wrist_roll: 0.0, gripper: 5.0}
-    handoff_reach: 55.0
-    release_timeout_s: 6.0
-  pick_place:                 # NEW: voice-grounded "pick up the <object>"
-    # Joint pose from which the arm camera surveys the workspace: the arm stays
-    # 10 cm above the table, over a standing bottle, while the base turns.
-    scan_pose:   {shoulder_pan: 0.0, shoulder_lift: -55.0, elbow_flex: 40.0, wrist_flex: 65.0, wrist_roll: 0.0, gripper: 70.0}
-    # The sweep turns from the ready pose (pan 0) one way, then the other, and
-    # stops at the first view that gives a grasp. tests/sim/pick_coverage.py
-    # chose the views: each default object lies fully inside a high view, its
-    # box clear of the image border by EDGE_MARGIN_PX plus YOLO's measured
-    # overreach; with the near views they cover 552 of the 576 table spots any
-    # view covers. Pans past 86 deg move under the grasp limits, inside the
-    # arm's +-110 deg. Tune for the real camera/FOV.
-    scan_pans: [-10.0, -40.0, -60.0, -100.0, 10.0, 30.0, 60.0, 90.0]
-    # Fallback, looking down at the table near the base (13-26 cm out).
-    scan_near_pose: {shoulder_pan: 0.0, shoulder_lift: -50.0, elbow_flex: 30.0, wrist_flex: 90.0, wrist_roll: 0.0, gripper: 70.0}
-    scan_near_pans: [50.0, 10.0, -30.0, -70.0, -100.0]
-    # The scan's frames keep a list of the objects on the table: one footprint
-    # per detection (objects_min_score: weaker detections count too), except
-    # the jaws themselves inside scan_jaw_polygon, the outline of the open jaws
-    # in the frame as image fractions (x, y).
-    scan_jaw_polygon: [[1.0, 1.0], [0.89, 1.0], [0.645, 0.72], [0.615, 0.665], [0.615, 0.59], [0.75, 0.59], [1.0, 0.69]]
-    objects_min_score: 0.25
-    # "place it" / "set it down": the nearest point to the drop position (where
-    # the pickup holds the object out), within place_search_m, where the object
-    # keeps place_clearance_m from every known object, off the arm's way from
-    # its parked pose into the first scan view, and where the arm's model
-    # clears every known object through the whole put-down.
-    place_search_m: 0.18
-    # From the base: where a pickup reaches each kind of object again (the
-    # bottle lands about 1 cm farther out than its set-down point).
-    place_near_m: 0.18
-    place_far_m: {sphere: 0.33, flat: 0.32, bottle: 0.29}
-    place_clearance_m: 0.025
-    set_down_clearance_m: 0.01  # the object is let go this far above where it rested
-    # The object is located on the table from its box (the camera ray meets the
-    # table plane) and reached with IK; no fix or no solve means out of reach.
-    table_z: -0.005           # table surface height in the arm's base frame (m)
-    pregrasp_above_m: 0.06    # jaws open this far above the grasp, then descend in joint space
-    max_grasp_height_m: 0.03  # grasp tall objects no higher than this above the table
-    fixed_jaw_gap_m: 0.005    # after the descent, the hand moves sideways until the fixed finger is this far from a lying object
-    wrist_align_classes: [toothbrush]
-    wrist_align_pregrasp_above_m: 0.10  # pre-grasp height above a thin object
-    wrist_align_grasp_width_m: 0.024     # toothbrush handle width across the jaws
-    wrist_align_center_offset_m: 0.018   # shift from silhouette midpoint toward the narrow handle end
-    wrist_axis_min_elongation: 1.6
-    min_box_area_frac: 0.002  # detections smaller than this are noise
-    ambiguous_ratio: 1.25     # top-2 score ratio below this = "which one?"
-    retries: 1                # re-attempts after a failed grip
-  dance:
-    bpm: 100
-    duration_s: 20.0
-  grip:
-    close_step_deg: 1.5
-    stall_eps_deg: 0.4
-    stall_ticks: 5
-    hold_past_contact: 6.0    # after contact the goal trails this far below the jaw (< max_relative_target)
-    reseat_s: 0.6             # ...for this long at Torque_Limit 500 while both fingers seat
-    hold_torque_limit: 240    # Torque_Limit once the object hangs from the fingers: under LeRobot's 25 % Overload_Torque
-    stall_grace_s: 0.6        # NEW: keep stall-sampling after full close (thin objects)
-    load_threshold: 120.0     # NEW: effort/current contact level (raw Feetech units)
-    load_ticks: 3             # NEW: consecutive over-threshold reads = contact
-    jaw_roi: [0.30, 0.45, 0.70, 0.95]   # NEW: arm-camera ROI covering the jaws (fractions)
-    jaw_diff_threshold: 0.06            # NEW: ROI difference that counts as "object present"
-  wave:                       # NEW
-    cycles: 3
-  # home / stop need no tunables
+intent_node:                  # vla_pipeline.llm.intent_node: transcripts in, intents out
+  transcript_topic: /vla/transcript
+  intent_topic: /vla/intent
+
+mimic:                       # direct camera-frame → joint mapping (utils/gesture_map.py)
+  # --- Neutral "ready" anchor pose (deg): RE-CENTERED on each joint's
+  #     mid-range so the input envelope can drive every actuator to BOTH of its
+  #     limits. The arm rests centered rather than reaching forward.
+  #     wrist_roll0 = 0 is the forward-most pose (the calibration midpoint).
+  shoulder_pan0: 0.0
+  shoulder_lift0: -5.0
+  elbow_flex0: 10.0
+  wrist_flex0: -10.0
+  wrist_roll0: 0.0
+  # --- Per-axis gains (deg per unit of the normalized [-1,1] axis). Tuned on
+  #     the real rig. Over-driven so every limit is reachable; the excess
+  #     saturates at MIMIC_LIMITS (utils/gesture_map.py).
+  pan_gain: 150.0            # left/right (x) → shoulder_pan
+  # forward/back (z): shoulder_lift is the PRIMARY driver; elbow_flex goes
+  # negative to reach out.
+  sl_fwd_gain: 110.0         # toward the camera → shoulder_lift
+  sl_fwd_away_gain: 165.0    # away from the camera → shoulder_lift (+50%)
+  ef_fwd_gain: -75.0         # forward/back → elbow_flex (- forward)
+  # up/down (y): shoulder_lift and elbow_flex move as a locked pair.
+  sl_up_gain: 58.0           # up/down → shoulder_lift
+  ef_up_gain: -55.0          #         → elbow_flex (opens as the hand rises)
+  # wrist_flex follows the operator's wrist BEND (hand direction vs the
+  # elbow→wrist forearm), not the hand height.
+  wf_up_gain: 135.0          # wrist bend → wrist_flex (flip sign to invert)
+  wrist_half_deg: 45.0       # ±this hand-vs-forearm bend → full wrist_flex
+  roll_gain: 128.0           # hand roll → wrist_roll (saturates at the clamp)
+  # --- How raw camera signals normalize to the control axes.
+  x_center: 0.5              # frame fraction that is "centered" L/R
+  x_half: 0.384              #   ±this fraction → full left/right
+  y_center: 0.5
+  y_half: 0.336              #   ±this fraction → full up/down
+  deadzone: 0.05             # |axis| below this → 0 (kills resting jitter)
+  mirror: true               # mount camera faces the user → mirror left/right
+  # --- Forward/back depth from MediaPipe hand size (fraction of frame height).
+  hand_size_neutral: 0.0     # 0 = auto-calibrate from the first frames;
+                             #   set via --calibrate-depth for a fixed neutral
+  # Lower this if you can't reach the forward limit; raise it if depth feels
+  # twitchy.
+  depth_rel_span: 0.30       # ±30% size change → full forward/back
+  depth_baseline_frames: 8   # frames of hand size to median for the auto neutral
+  # --- Wrist roll: primary cue is the DIRECTED thumb→index vector. The angle is
+  #     measured RELATIVE to a center that AUTO-CALIBRATES to however you're
+  #     holding your hand the first time it's seen (and after each reset), so
+  #     that orientation becomes wrist_roll 0 and rotating from there drives the
+  #     joint. (This fixes roll "not working" when a fixed 0° center left the
+  #     mapping saturated.) When the fingers pinch too close to read the line
+  #     reliably (weight < roll_ti_min_weight), the steady knuckle-line
+  #     reference takes over, then the wrist→knuckle angle; all unwrapped so
+  #     wrist_roll only moves on a real rotation (no spurious 180° flips).
+  roll_auto_center: true     # first reliable hand angle becomes wrist_roll 0
+  roll_center_deg: 0.0       # used only when roll_auto_center is false
+  roll_half_deg: 75.0        # ±this human tilt (from center) → full wrist_roll
+  roll_ti_min_weight: 0.4    # below this thumb↔index reliability → use reference
+  roll_invert: false         # flip if the gripper rolls the wrong way
+  # --- Gripper from the thumb↔index DISTANCE: a CONTINUOUS ramp. The raw
+  #     distance is normalized to [0,1] against grip_min..grip_max (set via
+  #     --calibrate-grip), then mapped to the gripper opening:
+  #       norm <= grip_close_frac      -> CLOSED (held at the calibrated jaw
+  #                                       floor 43 - the physical closed point,
+  #                                       matching the workshop rig)
+  #       grip_close_frac < norm <= 1  -> opens LINEARLY up to grip_open_pos
+  #     So fingers within the closest 10% of the range keep the gripper shut,
+  #     and spreading them past that opens it smoothly to ~90.
+  #     The gripper HOLDS its position whenever the hand isn't seen and only
+  #     moves when a new thumb↔index distance is measured.
+  grip_min: 0.10             # calibrated: fingers touching  -> normalized 0
+  grip_max: 1.40             # calibrated: spread wide apart -> normalized 1
+  grip_close_frac: 0.10      # within the closest 10% of the range -> fully closed
+  grip_open_pos: 90.0        # gripper opening (0-100) at full spread (norm 1.0)
+  # Until the first thumb↔index distance is measured the gripper is not
+  # commanded, so a held object stays held.
+  # --- One Euro smoothing on the five control axes.
+  smoothing:
+    min_cutoff: 1.5          # Hz, lower = smoother at rest
+    beta: 0.03               # higher = less lag during fast motion
+    d_cutoff: 1.0
+fetch_block:
+  block_pose:  {shoulder_pan: 35.0, shoulder_lift: -45.0, elbow_flex: 60.0, wrist_flex: 40.0, wrist_roll: 0.0, gripper: 35.0}
+  lift_pose:   {shoulder_pan: 35.0, shoulder_lift: -80.0, elbow_flex: 85.0, wrist_flex: 50.0, wrist_roll: 0.0, gripper: 5.0}
+  handoff_reach: 55.0
+  release_timeout_s: 6.0
+pick_place:                 # NEW: voice-grounded "pick up the <object>"
+  # Joint pose from which the arm camera surveys the workspace: the arm stays
+  # 10 cm above the table, over a standing bottle, while the base turns.
+  scan_pose:   {shoulder_pan: 0.0, shoulder_lift: -55.0, elbow_flex: 40.0, wrist_flex: 65.0, wrist_roll: 0.0, gripper: 70.0}
+  # The sweep turns from the ready pose (pan 0) one way, then the other, and
+  # stops at the first view that gives a grasp. tests/sim/pick_coverage.py
+  # chose the views: each default object lies fully inside a high view, its
+  # box clear of the image border by EDGE_MARGIN_PX plus YOLO's measured
+  # overreach; with the near views they cover 552 of the 576 table spots any
+  # view covers. Pans past 86 deg move under the grasp limits, inside the
+  # arm's +-110 deg. Tune for the real camera/FOV.
+  scan_pans: [-10.0, -40.0, -60.0, -100.0, 10.0, 30.0, 60.0, 90.0]
+  # Fallback, looking down at the table near the base (13-26 cm out).
+  scan_near_pose: {shoulder_pan: 0.0, shoulder_lift: -50.0, elbow_flex: 30.0, wrist_flex: 90.0, wrist_roll: 0.0, gripper: 70.0}
+  scan_near_pans: [50.0, 10.0, -30.0, -70.0, -100.0]
+  # The scan's frames keep a list of the objects on the table: one footprint
+  # per detection (objects_min_score: weaker detections count too), except
+  # the jaws themselves inside scan_jaw_polygon, the outline of the open jaws
+  # in the frame as image fractions (x, y).
+  scan_jaw_polygon: [[1.0, 1.0], [0.89, 1.0], [0.645, 0.72], [0.615, 0.665], [0.615, 0.59], [0.75, 0.59], [1.0, 0.69]]
+  objects_min_score: 0.25
+  # "place it" / "set it down": the nearest point to the drop position (where
+  # the pickup holds the object out), within place_search_m, where the object
+  # keeps place_clearance_m from every known object, off the arm's way from
+  # its parked pose into the first scan view, and where the arm's model
+  # clears every known object through the whole put-down.
+  place_search_m: 0.18
+  # From the base: where a pickup reaches each kind of object again (the
+  # bottle lands about 1 cm farther out than its set-down point).
+  place_near_m: 0.18
+  place_far_m: {sphere: 0.33, flat: 0.32, bottle: 0.29}
+  place_clearance_m: 0.025
+  set_down_clearance_m: 0.01  # the object is let go this far above where it rested
+  # The object is located on the table from its box (the camera ray meets the
+  # table plane) and reached with IK; no fix or no solve means out of reach.
+  table_z: -0.005           # table surface height in the arm's base frame (m)
+  pregrasp_above_m: 0.06    # jaws open this far above the grasp, then descend in joint space
+  max_grasp_height_m: 0.03  # grasp tall objects no higher than this above the table
+  fixed_jaw_gap_m: 0.005    # after the descent, the hand moves sideways until the fixed finger is this far from a lying object
+  wrist_align_classes: [toothbrush]
+  wrist_align_pregrasp_above_m: 0.10  # pre-grasp height above a thin object
+  wrist_align_grasp_width_m: 0.024     # toothbrush handle width across the jaws
+  wrist_align_center_offset_m: 0.018   # shift from silhouette midpoint toward the narrow handle end
+  wrist_axis_min_elongation: 1.6
+  min_box_area_frac: 0.002  # detections smaller than this are noise
+  ambiguous_ratio: 1.25     # top-2 score ratio below this = "which one?"
+  retries: 1                # re-attempts after a failed grip
+dance:
+  bpm: 100
+  duration_s: 20.0
+grip:
+  close_step_deg: 1.5
+  stall_eps_deg: 0.4
+  stall_ticks: 5
+  hold_past_contact: 6.0    # after contact the goal trails this far below the jaw (< max_relative_target)
+  reseat_s: 0.6             # ...for this long at Torque_Limit 500 while both fingers seat
+  hold_torque_limit: 240    # Torque_Limit once the object hangs from the fingers: under LeRobot's 25 % Overload_Torque
+  stall_grace_s: 0.6        # NEW: keep stall-sampling after full close (thin objects)
+  load_threshold: 120.0     # NEW: effort/current contact level (raw Feetech units)
+  load_ticks: 3             # NEW: consecutive over-threshold reads = contact
+  jaw_roi: [0.30, 0.45, 0.70, 0.95]   # NEW: arm-camera ROI covering the jaws (fractions)
+  jaw_diff_threshold: 0.06            # NEW: ROI difference that counts as "object present"
+wave:                       # NEW
+  cycles: 3
+# home / stop need no tunables
 
 # MuJoCo digital twin (robot.backend: sim / ./run_pipeline.sh --digital-twin). Everything
 # here has defaults in so101_sim/src/so101_sim/config.py; listed are the knobs

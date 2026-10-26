@@ -12,10 +12,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from rigs import LOW_GRASP_POSE
+
 pytestmark = pytest.mark.sim
 
-# Jaws at table height, closing sideways: how the pickup grasps the ball.
-GRASP = {"shoulder_pan": 0.0, "shoulder_lift": 9.0, "elbow_flex": 20.0, "wrist_flex": 54.0, "wrist_roll": 0.0}
 GRIPPER = 5
 
 
@@ -54,15 +54,6 @@ def test_current_and_torque_convert_along_the_datasheet_line(amps, torque_nm):
         assert torque_nm_to_current(current_to_torque_nm(c, cm), cm) == pytest.approx(c)
 
 
-@pytest.fixture(scope="module")
-def world():
-    from so101_sim.world import SimWorld
-
-    w = SimWorld(start=False)
-    yield w
-    w.close()
-
-
 def _gripper_cap(world) -> float:
     return float(world.model.actuator_forcerange[world._act[GRIPPER], 1])
 
@@ -85,13 +76,13 @@ def test_torque_limit_is_live_and_max_torque_limit_waits_for_power_on(world):
 
 
 def _squeeze_ball(world, limit: int):
-    from common.motion import GRIPPER_CLOSED_FLOOR
+    from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR
     from so101_sim.arm import SimBus
 
-    world.reset({**GRASP, "gripper": 85.0})
+    world.reset({**LOW_GRASP_POSE, "gripper": 85.0})
     for obj in world.objects:
         world.hide(obj)
-    world.stage_object("sports_ball", GRASP)
+    world.stage_object("sports_ball", LOW_GRASP_POSE)
     world.advance(0.3)
     bus = SimBus(world)
     bus.write("Overload_Torque", "gripper", 25)  # LeRobot's gripper configure
@@ -101,7 +92,7 @@ def _squeeze_ball(world, limit: int):
 
 
 def test_overload_drops_the_grip_after_protection_time_until_the_next_goal(world):
-    from common.motion import GRIPPER_CLOSED_FLOOR
+    from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR
 
     bus = _squeeze_ball(world, 500)
     full = float(world.force_full[GRIPPER, 1])
@@ -146,7 +137,8 @@ def test_every_dance_keyframe_holds_without_an_overload_trip(world):
     """No dance keyframe drives the arm into itself or the table. A keyframe
     that does stalls its servos until the overload protection cuts their
     torque, and the arm then crawls to its rest pose after the dance."""
-    from common.motion import DANCE_MOVES, REST_POSE, clamp_joints
+    from vla_pipeline.behaviors.dance import DANCE_MOVES
+    from vla_pipeline.robot.arm_interface import REST_POSE, clamp_joints
     from so101_sim import MOTOR_NAMES
     from so101_sim.arm import SimBus
 

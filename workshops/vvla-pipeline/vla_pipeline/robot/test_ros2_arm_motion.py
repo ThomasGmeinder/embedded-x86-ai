@@ -243,7 +243,7 @@ def _start_stack(cfg: dict, config_path):
     executor = SingleThreadedExecutor()
     executor.add_node(node)
     threading.Thread(target=executor.spin, daemon=True).start()
-    return node, executor, start_controllers(config_path, "pipeline")
+    return node, executor, start_controllers(config_path)
 
 
 def _ensure_calibration(

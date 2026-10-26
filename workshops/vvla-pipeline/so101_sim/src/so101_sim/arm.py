@@ -17,7 +17,7 @@
 ``SimArm``       - a small convenience facade (calibrated dicts in/out) for
                    notebooks and the ROS node.
 
-Because the host stacks' transport (``LeRobotArm``) talks to a
+Because the pipeline's bus transport (``DirectArm``) talks to a
 ``SO101Follower``, the sim adapter swaps in :class:`SimFollower`. Every retry,
 effort-register probe and motion-profile write it does on the rig runs
 unchanged here.

@@ -5,14 +5,13 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""ros2_control for the SO-101: the names both stacks agree on, and its launch.
+"""ros2_control for the SO-101: the names the arm server and its client agree on, and its launch.
 
 ``launch/so101_control.launch.py`` runs the controllers on top of an arm
-server (the pipeline's, the workshop's, or the twin hosting either). The
-arm server and each stack's client (``ControllerArm``) meet on the names
-here: the hardware side's topics, the controllers, the server node and its
-torque parameter. The launch files, the twin and both stacks import them
-from this one place.
+server (the pipeline's, or the twin hosting it). The arm server and the
+client (``ControllerArm``) meet on the names here: the hardware side's
+topics, the controllers, the server node and its torque parameter. The
+launch files and the twin import them from this one place.
 """
 
 from __future__ import annotations
@@ -21,9 +20,8 @@ import os
 import signal
 import subprocess
 import sys
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+from vla_pipeline.utils.config import REPO_ROOT  # noqa: E402
 LAUNCH_FILE = REPO_ROOT / "launch" / "so101_control.launch.py"
 # topic_based_ros2_control, built by bootstrap.sh into the colcon workspace ros_ws/
 BRIDGE_PREFIX = REPO_ROOT / "ros_ws" / "install" / "topic_based_ros2_control"
@@ -73,7 +71,7 @@ def bridge_prefix_path() -> str:
     return os.pathsep.join(dict.fromkeys(prefixes))
 
 
-def start_controllers(config_path, stack: str, gripper: str = "forward", log=None) -> subprocess.Popen:
+def start_controllers(config_path, gripper: str = "forward", log=None) -> subprocess.Popen:
     """``launch/so101_control.launch.py`` with this Python, in a process group of
     its own, shut down (SIGINT) when this process exits however it exits."""
     import shutil
@@ -83,7 +81,7 @@ def start_controllers(config_path, stack: str, gripper: str = "forward", log=Non
         raise RuntimeError("ros2 is not on PATH: source /opt/ros/jazzy/setup.bash first")
     return subprocess.Popen(
         [sys.executable, "-m", "so101_sim.parent_death", sys.executable, ros2, "launch", str(LAUNCH_FILE),
-         f"config:={config_path}", f"stack:={stack}", f"gripper:={gripper}"],
+         f"config:={config_path}", f"gripper:={gripper}"],
         cwd=str(REPO_ROOT), stdout=log, stderr=subprocess.STDOUT if log is not None else None,
         start_new_session=True,
     )

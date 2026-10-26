@@ -37,41 +37,26 @@ always match what the pipeline expects.
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+import numpy as np
+import onnxruntime as ort
 
-import numpy as np  # noqa: E402
-import onnxruntime as ort  # noqa: E402
-
-
-def _load_yaml(path: Path) -> dict:
-    """Load and parse a YAML config file."""
-    import yaml
-
-    with open(path) as f:
-        return yaml.safe_load(f)
-
-
-def _resolve(p: str | Path) -> Path:
-    """Resolve p to an absolute path, relative to the repo root if not already absolute."""
-    p = Path(p)
-    return p if p.is_absolute() else REPO_ROOT / p
+# compile_npu_models.sh runs this in the SDK venv, with the repo on PYTHONPATH.
+from vla_pipeline.utils.config import DEFAULT_CONFIG, load_config, resolve
 
 
 def _ensure_local_onnx(w: dict) -> tuple[str, str]:
     """Return encoder/decoder ONNX paths, downloading via the pipeline helper."""
     enc = w.get("encoder_onnx")
     dec = w.get("decoder_onnx")
-    if enc and dec and _resolve(enc).exists() and _resolve(dec).exists():
-        return str(_resolve(enc)), str(_resolve(dec))
+    if enc and dec and resolve(enc).exists() and resolve(dec).exists():
+        return str(resolve(enc)), str(resolve(dec))
     # Reuse the pipeline's downloader so filenames/paths match exactly.
-    sys.path.insert(0, str(REPO_ROOT))
-    from vla_pipeline.audio.whisper_npu import download_whisper_onnx  # noqa: E402
+    from vla_pipeline.audio.whisper_npu import download_whisper_onnx
 
     model_type = w.get("model_type", "whisper-base")
-    dest = _resolve("models") / model_type
+    dest = resolve("models") / model_type
     return download_whisper_onnx(model_type, dest_dir=dest)
 
 
@@ -150,16 +135,16 @@ def _compile_whisper(cfg: dict) -> None:
     """Compile the Whisper encoder and decoder ONNX models for the NPU."""
     w = cfg["whisper"]
     enc_onnx, dec_onnx = _ensure_local_onnx(w)
-    cache_dir = str(_resolve(w.get("cache_dir", "cache")))
+    cache_dir = str(resolve(w.get("cache_dir", "cache")))
     enc_cfg = str(
-        _resolve(
+        resolve(
             w.get(
                 "encoder_vitisai_config", "config/vitisai_config_whisper_encoder.json"
             )
         )
     )
     dec_cfg = str(
-        _resolve(
+        resolve(
             w.get(
                 "decoder_vitisai_config", "config/vitisai_config_whisper_decoder.json"
             )
@@ -180,36 +165,36 @@ def _compile_yolo_model(cfg: dict, section: str, name: str, export_hint: str) ->
             f"\n[skip] config section '{section}' not present - nothing to compile for {name}."
         )
         return
-    onnx_path = _resolve(y["onnx"])
+    onnx_path = resolve(y["onnx"])
     if not onnx_path.exists():
         print(
             f"\n[skip] {name} ONNX not found at {onnx_path} - "
             f"run {export_hint} first."
         )
         return
-    cache_dir = str(_resolve(cfg.get("system", {}).get("cache_dir", "cache")))
-    vai_cfg = str(_resolve(y.get("vitisai_config", "config/vaiep_config.json")))
+    cache_dir = str(resolve(cfg.get("system", {}).get("cache_dir", "cache")))
+    vai_cfg = str(resolve(y.get("vitisai_config", "config/vaiep_config.json")))
     _compile_one(name, str(onnx_path), vai_cfg, cache_dir, y["cache_key"])
 
 
 def _compile_yolo_pose(cfg: dict) -> None:
     """Compile the YOLOv26s-pose model."""
     _compile_yolo_model(
-        cfg, "yolo_pose", "yolo26s-pose", "scripts/export_yolo26s_pose.py"
+        cfg, "yolo_pose", "yolo26s-pose", "scripts/export_yolo26s.py pose"
     )
 
 
 def _compile_yolo_detect(cfg: dict) -> None:
     """Compile the YOLOv26s-detect model."""
     _compile_yolo_model(
-        cfg, "yolo_detect", "yolo26s-detect", "scripts/export_yolo26s_detect.py"
+        cfg, "yolo_detect", "yolo26s-detect", "scripts/export_yolo26s.py detect"
     )
 
 
 def main() -> None:
     """Parse CLI args and compile the selected NPU model families."""
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--config", default=str(REPO_ROOT / "config" / "pipeline.yaml"))
+    ap.add_argument("--config", default=str(DEFAULT_CONFIG))
     ap.add_argument(
         "--only",
         choices=["whisper", "yolo", "yolo_pose", "yolo_detect"],
@@ -219,7 +204,7 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    cfg = _load_yaml(Path(args.config))
+    cfg = load_config(args.config)
 
     if args.only in (None, "whisper"):
         _compile_whisper(cfg)
@@ -228,7 +213,7 @@ def main() -> None:
     if args.only in (None, "yolo", "yolo_detect"):
         _compile_yolo_detect(cfg)
 
-    cache_dir = str(_resolve(cfg.get("system", {}).get("cache_dir", "cache")))
+    cache_dir = str(resolve(cfg.get("system", {}).get("cache_dir", "cache")))
     print(f"\nDone. Compiled artifacts are in: {cache_dir}")
     print("You can now run the pipeline from the deployment .venv with device: npu.")
 

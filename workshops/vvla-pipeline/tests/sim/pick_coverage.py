@@ -7,14 +7,14 @@
 
 """Which table spots a pick finds and plans a grasp for.
 
-Each object is put alone on a grid of table spots. At every spot the stack's
-own scan (``_search_views``) walks its views with the arm set straight to
-each one, the twin's segmentation gives the boxes (exact, and hidden where
-the jaws cover the image), and the stack's own ``_plan_from_view`` locates
-the box and solves the grasp. The pickup judges YOLO's boxes, which near the
-image border reach farther out than the segmentation, so a view counts only
-when its box also keeps ``_DETECTOR_SLACK_PX`` more than the stack's
-``EDGE_MARGIN_PX`` from the border. A spot is
+Each object is put alone on a grid of table spots. At every spot the
+pipeline's own scan (``_search_views``) walks its views with the arm set
+straight to each one, the twin's segmentation gives the boxes (exact, and
+hidden where the jaws cover the image), and the pipeline's own
+``_plan_from_view`` locates the box and solves the grasp. The pickup judges
+YOLO's boxes, which near the image border reach farther out than the
+segmentation, so a view counts only when its box also keeps
+``_DETECTOR_SLACK_PX`` more than ``EDGE_MARGIN_PX`` from the border. A spot is
 
 - ``found``: the scan planned a grasp there;
 - ``seen``: a usable box was seen, but no locate or grasp came of it;
@@ -25,26 +25,12 @@ when its box also keeps ``_DETECTOR_SLACK_PX`` more than the stack's
 
 from __future__ import annotations
 
-import importlib
 import logging
 import math
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 import numpy as np
-
-STACKS = {
-    "pipeline": {
-        "manipulation": "vla_pipeline.behaviors.manipulation",
-        "motion": "vla_pipeline.robot.arm_interface",
-        "detection": "vla_pipeline.vision.yolo_detect_npu",
-    },
-    "workshop": {
-        "manipulation": "common.manipulation",
-        "motion": "common.motion",
-        "detection": "common.imaging",
-    },
-}
 
 # Resting centre height on the table, and the spoken name.
 OBJECTS = {
@@ -94,7 +80,7 @@ def _object_quat(kind: str, xy) -> tuple[float, float, float, float]:
 
 
 class _Reasons(logging.Handler):
-    """The stack's own lines on why a sighting gave no grasp."""
+    """The pipeline's own lines on why a sighting gave no grasp."""
 
     KEEP = ("IK reach:", "scan sighting:")
 
@@ -110,7 +96,7 @@ class _Reasons(logging.Handler):
 
 class _TeleportArm:
     """``go_to`` sets the twin's arm to the pose at once, clamped as the
-    stack's arm clamps it, and puts the object back."""
+    pipeline's arm clamps it, and puts the object back."""
 
     def __init__(self, world, put, clamp, limits=None):
         self.world = world
@@ -129,9 +115,9 @@ class _TeleportArm:
 
 
 class Coverage:
-    """One stack's scan and grasp planning on a twin whose physics does not run."""
+    """The pipeline's scan and grasp planning on a twin whose physics does not run."""
 
-    def __init__(self, stack: str, cfg: dict, scan_limits: dict | None = None):
+    def __init__(self, cfg: dict, scan_limits: dict | None = None):
         """``scan_limits``: the joint limits a scan move is clamped to (default: the arm's own)."""
         from scripted import SimDetector
         from so101_sim.camera import SimCamera
@@ -139,15 +125,11 @@ class Coverage:
         from so101_sim.kinematics import shared_kinematics
         from so101_sim.render import RenderService
         from so101_sim.world import SimWorld
+        from vla_pipeline.behaviors import manipulation
+        from vla_pipeline.robot import arm_interface as motion
+        from vla_pipeline.vision import yolo_detect_npu as detection
 
-        names = STACKS[stack]
-        self.mod = importlib.import_module(names["manipulation"])
-        motion = importlib.import_module(names["motion"])
-        detection = importlib.import_module(names["detection"])
-        if stack == "pipeline":
-            from vla_pipeline.behaviors._ctx import flatten_cfg
-
-            cfg = flatten_cfg(cfg)
+        self.mod = manipulation
         self.ctx = SimpleNamespace(cfg=cfg)
         self.pp = cfg["pick_place"]
         self.cam = (cfg.get("cameras") or {}).get("arm") or {}
@@ -181,7 +163,7 @@ class Coverage:
 
         Returns ``(seen, found, reasons)``: whether ``accept`` ever got a
         usable box, the planned view (``plan`` and ``view``) if one planned,
-        and the stack's log lines about the sightings.
+        and the pipeline's log lines about the sightings.
         """
         body, z, spoken = OBJECTS[kind]
         world = self.world

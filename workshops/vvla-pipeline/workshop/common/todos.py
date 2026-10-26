@@ -8,11 +8,11 @@
 """Static TODO scanner (PROVIDED).
 
 Answers one question - *which TODOs are still stubs?* - WITHOUT importing any
-component code. It reads the source files, so it works on any machine: no NPU,
-no ROS 2, no GPU, no cameras, not even numpy or onnxruntime need to import.
-Both the live app's preflight (``app.py``) and the top-level end-to-end runner
-(``selftest.py``) use it so a half-finished project gets a tidy checklist
-instead of a stack trace.
+component code. It reads the source files in ``workshop/project/``, so it works
+on any machine: no NPU, no ROS 2, no GPU, no cameras, not even numpy or
+onnxruntime need to import. The end-to-end runner (``vvla_workshop.selftest``)
+uses it so a half-finished project gets a tidy checklist instead of a stack
+trace.
 
 A TODO is a marked block::
 
@@ -30,8 +30,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from common.config import PROJECT_ROOT
-from common.feedback import TODO_INDEX
+from vvla_workshop.feedback import TODO_INDEX
+
+PROJECT_DIR = Path(__file__).resolve().parents[1] / "project"  # the files students edit
 
 # A TODO block: '# >>> TODO <id> ...' up to the matching '# <<< TODO <id>'.
 _BLOCK = re.compile(
@@ -49,11 +50,7 @@ def _key(todo_id: str):
 
 
 def _iter_sources(root: Path):
-    """Yield every project ``.py`` file that might carry a TODO block.
-
-    Stays inside the active tree (``project/`` or ``solution/``); the shared
-    ``common/`` package lives elsewhere and carries no TODOs.
-    """
+    """Yield every project ``.py`` file that might carry a TODO block."""
     for f in sorted(root.rglob("*.py")):
         if "__pycache__" in f.parts:
             continue
@@ -66,7 +63,7 @@ def scan(root: Path | str | None = None) -> dict[str, bool]:
     Implemented == its marker block no longer raises ``NotImplementedError``.
     An id with more than one block counts as done only when every block is.
     """
-    root = Path(root) if root else PROJECT_ROOT
+    root = Path(root) if root else PROJECT_DIR
     status: dict[str, bool] = {}
     for f in _iter_sources(root):
         try:
@@ -97,17 +94,17 @@ def all_ids(root: Path | str | None = None) -> list[str]:
     return sorted(scan(root).keys(), key=_key)
 
 
-def describe(todo_id: str) -> tuple[str, str, str]:
-    """``(where, what, notebook)`` for an id, from the shared TODO index."""
-    return TODO_INDEX.get(todo_id, ("?", todo_id, "?"))
+def describe(todo_id: str) -> tuple[str, str, str, str]:
+    """``(where, what, reference, notebook)`` for an id, from the shared TODO index."""
+    return TODO_INDEX.get(todo_id, ("?", todo_id, "?", "?"))
 
 
 def format_list(ids, *, indent="    ") -> str:
     """Render ``ids`` as ``TODO x.y: what  ->  file   (read notebook)`` lines."""
     lines = []
     for t in sorted(ids, key=_key):
-        where, what, nb = describe(t)
-        lines.append(f"{indent}TODO {t}: {what}  ->  {where}   (read {nb})")
+        where, what, _ref, nb = describe(t)
+        lines.append(f"{indent}TODO {t}: {what}  ->  project/{where}   (read {nb})")
     return "\n".join(lines)
 
 
@@ -123,6 +120,6 @@ def progress(root: Path | str | None = None) -> tuple[int, int]:
 
 
 def progress_line(root: Path | str | None = None) -> str:
-    """One-line tally: ``TODOs: 9/21 implemented (12 remaining)``."""
+    """One-line tally: ``TODOs: 9/13 implemented (4 remaining)``."""
     done, total = progress(root)
     return f"TODOs: {done}/{total} implemented ({total - done} remaining)"

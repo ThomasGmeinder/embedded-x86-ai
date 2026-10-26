@@ -8,15 +8,15 @@
 """The digital twin behind ROS 2, for one notebook kernel (PROVIDED).
 
 Section 5 of ``notebooks/03_integration/02_digital_twin.ipynb`` drives the
-twin the way ``01_behavior.ipynb`` drives the real arm: a
-:class:`~ros.arm_client.Ros2ArmClient` on ros2_control's controllers, and a
-server node that owns the (simulated) bus. :class:`TwinSession` starts that
-server - ``python -m so101_sim.node --notebook-twin``, its topics remapped
-onto the hardware side's - and the controllers
-(``launch/so101_control.launch.py``) as children of this kernel, on a ROS
-domain of their own with discovery kept to this machine. The real arm's
-nodes, other notebooks' demo nodes and ``app.py`` live on the default domain
-and never see them.
+twin the way the pipeline drives the real arm: a
+:class:`~vla_pipeline.robot.robot_node.Ros2ArmClient` on ros2_control's
+controllers, and a server node that owns the (simulated) bus.
+:class:`TwinSession` starts that server - ``python -m so101_sim.node
+--notebook-twin``, its topics remapped onto the hardware side's - and the
+controllers (``launch/so101_control.launch.py``) as children of this kernel,
+on a ROS domain of their own with discovery kept to this machine. The real
+arm's nodes, other notebooks' demo nodes and the pipeline live on the
+default domain and never see them.
 
 The twin node adds what a console needs on top of the real topics (see
 :mod:`so101_sim.node`): arm-camera frames stamped with the time their scene
@@ -38,10 +38,13 @@ import threading
 import time
 from pathlib import Path
 
-from common.ros_helpers import Spinner, from_image_msg
-from ros.arm_client import Ros2ArmClient
 from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
-from so101_sim.node import DIAGNOSTICS_TOPIC, GRIPPER_STATUS, PROPS_STATUS, VIEW_TOPIC, WORLD_FRAME
+from so101_sim.node import DIAGNOSTICS_TOPIC, GRIPPER_STATUS, PROPS_STATUS, VIEW_TOPIC, WORLD_FRAME, sensor_qos
+from vla_pipeline.robot.arm_interface import MotionTimeout
+from vla_pipeline.robot.robot_node import Ros2ArmClient
+from vla_pipeline.robot.ros2_control_arm import Spinner
+from vla_pipeline.utils.config import DEFAULT_CONFIG
+from vla_pipeline.vision.camera import from_image_msg
 
 logger = logging.getLogger(__name__)
 
@@ -97,20 +100,12 @@ def use_private_domain(domain_id: int) -> None:
         _domain_node = rclpy.create_node("twin_domain")
 
 
-def _sensor_qos():
-    from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-
-    return QoSProfile(
-        reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1
-    )
-
-
 class TwinCamera:
     """Newest frame of a twin camera topic, with the time its scene was captured.
 
     Same ``read() -> (ok, frame)`` as the other cameras. ``last_stamp`` is
     the capture time of the frame the last ``read()`` returned, so
-    :class:`~common.twin_console.FanoutCamera` and :meth:`read_after` can
+    :class:`~vla_pipeline.console.FanoutCamera` and :meth:`read_after` can
     tell a frame of the settled arm from one rendered just before.
     """
 
@@ -127,7 +122,7 @@ class TwinCamera:
         self._closed = False
         self.last_stamp: float | None = None
         self._spin = Spinner(f"twin_camera_{role}")
-        self._spin.node.create_subscription(Image, topic, self._on_image, _sensor_qos())
+        self._spin.node.create_subscription(Image, topic, self._on_image, sensor_qos())
 
     def _on_image(self, msg) -> None:
         frame = from_image_msg(msg)
@@ -285,7 +280,7 @@ class TwinSession:
     """One ``so101_sim.node --notebook-twin`` and its controllers, owned by
     this process, and their clients.
 
-    ``arm`` (:class:`~ros.arm_client.Ros2ArmClient`), ``armcam`` and ``view``
+    ``arm`` (:class:`~vla_pipeline.robot.robot_node.Ros2ArmClient`), ``armcam`` and ``view``
     (:class:`TwinCamera`) and ``scene`` (:class:`TwinScene`) are ready when
     the constructor returns. :meth:`close` stops the controllers and the
     node; the node also dies with this process, so a crashed kernel leaves
@@ -301,8 +296,6 @@ class TwinSession:
         domain_id: int | None = None,
         ready_timeout_s: float = 60.0,
     ):
-        from common.config import DEFAULT_CONFIG
-
         self.domain_id = twin_domain_id() if domain_id is None else int(domain_id)
         self.config_path = Path(config_path or DEFAULT_CONFIG)
         r = cfg["robot"]
@@ -320,8 +313,7 @@ class TwinSession:
 
         cmd = [
             sys.executable, "-m", "so101_sim.node",
-            "--config", str(self.config_path), "--stack", "workshop",
-            "--sim-cameras", "arm", "--notebook-twin",
+            "--config", str(self.config_path), "--sim-cameras", "arm", "--notebook-twin",
         ]
         if scene is not None:
             fd, name = tempfile.mkstemp(prefix="twin_scene_", suffix=".json")
@@ -344,7 +336,7 @@ class TwinSession:
         fd, log_name = tempfile.mkstemp(prefix="twin_controllers_", suffix=".log")
         self.controllers_log_path = Path(log_name)
         with os.fdopen(fd, "w") as log:
-            self._controllers = start_controllers(self.config_path, "workshop", log=log)
+            self._controllers = start_controllers(self.config_path, log=log)
         atexit.register(self.close)
         try:
             self._wait_ready(ready_timeout_s, cfg)
@@ -378,8 +370,6 @@ class TwinSession:
         up), then the first arm frame, within ``timeout_s``."""
         from sensor_msgs.msg import JointState
 
-        from common.motion import MotionTimeout
-
         deadline = time.time() + timeout_s
 
         def remaining() -> float:
@@ -392,7 +382,7 @@ class TwinSession:
 
         up = threading.Event()  # the first joint state, or the node's exit
         threading.Thread(target=lambda: (self._proc.wait(), up.set()), daemon=True, name="twin-exit").start()
-        first = self._probe.node.create_subscription(JointState, HARDWARE_STATES, lambda _m: up.set(), _sensor_qos())
+        first = self._probe.node.create_subscription(JointState, HARDWARE_STATES, lambda _m: up.set(), sensor_qos())
         try:
             up.wait(timeout_s)
         finally:
@@ -417,7 +407,7 @@ class TwinSession:
 
     def reset_scene(self) -> bool:
         """Park the arm with the jaws open and put the props back (in the twin):
-        :meth:`~common.ros2_control_arm.ControllerArm.reset_twin`."""
+        :meth:`~vla_pipeline.robot.ros2_control_arm.ControllerArm.reset_twin`."""
         return self.arm.reset_twin()
 
     def close(self) -> None:

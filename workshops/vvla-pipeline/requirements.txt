@@ -38,3 +38,13 @@ webrtcvad>=2.0.10          # optional but recommended: robust VAD backend (audio
 # loop - without it the notebooks' "stop" buttons silently do nothing. 6.29 is
 # fully compatible with JupyterLab 4 + ipywidgets 8. Do NOT relax the <7 cap.
 ipykernel>=6.29,<7
+ipywidgets>=8.1
+jupyter-ui-poll>=1.1,<2      # vvla_workshop.ui_poll builds on its 1.x internals
+jupyterlab>=4.0
+matplotlib>=3.7
+
+# --- Tests (run_sim_tests.sh, run_notebooks.sh --test) ---
+pytest>=7.4
+pytest-timeout>=2.3
+nbclient>=0.10               # runs the notebooks headless
+nbformat>=5.10

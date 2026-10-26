@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The ros2_control robot description: limits from each stack's JOINT_LIMITS,
+"""The ros2_control robot description: limits from the pipeline's JOINT_LIMITS,
 and the twin's geometry, so the same radians pose both models alike."""
 
 from __future__ import annotations
@@ -18,21 +18,13 @@ import pytest
 pytestmark = pytest.mark.sim
 pytest.importorskip("xacro")  # ROS 2 Jazzy
 
-BODY = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
-STACKS = {
-    "pipeline": ("pipeline_cfg", "vla_pipeline.robot.arm_interface"),
-    "workshop": ("workshop_cfg", "common.motion"),
-}
+from so101_sim.mapping import BODY_JOINTS as BODY  # noqa: E402
 
 
-def _description(request, stack: str):
-    import importlib
-
+def _description(cfg: dict):
     from so101_sim.description import robot_description
+    from vla_pipeline.robot import arm_interface as module
 
-    fixture, name = STACKS[stack]
-    cfg = request.getfixturevalue(fixture)
-    module = importlib.import_module(name)
     urdf = robot_description(
         cfg, module.JOINT_LIMITS, joint_commands_topic="/cmd", joint_states_topic="/state",
         initial_state_timeout=7.0,
@@ -72,14 +64,13 @@ def _joint_frames(root, q: dict) -> dict:
     return frames
 
 
-@pytest.mark.parametrize("stack", sorted(STACKS))
-def test_limits_and_hardware_side_come_through_the_twin_joint_map(request, stack):
-    """The limits are the stack's JOINT_LIMITS. The hardware side waits for the
+def test_limits_and_hardware_side_come_through_the_twin_joint_map(pipeline_cfg):
+    """The limits are the pipeline's JOINT_LIMITS. The hardware side waits for the
     first joint state and stays quiet while every joint is within one encoder step."""
     from so101_sim.config import load_sim_config
     from so101_sim.mapping import JointMap
 
-    cfg, module, root = _description(request, stack)
+    cfg, module, root = _description(pipeline_cfg)
     sim = load_sim_config(cfg)
     jmap = JointMap(sim["joint_map"], sim["gripper_map"])
     for name, (lower, upper) in module.JOINT_LIMITS.items():
@@ -104,12 +95,12 @@ def test_limits_and_hardware_side_come_through_the_twin_joint_map(request, stack
     {"shoulder_pan": 0.3, "shoulder_lift": -0.4, "elbow_flex": 0.5, "wrist_flex": -0.2, "wrist_roll": 0.6,
      "gripper": 0.8},
 ], ids=["zero", "bent"])
-def test_every_joint_turns_about_the_twin_axis(request, q):
+def test_every_joint_turns_about_the_twin_axis(pipeline_cfg, q):
     import mujoco
 
     from so101_sim.world import SimWorld
 
-    _cfg, _module, root = _description(request, "workshop")
+    _cfg, _module, root = _description(pipeline_cfg)
     frames = _joint_frames(root, q)
     world = SimWorld(start=False)
     try:
@@ -132,12 +123,12 @@ def test_every_joint_turns_about_the_twin_axis(request, q):
         world.close()
 
 
-def test_controllers_drive_the_description_joints(request):
+def test_controllers_drive_the_description_joints(pipeline_cfg):
     import yaml
 
     from so101_sim.description import CONTROLLERS_FILE
 
-    _cfg, _module, root = _description(request, "workshop")
+    _cfg, _module, root = _description(pipeline_cfg)
     hardware = {j.get("name") for j in root.findall("ros2_control/joint")}
     controllers = yaml.safe_load(CONTROLLERS_FILE.read_text())
     for name in ("arm_controller", "arm_forward_controller"):

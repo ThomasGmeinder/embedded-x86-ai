@@ -8,8 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-
-ROOT = Path(__file__).resolve().parents[1]
+from vla_pipeline.utils.config import load_config, resolve
 
 
 def fail(message: str, errors: list[str]) -> None:
@@ -54,12 +53,9 @@ def main() -> int:
     else:
         # Use the already-compiled Whisper cache as a real load probe when it
         # exists. This must not invoke compilation in the deployment venv.
-        import yaml
-
-        cfg = yaml.safe_load((ROOT / "config/pipeline.yaml").read_text())
-        whisper = cfg["whisper"]
-        model = ROOT / whisper["encoder_onnx"]
-        cache_dir = ROOT / whisper.get("cache_dir", "cache")
+        whisper = load_config()["whisper"]
+        model = resolve(whisper["encoder_onnx"])
+        cache_dir = resolve(whisper.get("cache_dir", "cache"))
         cache_key = whisper.get("cache_key_encoder", "whisper_base_encoder")
         artifact = cache_dir / cache_key
         if model.is_file() and artifact.is_dir() and any(artifact.iterdir()):
@@ -70,7 +66,7 @@ def main() -> int:
                         (
                             "VitisAIExecutionProvider",
                             {
-                                "config_file": str(ROOT / whisper["encoder_vitisai_config"]),
+                                "config_file": str(resolve(whisper["encoder_vitisai_config"])),
                                 "cache_dir": str(cache_dir),
                                 "cache_key": cache_key,
                             },

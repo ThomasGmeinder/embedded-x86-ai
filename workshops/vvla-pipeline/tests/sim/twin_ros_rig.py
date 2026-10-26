@@ -33,12 +33,12 @@ TEST_DOMAIN_ID = int(os.environ.get("TWIN_TEST_DOMAIN_ID", "93"))
 # An extended arm: from here the wrist can bend to the grasp limit without
 # folding onto the forearm, as it would from the rest pose.
 EXTENDED = {"shoulder_lift": -20.0, "elbow_flex": 20.0, "wrist_flex": 0.0}
-BODY_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
+from so101_sim.mapping import BODY_JOINTS  # noqa: E402,F401  (the tier-2 tests import it from here)
 
 
 def join_test_domain() -> None:
     """Put this process, and every twin or kernel it starts, on the test domain."""
-    from common.twin_ros import use_private_domain
+    from vvla_workshop.twin_ros import use_private_domain
 
     os.environ["TWIN_ROS_DOMAIN_ID"] = str(TEST_DOMAIN_ID)
     use_private_domain(TEST_DOMAIN_ID)
@@ -104,12 +104,12 @@ class Probe:
     def __init__(self, cfg: dict):
         from sensor_msgs.msg import JointState
 
-        from common.motion import DEFAULT_CONTROL_HZ
-        from common.ros_helpers import Spinner, parse_joint_state
-        from common.twin_ros import _sensor_qos
         from so101_sim.config import load_sim_config
         from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES
         from so101_sim.mapping import JointMap
+        from so101_sim.node import sensor_qos
+        from vla_pipeline.robot.arm_interface import DEFAULT_CONTROL_HZ
+        from vla_pipeline.robot.ros2_control_arm import Spinner
 
         sim = load_sim_config(cfg)
         self._jmap = JointMap(sim["joint_map"], sim["gripper_map"])
@@ -120,7 +120,6 @@ class Probe:
         self._still = {m: 1.5 * self._jmap.steps_to_rad(m, 1.0) * fps for m in sim["joint_map"]}
         self._velocity: dict = {}
         self._commands: list = []  # (arrival, calibrated setpoint)
-        self._parse = parse_joint_state
         self._spin = Spinner("twin_test_probe")
         self.node = self._spin.node
         self._cond = threading.Condition()
@@ -128,18 +127,19 @@ class Probe:
         self._joints_t = 0.0
         self._history: deque = deque(maxlen=60 * 300)
         self._listeners: list = []
-        self.node.create_subscription(JointState, HARDWARE_STATES, self._on_state, _sensor_qos())
-        self.node.create_subscription(JointState, HARDWARE_COMMANDS, self._on_command, _sensor_qos())
+        self.node.create_subscription(JointState, HARDWARE_STATES, self._on_state, sensor_qos())
+        self.node.create_subscription(JointState, HARDWARE_COMMANDS, self._on_command, sensor_qos())
+
+    def _calibrated(self, msg) -> dict:
+        return {n: self._jmap.to_cal(n, float(p)) for n, p in zip(msg.name, msg.position)}
 
     def _on_command(self, msg) -> None:
-        radians, _effort = self._parse(msg)
         with self._cond:
-            self._commands.append((time.time(), {n: self._jmap.to_cal(n, v) for n, v in radians.items()}))
+            self._commands.append((time.time(), self._calibrated(msg)))
             self._cond.notify_all()
 
     def _on_state(self, msg) -> None:
-        radians, _effort = self._parse(msg)
-        joints = {n: self._jmap.to_cal(n, v) for n, v in radians.items()}
+        joints = self._calibrated(msg)
         velocity = dict(zip(msg.name, msg.velocity))
         now = time.time()
         stamp = msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec
@@ -163,8 +163,8 @@ class Probe:
 
     def failure_report(self, dest: Path, since: float | None) -> str:
         """``joints.csv`` of every joint state since ``since``, its longest gaps, and its last 4 s."""
-        from common.motion import joints_text
         from so101_sim import MOTOR_NAMES
+        from vla_pipeline.robot.arm_interface import joints_text
 
         with self._cond:
             rows = [h for h in self._history if since is None or h[0] >= since]
@@ -230,10 +230,10 @@ class Probe:
 
     def first_message(self, topic: str, msg_type) -> None:
         """Block until a message arrives on ``topic``."""
-        from common.twin_ros import _sensor_qos
+        from so101_sim.node import sensor_qos
 
         got = threading.Event()
-        sub = self.node.create_subscription(msg_type, topic, lambda _m: got.set(), _sensor_qos())
+        sub = self.node.create_subscription(msg_type, topic, lambda _m: got.set(), sensor_qos())
         try:
             got.wait()
         finally:
@@ -250,8 +250,8 @@ class Probe:
 
 
 def _offline_world(cfg: dict):
-    from common.motion import GRIPPER_CLOSED_FLOOR, REST_POSE
     from so101_sim.world import SimWorld
+    from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR, REST_POSE
 
     sim = dict(cfg.get("sim") or {})
     sim["gripper_map"] = {**(sim.get("gripper_map") or {}), "closed_cal": GRIPPER_CLOSED_FLOOR}
@@ -285,18 +285,8 @@ def quat_close(a, b, tol: float = 1e-3) -> bool:
     return abs(abs(float(np.dot(np.asarray(a, float), np.asarray(b, float)))) - 1.0) < tol
 
 
-def keyword_parse(text: str):
-    """The notebook's keyword stand-in for Llama."""
-    from common.fixtures import offline_parse_text
-    from common.intents import Intent, ParsedCommand
-
-    d = offline_parse_text(text)
-    params = {"object": d["object"]} if d.get("object") else {}
-    return ParsedCommand(Intent.from_string(d["command"]), params=params, transcript=text)
-
-
 class TwinRig:
-    """The section 5 console's context, on a :class:`~common.twin_ros.TwinSession`.
+    """The section 5 console's context, on a :class:`~vvla_workshop.twin_ros.TwinSession`.
 
     The arm camera and the mount camera are wrapped in ``FanoutCamera``
     as the console wraps them, and the operator is the notebook's scripted
@@ -304,11 +294,11 @@ class TwinRig:
     """
 
     def __init__(self, cfg: dict, detector, scene: dict | None = None):
-        from common.fixtures import ScriptedHands, ScriptedPose, SyntheticCamera
-        from common.motion import mapper_from_config
-        from common.twin_console import FanoutCamera
-        from common.twin_ros import TwinSession
-        from integration.dispatch import WorkshopContext, build_registry
+        from vla_pipeline.console import FanoutCamera
+        from vla_pipeline.dispatch import PipelineContext, build_registry
+        from vla_pipeline.utils.gesture_map import mapper_from_config
+        from vvla_workshop.fixtures import ScriptedHands, ScriptedPose, SyntheticCamera
+        from vvla_workshop.twin_ros import TwinSession
 
         self.cfg = copy.deepcopy(cfg)
         self.cfg["robot"]["backend"] = "sim"
@@ -316,12 +306,12 @@ class TwinRig:
         self.said: list[str] = []
         self.armcam = FanoutCamera(self.twin.armcam)
         self.mount = FanoutCamera(SyntheticCamera())
-        self.ctx = WorkshopContext(
+        self.ctx = PipelineContext(
             cfg=self.cfg,
             arm=self.twin.arm,
             pose=ScriptedPose(),
             hands=ScriptedHands(),
-            camera=self.mount,
+            mount_camera=self.mount,
             detector=detector,
             arm_camera=self.armcam,
             mapper=mapper_from_config(self.cfg),
@@ -344,7 +334,8 @@ class TwinRig:
 
         A crash is recorded; :meth:`run` and :meth:`close` raise it, so it fails the test.
         """
-        from integration.dispatch import handle_transcript
+        from vla_pipeline.dispatch import handle_transcript
+        from vla_pipeline.llm.intents import keyword_parse
 
         def behave() -> None:
             try:
@@ -366,7 +357,8 @@ class TwinRig:
 
     def stop(self) -> None:
         """The console's stop button: ``handle_transcript`` with "stop", from another thread."""
-        from integration.dispatch import handle_transcript
+        from vla_pipeline.dispatch import handle_transcript
+        from vla_pipeline.llm.intents import keyword_parse
 
         handle_transcript(self.ctx, "stop", keyword_parse)
 

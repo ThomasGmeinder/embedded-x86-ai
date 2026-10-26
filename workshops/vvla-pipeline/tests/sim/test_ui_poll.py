@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Cells run while a ``common.ui_poll.ui_events`` cell loops, in a real kernel.
+"""Cells run while a ``vvla_workshop.ui_poll.ui_events`` cell loops, in a real kernel.
 
 A loop cell like the twin console's (``poll(10)`` at 15 Hz until
 ``finished``) runs in a ``python3`` kernel. The test queues other cells the
@@ -20,16 +20,13 @@ import queue
 
 import pytest
 
-from notebook_harness import PIPE_ROOT
-
 pytestmark = pytest.mark.sim
 pytest.importorskip("jupyter_ui_poll")
 pytest.importorskip("jupyter_client")
 
-SETUP = f"""
-import sys, threading, time
-sys.path.insert(0, {str(PIPE_ROOT / "workshop" / "solution")!r})
-from common.ui_poll import ui_events
+SETUP = """
+import threading, time
+from vvla_workshop.ui_poll import ui_events
 """
 
 # The console's loop. It prints "loop polling" once ui_events polls, and

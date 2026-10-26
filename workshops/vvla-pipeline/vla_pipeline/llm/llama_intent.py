@@ -12,15 +12,19 @@ The model runs in ``llama-server`` (built with ``-DGGML_HIP=ON`` by
 grammar (``config/intent.gbnf``) constrains generation so the model can only
 emit ``{"command": "<name>", "object": "<words>"}`` - no free-form parsing.
 
-This revision returns a :class:`ParsedCommand` (intent **plus parameters**)
-so commands like "pick up the ball" carry their object through to behaviors,
-and keeps a persistent HTTP session (keep-alive) to shave connection setup
-off the voice-command latency budget.
+:func:`llama_server_command` is the launch recipe and :func:`parse_intent`
+one grammar-constrained request (the workshop's TODOs 1.5 and 1.6).
+:class:`LlamaIntentParser` owns the lifecycle: it connects to a running
+server or starts one, and is the only place that starts llama-server
+(``--serve`` runs it for the notebooks and scripts). It keeps a persistent
+HTTP session (keep-alive) to shave connection setup off the voice-command
+latency budget.
 
 Independent test
 ----------------
     python -m vla_pipeline.llm.llama_intent --text "hey can you pick up the ball"
     python -m vla_pipeline.llm.llama_intent --selftest
+    python -m vla_pipeline.llm.llama_intent --serve   # keep a server up until Ctrl-C
     python -m vla_pipeline.llm.llama_intent           # interactive REPL
 """
 
@@ -30,6 +34,7 @@ import argparse
 import json
 import logging
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -45,23 +50,118 @@ logger = logging.getLogger(__name__)
 READY_LINE = "listening on http://"
 
 
-class LlamaIntentParser:
-    """Manage a llama.cpp server and turn transcripts into :class:`ParsedCommand`."""
+def server_alive(base_url: str, http=None, timeout: float = 0.5) -> bool:
+    """``GET /health`` answers HTTP 200."""
+    http = http or requests
+    try:
+        return http.get(f"{base_url}/health", timeout=timeout).status_code == 200
+    except requests.RequestException:
+        return False
 
-    def __init__(self, cfg: dict):
+
+def llama_server_command(cfg: dict):
+    """Build the ``llama-server`` launch: ``(cmd list, env dict)``.
+
+    Reads ``llm:`` from the config. The command carries the model, host,
+    port, ``--n-gpu-layers``, ``--ctx-size``, ``--parallel``, and
+    ``--no-warmup`` when configured; the environment carries
+    ``HSA_OVERRIDE_GFX_VERSION`` when the config sets one, without
+    overriding a value the user already exported.
+    """
+    l = cfg["llm"]
+    server_bin = resolve(l["server_bin"])
+    model = resolve(l["model_gguf"])
+    if not server_bin.exists():
+        raise FileNotFoundError(f"{server_bin} not found - run ./bootstrap.sh (llama.cpp build step).")
+    if not model.exists():
+        raise FileNotFoundError(f"{model} not found - run ./bootstrap.sh (model download step).")
+    cmd = [
+        str(server_bin),
+        "--model", str(model),
+        "--host", l["host"],
+        "--port", str(l["port"]),
+        "--n-gpu-layers", str(l["n_gpu_layers"]),
+        "--ctx-size", str(l["ctx_size"]),
+        "--parallel", str(l.get("parallel", 1)),
+    ]
+    if l.get("no_warmup", False):
+        cmd.append("--no-warmup")
+    # Smaller compute ubatches keep each GPU submission short, so a 3-D
+    # render pass sharing the iGPU waits less behind prompt processing.
+    if l.get("ubatch_size"):
+        cmd += ["--ubatch-size", str(int(l["ubatch_size"]))]
+    cmd += list(l.get("extra_args", []) or [])
+
+    # Deterministic GPU init on Strix: the ROCm runtime can segfault on the
+    # first kernel dispatch unless the iGPU is presented as its nearest
+    # supported relative.
+    env = os.environ.copy()
+    gfx = l.get("hsa_override_gfx_version")
+    if gfx:
+        env.setdefault("HSA_OVERRIDE_GFX_VERSION", str(gfx))
+    # Optional compute-unit fence (e.g. "0:0-31" leaves 8 of 40 CUs to the
+    # graphics queue). Off by default: measure with so101_sim.bench first.
+    if l.get("cu_mask"):
+        env["HSA_CU_MASK"] = str(l["cu_mask"])
+    return cmd, env
+
+
+def parse_intent(transcript: str, base_url: str, grammar: str, http=None, temperature: float = 0.0) -> ParsedCommand:
+    """One transcript → one :class:`ParsedCommand`, grammar-constrained.
+
+    POSTs an OpenAI-style chat completion to ``{base_url}/v1/chat/completions``
+    with the system prompt (:data:`INTENT_SYSTEM_PROMPT`), the transcript as
+    the user message, ``temperature`` (0 = deterministic routing), a small
+    ``max_tokens``, and the GBNF ``grammar``, which is what makes the output
+    JSON guaranteed parseable. An empty transcript maps to UNKNOWN without
+    any HTTP round trip.
+    """
+    http = http or requests
+    if not transcript or not transcript.strip():
+        return ParsedCommand(Intent.UNKNOWN, transcript=transcript or "")
+    payload = {
+        "messages": [
+            {"role": "system", "content": INTENT_SYSTEM_PROMPT},
+            {"role": "user", "content": transcript.strip()},
+        ],
+        "temperature": temperature,
+        "max_tokens": 48,
+        "grammar": grammar,
+    }
+    r = http.post(f"{base_url}/v1/chat/completions", json=payload, timeout=30)
+    r.raise_for_status()
+    content = r.json()["choices"][0]["message"]["content"]
+    try:
+        data = json.loads(content)
+        command = data["command"]
+    except (json.JSONDecodeError, KeyError):
+        logger.warning("Unparseable LLM output: %r", content)
+        return ParsedCommand(Intent.UNKNOWN, transcript=transcript)
+    params: dict[str, str] = {}
+    obj = str(data.get("object", "") or "").strip()
+    if obj:
+        params["object"] = obj
+    return ParsedCommand(Intent.from_string(command), params=params, transcript=transcript)
+
+
+class LlamaIntentParser:
+    """Connect to (or start) llama-server and turn transcripts into :class:`ParsedCommand`.
+
+    It owns the server process only if it started one.
+    """
+
+    def __init__(self, cfg: dict, autostart: bool | None = None):
         l = cfg["llm"]
-        self.host: str = l["host"]
-        self.port: int = int(l["port"])
-        self.base = f"http://{self.host}:{self.port}"
+        self.base = f"http://{l['host']}:{int(l['port'])}"
         self.temperature: float = float(l.get("temperature", 0.0))
         self.grammar = resolve(l["grammar_file"]).read_text(encoding="utf-8")
-        self._cfg = l
+        self._cfg = cfg
         self._log_dir = cfg.get("system", {}).get("log_dir", "logs")
         self._proc: subprocess.Popen | None = None
         self._http = requests.Session()  # keep-alive: saves ~5-20 ms per command
 
-        if not self._server_alive():
-            if l.get("autostart", True):
+        if not server_alive(self.base, self._http):
+            if l.get("autostart", True) if autostart is None else autostart:
                 self._spawn_server()
             else:
                 raise ConnectionError(
@@ -72,62 +172,10 @@ class LlamaIntentParser:
     # Server lifecycle
     # ------------------------------------------------------------------
 
-    def _server_alive(self, timeout: float = 0.5) -> bool:
-        """Return True if llama-server responds healthy at /health."""
-        try:
-            r = self._http.get(f"{self.base}/health", timeout=timeout)
-            return r.status_code == 200
-        except requests.RequestException:
-            return False
-
     def _spawn_server(self, ready_timeout_s: float = 120.0) -> None:
         """Launch llama-server as a subprocess and block until it logs that it
         is listening (:data:`READY_LINE`), or exits."""
-        server_bin = resolve(self._cfg["server_bin"])
-        model = resolve(self._cfg["model_gguf"])
-        if not server_bin.exists():
-            raise FileNotFoundError(
-                f"{server_bin} not found - run ./bootstrap.sh (llama.cpp build step)."
-            )
-        if not model.exists():
-            raise FileNotFoundError(
-                f"{model} not found - run ./bootstrap.sh (model download step)."
-            )
-        cmd = [
-            str(server_bin),
-            "--model",
-            str(model),
-            "--host",
-            self.host,
-            "--port",
-            str(self.port),
-            "--n-gpu-layers",
-            str(self._cfg["n_gpu_layers"]),
-            "--ctx-size",
-            str(self._cfg["ctx_size"]),
-            "--parallel",
-            str(self._cfg.get("parallel", 1)),
-        ]
-        if self._cfg.get("no_warmup", False):
-            cmd.append("--no-warmup")
-        # Smaller compute ubatches keep each GPU submission short, so a 3-D
-        # render pass sharing the iGPU waits less behind prompt processing.
-        if self._cfg.get("ubatch_size"):
-            cmd += ["--ubatch-size", str(int(self._cfg["ubatch_size"]))]
-        cmd += list(self._cfg.get("extra_args", []) or [])
-
-        # Deterministic GPU init on Strix Halo (gfx1151): the ROCm runtime can
-        # segfault on the first kernel dispatch unless the iGPU is presented as
-        # its nearest supported relative. Allow overriding/clearing via config.
-        env = os.environ.copy()
-        gfx = self._cfg.get("hsa_override_gfx_version", "11.5.1")
-        if gfx:
-            env.setdefault("HSA_OVERRIDE_GFX_VERSION", str(gfx))
-        # Optional compute-unit fence (e.g. "0:0-31" leaves 8 of 40 CUs to the
-        # graphics queue). Off by default: measure with so101_sim.bench first.
-        if self._cfg.get("cu_mask"):
-            env["HSA_CU_MASK"] = str(self._cfg["cu_mask"])
-
+        cmd, env = llama_server_command(self._cfg)
         logger.info("Starting llama-server (ROCm): %s", " ".join(cmd))
         log_dir = resolve(self._log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -161,7 +209,7 @@ class LlamaIntentParser:
                     f"startup. Last log lines:\n{tail}\n"
                     f"(full log: {self._server_log_path})"
                 )
-            if not self._server_alive():
+            if not server_alive(self.base, self._http):
                 raise RuntimeError(f"llama-server logged readiness but {self.base}/health is not ready")
         except BaseException:
             self.close()
@@ -194,44 +242,17 @@ class LlamaIntentParser:
     # ------------------------------------------------------------------
 
     def parse(self, transcript: str) -> ParsedCommand:
-        """Map one spoken transcript to a ParsedCommand (grammar-constrained)."""
-        if not transcript or not transcript.strip():
-            return ParsedCommand(Intent.UNKNOWN, transcript=transcript or "")
-        payload = {
-            "messages": [
-                {"role": "system", "content": INTENT_SYSTEM_PROMPT},
-                {"role": "user", "content": transcript.strip()},
-            ],
-            "temperature": self.temperature,
-            "max_tokens": 48,
-            "grammar": self.grammar,
-        }
+        """Map one spoken transcript to a ParsedCommand (grammar-constrained), logging the latency."""
         t0 = time.perf_counter()
-        r = self._http.post(
-            f"{self.base}/v1/chat/completions", json=payload, timeout=30
-        )
-        r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"]
-        latency_ms = (time.perf_counter() - t0) * 1e3
-        try:
-            data = json.loads(content)
-            command = data["command"]
-        except (json.JSONDecodeError, KeyError):
-            logger.warning("Unparseable LLM output: %r", content)
-            return ParsedCommand(Intent.UNKNOWN, transcript=transcript)
-        intent = Intent.from_string(command)
-        params: dict[str, str] = {}
-        obj = str(data.get("object", "") or "").strip()
-        if obj:
-            params["object"] = obj
+        cmd = parse_intent(transcript, self.base, self.grammar, http=self._http, temperature=self.temperature)
         logger.info(
             "Intent %r %s ← %r (%.0f ms)",
-            intent.value,
-            params or "",
+            cmd.intent.value,
+            cmd.params or "",
             transcript,
-            latency_ms,
+            (time.perf_counter() - t0) * 1e3,
         )
-        return ParsedCommand(intent, params=params, transcript=transcript)
+        return cmd
 
 
 # =============================================================================
@@ -260,7 +281,7 @@ _SELFTEST_CASES = [
 
 
 def main() -> None:
-    """CLI entry point: parse one utterance, run the selftest suite, or start an interactive REPL."""
+    """CLI entry point: parse one utterance, run the selftest suite, keep a server up, or start a REPL."""
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
@@ -272,10 +293,20 @@ def main() -> None:
     parser.add_argument(
         "--selftest", action="store_true", help="run the built-in utterance suite"
     )
+    parser.add_argument(
+        "--serve", action="store_true",
+        help="start llama-server (or use the running one) and keep it until SIGINT/SIGTERM",
+    )
     args = parser.parse_args()
 
     llm = LlamaIntentParser(load_config(args.config))
     try:
+        if args.serve:
+            # blocked only now: llama-server, started above, keeps them unblocked
+            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+            print(f"llama-server ready at {llm.base}", flush=True)
+            signal.sigwait({signal.SIGINT, signal.SIGTERM})
+            return
         if args.selftest:
             passed = 0
             for text, expected, obj in _SELFTEST_CASES:

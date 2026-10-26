@@ -7,9 +7,10 @@
 
 """Self-test reporting (PROVIDED).
 
-Both harnesses (``models/selftest.py`` and ``ros/selftest.py``) funnel their
-checks through this module so every run prints the same per-TODO status
-table with targeted hints, and exits nonzero only on real failures.
+The component harnesses (``selftest_models``, ``selftest_ros`` and
+``selftest_integration``) funnel their checks through this module so every
+run prints the same per-TODO status table with targeted hints, and exits
+nonzero only on real failures.
 
 Statuses:
 - ``PASS``  - your code ran and produced the expected result.
@@ -22,117 +23,60 @@ Statuses:
 
 from __future__ import annotations
 
+import argparse
+import importlib
 import traceback
 from dataclasses import dataclass
+from pathlib import Path
 
-# The workshop's TODO map: id -> (where, what, notebook that teaches it).
+# The workshop's TODO map: id -> (your file in project/, what, its finished
+# reference in the pipeline, the notebook that teaches it). The reference has
+# the same name and parameters (tests/sim/test_copies.py checks it).
 TODO_INDEX = {
-    "1.1": (
-        "models/npu.py",
-        "npu_available",
-        "notebooks/01_ai_models/01_npu_yolo.ipynb",
-    ),
-    "1.2": (
-        "models/npu.py",
-        "build_npu_session",
-        "notebooks/01_ai_models/01_npu_yolo.ipynb",
-    ),
-    "1.3": (
-        "models/npu.py",
-        "active_provider",
-        "notebooks/01_ai_models/01_npu_yolo.ipynb",
-    ),
-    "1.4": (
-        "models/hands.py",
-        "create_hand_tracker",
-        "notebooks/01_ai_models/02_cpu_mediapipe.ipynb",
-    ),
-    "1.5": (
-        "models/llm.py",
-        "llama_server_command",
-        "notebooks/01_ai_models/03_igpu_llama.ipynb",
-    ),
-    "1.6": (
-        "models/llm.py",
-        "parse_intent",
-        "notebooks/01_ai_models/03_igpu_llama.ipynb",
-    ),
-    "2.1": (
-        "ros/camera_node.py",
-        "CameraNode._setup_ros",
-        "notebooks/02_ros2/01_cameras.ipynb",
-    ),
-    "2.2": (
-        "ros/camera_node.py",
-        "CameraNode._publish",
-        "notebooks/02_ros2/01_cameras.ipynb",
-    ),
-    "2.3": (
-        "ros/camera_client.py",
-        "Ros2Camera._setup_ros",
-        "notebooks/02_ros2/01_cameras.ipynb",
-    ),
-    "2.4": (
-        "ros/arm_node.py",
-        "So101ServerNode._setup_ros",
-        "notebooks/02_ros2/02_robot.ipynb",
-    ),
-    "2.5": (
-        "ros/arm_node.py",
-        "So101ServerNode._on_command",
-        "notebooks/02_ros2/02_robot.ipynb",
-    ),
-    "2.6": (
-        "ros/arm_node.py",
-        "So101ServerNode._publish_state",
-        "notebooks/02_ros2/02_robot.ipynb",
-    ),
-    "2.7": (
-        "ros/arm_client.py",
-        "Ros2ArmClient._setup_ros",
-        "notebooks/02_ros2/02_robot.ipynb",
-    ),
-    "2.8": (
-        "ros/arm_client.py",
-        "Ros2ArmClient.send_joints",
-        "notebooks/02_ros2/02_robot.ipynb",
-    ),
-    "2.9": (
-        "ros/arm_client.py",
-        "Ros2ArmClient._on_state",
-        "notebooks/02_ros2/02_robot.ipynb",
-    ),
-    "2.10": (
-        "ros/intent_node.py",
-        "IntentNode._setup_ros",
-        "notebooks/02_ros2/03_intent_node.ipynb",
-    ),
-    "2.11": (
-        "ros/intent_node.py",
-        "IntentNode._on_transcript",
-        "notebooks/02_ros2/03_intent_node.ipynb",
-    ),
-    "3.1": (
-        "integration/dispatch.py",
-        "build_registry",
-        "notebooks/03_integration/01_behavior.ipynb",
-    ),
-    "3.2": (
-        "integration/dispatch.py",
-        "handle_transcript",
-        "notebooks/03_integration/01_behavior.ipynb",
-    ),
-    "3.3": (
-        "integration/mimic.py",
-        "mimic_tick",
-        "notebooks/03_integration/01_behavior.ipynb",
-    ),
-    "3.4": (
-        "integration/behaviors.py",
-        "run_dance",
-        "notebooks/03_integration/01_behavior.ipynb",
-    ),
+    "1.1": ("models/npu.py", "npu_available", "vla_pipeline/utils/npu_session.py",
+            "notebooks/01_ai_models/01_npu_yolo.ipynb"),
+    "1.2": ("models/npu.py", "build_npu_session", "vla_pipeline/utils/npu_session.py",
+            "notebooks/01_ai_models/01_npu_yolo.ipynb"),
+    "1.3": ("models/npu.py", "active_provider", "vla_pipeline/utils/npu_session.py",
+            "notebooks/01_ai_models/01_npu_yolo.ipynb"),
+    "1.4": ("models/hands.py", "create_hand_tracker", "vla_pipeline/vision/mediapipe_hands.py",
+            "notebooks/01_ai_models/02_cpu_mediapipe.ipynb"),
+    "1.5": ("models/llm.py", "llama_server_command", "vla_pipeline/llm/llama_intent.py",
+            "notebooks/01_ai_models/03_igpu_llama.ipynb"),
+    "1.6": ("models/llm.py", "parse_intent", "vla_pipeline/llm/llama_intent.py",
+            "notebooks/01_ai_models/03_igpu_llama.ipynb"),
+    "2.3": ("ros/camera_client.py", "Ros2Camera._setup_ros", "vla_pipeline/vision/camera.py",
+            "notebooks/02_ros2/01_cameras.ipynb"),
+    "2.10": ("ros/intent_node.py", "IntentNode._setup_ros", "vla_pipeline/llm/intent_node.py",
+             "notebooks/02_ros2/03_intent_node.ipynb"),
+    "2.11": ("ros/intent_node.py", "IntentNode._on_transcript", "vla_pipeline/llm/intent_node.py",
+             "notebooks/02_ros2/03_intent_node.ipynb"),
+    "3.1": ("integration/dispatch.py", "build_registry", "vla_pipeline/dispatch.py",
+            "notebooks/03_integration/01_behavior.ipynb"),
+    "3.2": ("integration/dispatch.py", "handle_transcript", "vla_pipeline/dispatch.py",
+            "notebooks/03_integration/01_behavior.ipynb"),
+    "3.3": ("integration/mimic.py", "mimic_tick", "vla_pipeline/behaviors/gesture_mimic.py",
+            "notebooks/03_integration/01_behavior.ipynb"),
+    "3.4": ("integration/behaviors.py", "run_dance", "vla_pipeline/behaviors/dance.py",
+            "notebooks/03_integration/01_behavior.ipynb"),
 }
+
+
+ARTIFACTS = Path(__file__).resolve().parents[1] / "project" / "_artifacts"  # what the self-tests write
+
+
+def implementation(todo_id: str, reference: bool = False):
+    """The module holding ``todo_id``: your file in ``project/``, or with ``reference`` the pipeline's."""
+    where, _what, ref, _nb = TODO_INDEX[todo_id]
+    path = ref if reference else f"vvla_workshop/project/{where}"
+    return importlib.import_module(path[: -len(".py")].replace("/", "."))
+
+
+def reference_flag(description: str) -> bool:
+    """A self-test's command line: True with ``--reference`` (check the pipeline's finished code)."""
+    ap = argparse.ArgumentParser(description=description)
+    ap.add_argument("--reference", action="store_true", help="check the pipeline's finished code")
+    return ap.parse_args().reference
 
 
 @dataclass
@@ -162,8 +106,8 @@ class Reporter:
         mark = {"PASS": "[ok]", "FAIL": "[x]", "TODO": "…", "SKIP": "-"}[status]
         line = f"  [{status:4s}] {mark} {name}"
         if todo != "-" and todo in TODO_INDEX:
-            where, what, _nb = TODO_INDEX[todo]
-            line += f"   (TODO {todo}: {what} in {where})"
+            where, what, _ref, _nb = TODO_INDEX[todo]
+            line += f"   (TODO {todo}: {what} in project/{where})"
         print(line)
         if detail:
             for row in detail.splitlines():
@@ -186,7 +130,7 @@ class Reporter:
         try:
             value = fn()
         except NotImplementedError as e:
-            nb = TODO_INDEX.get(todo, ("", "", ""))[2]
+            nb = TODO_INDEX.get(todo, ("", "", "", ""))[3]
             self.add(todo, name, "TODO", f"not implemented yet → open {nb}\n({e})")
             return False, None
         except AssertionError as e:
@@ -221,8 +165,8 @@ class Reporter:
         if todos:
             print("Next up:")
             for t in todos:
-                where, what, nb = TODO_INDEX[t]
-                print(f"  TODO {t}: {what}  →  {where}   (read {nb})")
+                where, what, _ref, nb = TODO_INDEX[t]
+                print(f"  TODO {t}: {what}  →  project/{where}   (read {nb})")
         if counts["FAIL"] == 0 and counts["TODO"] == 0 and counts["PASS"] > 0:
             print("ALL CHECKS PASSED [ok]")
         return 1 if counts["FAIL"] else 0

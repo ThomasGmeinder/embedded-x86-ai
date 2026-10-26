@@ -16,34 +16,20 @@ sourcing ROS:
 
     .venv/bin/python $(which ros2) launch launch/so101_control.launch.py
     ... launch/so101_control.launch.py gripper:=action
-    ... launch/so101_control.launch.py config:=workshop/solution/config/workshop.yaml stack:=workshop
 """
-
-import sys
-from pathlib import Path
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _joint_limits(stack: str) -> dict:
-    """The host stack's ``JOINT_LIMITS``, from its own copy of the arm layer."""
-    root = REPO_ROOT / "workshop" / "solution" if stack == "workshop" else REPO_ROOT
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-    if stack == "workshop":
-        from common.motion import JOINT_LIMITS
-    else:
-        from vla_pipeline.robot.arm_interface import JOINT_LIMITS
-    return JOINT_LIMITS
+from vla_pipeline.utils.config import DEFAULT_CONFIG
 
 
 def _nodes(context):
     import yaml
+
+    from vla_pipeline.robot.arm_interface import JOINT_LIMITS
 
     from so101_sim.control import (
         ARM_CONTROLLER,
@@ -57,12 +43,11 @@ def _nodes(context):
     from so101_sim.description import CONTROLLERS_FILE, robot_description
 
     config = LaunchConfiguration("config").perform(context)
-    stack = LaunchConfiguration("stack").perform(context)
     gripper = LaunchConfiguration("gripper").perform(context)
     with open(config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     urdf = robot_description(
-        cfg, _joint_limits(stack), joint_commands_topic=HARDWARE_COMMANDS, joint_states_topic=HARDWARE_STATES,
+        cfg, JOINT_LIMITS, joint_commands_topic=HARDWARE_COMMANDS, joint_states_topic=HARDWARE_STATES,
         initial_state_timeout=SERVER_START_S,
     )
     controllers = str(CONTROLLERS_FILE)
@@ -106,14 +91,8 @@ def generate_launch_description() -> LaunchDescription:
         [
             DeclareLaunchArgument(
                 "config",
-                default_value=str(REPO_ROOT / "config" / "pipeline.yaml"),
-                description="pipeline.yaml or workshop.yaml",
-            ),
-            DeclareLaunchArgument(
-                "stack",
-                default_value="pipeline",
-                choices=["pipeline", "workshop"],
-                description="whose JOINT_LIMITS the description uses",
+                default_value=str(DEFAULT_CONFIG),
+                description="the pipeline config",
             ),
             DeclareLaunchArgument(
                 "gripper",

@@ -7,8 +7,8 @@
 
 """Defaults for the digital twin, merged with a ``sim:`` config section.
 
-Both host stacks (``config/pipeline.yaml`` and ``workshop/config/workshop.yaml``)
-carry a ``sim:`` block; anything omitted there falls back to :data:`DEFAULTS`.
+The pipeline config (``config/pipeline.yaml``) carries a ``sim:`` block;
+anything omitted there falls back to :data:`DEFAULTS`.
 """
 
 from __future__ import annotations

@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Twin console - one desktop window showing what the pipeline sees, hears and does.
+"""Twin console - one image of what the pipeline sees, hears and does.
 
 Layout (1200 x 1100)::
 
@@ -21,10 +21,12 @@ The console only observes. Cameras are wrapped in :class:`FanoutCamera` so the
 console and a running behavior both get every frame; the models are tapped in
 place (:class:`ModelTap`) so the tiles show what the behavior computed, and
 the console runs a model itself only while no behavior is using it. The
-workshop keeps its own copy of the camera fan-out and the model tap
-(``workshop/common/twin_console.py``); ``tests/sim/test_copies.py`` fails when the two drift apart.
+dispatcher's events (:meth:`TwinConsole.attach`) fill the voice panel.
 
-All HighGUI calls happen on the thread that calls :meth:`TwinConsole.run`.
+:meth:`TwinConsole.compose` returns the frame: :meth:`TwinConsole.run` shows
+it in a desktop window (``run_pipeline.sh --digital-twin``), and the digital
+twin notebook shows it in a widget (:func:`jpeg`). All HighGUI calls happen
+on the thread that calls :meth:`TwinConsole.run`.
 """
 
 from __future__ import annotations
@@ -54,6 +56,7 @@ FPS = 15.0
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 WHITE, GRAY, DIM = (235, 235, 235), (150, 150, 150), (90, 90, 90)
 GREEN, YELLOW, RED, CYAN = (80, 200, 80), (60, 200, 230), (60, 60, 230), (220, 200, 80)
+RESET_LINE = "Reset. Arm parked, objects back on the table."
 
 
 class FanoutCamera:
@@ -250,7 +253,7 @@ PROCESSOR = {"VitisAIExecutionProvider": "NPU", "CPUExecutionProvider": "CPU"}
 def provider_name(model, default: str = "CPU") -> str:
     """The processor a model runs on, for a tile title: NPU, CPU, or the provider's name.
 
-    From the model's ``provider`` (the workshop's models), else its ONNX ``session``.
+    From the model's ``provider``, else its ONNX ``session``.
     """
     p = getattr(model, "provider", None)
     session = getattr(model, "session", None)
@@ -260,17 +263,29 @@ def provider_name(model, default: str = "CPU") -> str:
     return PROCESSOR.get(p, p.replace("ExecutionProvider", ""))
 
 
+def jpeg(img: np.ndarray, quality: int = 80) -> bytes:
+    """``img`` as JPEG bytes, what a notebook ``widgets.Image`` shows."""
+    return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])[1].tobytes()
+
 
 class TwinConsole:
-    """Observe a :class:`~vla_pipeline.main.PipelineContext` and draw it in one window."""
+    """Observe a :class:`~vla_pipeline.dispatch.PipelineContext` and draw it in one image.
 
-    def __init__(self, ctx, voice: str = "mic"):
+    Construction fans the context's cameras out, so a behavior and the
+    console both get every frame, and routes ``ctx.say`` into the voice panel.
+    ``view`` is the 3D view (default: the twin's, from the config);
+    ``restore()`` parks the twin and puts the props back, True when it did
+    (default: through the arm client).
+    """
+
+    def __init__(self, ctx, voice: str = "mic", view=None, hint: str = "space: stop    r: reset    q: quit",
+                 restore=None):
         self.ctx = ctx
         self.voice = voice  # "mic" | "typed"
+        self.hint = hint
+        self._restore = restore
         cfg = ctx.cfg
-        self.load_threshold = float(
-            ((cfg.get("behaviors") or {}).get("grip") or {}).get("load_threshold", 120.0)
-        )
+        self.load_threshold = float((cfg.get("grip") or {}).get("load_threshold", 120.0))
 
         if ctx.mount_camera is not None:
             ctx.mount_camera = FanoutCamera(ctx.mount_camera)
@@ -281,7 +296,7 @@ class TwinConsole:
         self.detector = (
             ModelTap(ctx.detector, "infer") if ctx.detector is not None else None
         )
-        self.view = _view_source(cfg)
+        self.view = view if view is not None else _view_source(cfg)
 
         self._log: deque[tuple[str, tuple]] = deque(maxlen=LOG_LINES)
         self._lock = threading.Lock()
@@ -309,6 +324,8 @@ class TwinConsole:
 
     def _restore_twin(self) -> bool:
         """Park the twin and restore its props. True when this process can."""
+        if self._restore is not None:
+            return bool(self._restore())
         arm = self.ctx.arm
         world = getattr(arm, "world", None)
         if world is not None:
@@ -340,7 +357,7 @@ class TwinConsole:
             if not self._restore_twin():
                 ctx.say("Reset is only available on the digital twin.")
                 return
-            ctx.say("Reset. Arm parked, objects back on the table.")
+            ctx.say(RESET_LINE)
         finally:
             if dispatcher is not None:
                 dispatcher.discard()
@@ -349,7 +366,7 @@ class TwinConsole:
                 holding.clear()
 
     def on_level(self, rms: float, speaking: bool) -> None:
-        """Microphone block level from :meth:`FastListener.run_forever`."""
+        """Microphone block level from :class:`~vla_pipeline.audio.vad_listener.FastListener`."""
         with self._lock:
             self._level, self._speaking, self._level_t = rms, speaking, time.monotonic()
 
@@ -466,7 +483,7 @@ class TwinConsole:
             y += 20
 
         self._arm_hud(p, VIEW_H - 92)
-        cv2.putText(p, "space: stop    r: reset    q: quit", (12, VIEW_H - 12), FONT, 0.45, DIM, 1, cv2.LINE_AA)
+        cv2.putText(p, self.hint, (12, VIEW_H - 12), FONT, 0.45, DIM, 1, cv2.LINE_AA)
         return p
 
     def _arm_hud(self, p, y) -> None:
@@ -495,20 +512,34 @@ class TwinConsole:
             for i in range(0, len(parts), 3):
                 cv2.putText(p, "   ".join(parts[i : i + 3]), (12, y + 36 + 18 * (i // 3)), FONT, 0.42, GRAY, 1, cv2.LINE_AA)
 
+    def _webcam_tiles(self, frame) -> list[np.ndarray]:
+        pose, hands = self._pose_tile(frame).copy(), self._hands_tile(frame).copy()
+        _title(pose, f"mount: YOLO pose [{provider_name(self.pose.obj) if self.pose else 'off'}]")
+        _title(hands, f"mount: MediaPipe hands [{provider_name(self.hands.obj) if self.hands else 'off'}]")
+        return [pose, hands]
+
+    def webcam_tiles(self) -> np.ndarray:
+        """The two webcam tiles, YOLO pose and MediaPipe hands, side by side."""
+        frame = self.ctx.mount_camera.latest() if self.ctx.mount_camera is not None else None
+        return np.hstack(self._webcam_tiles(frame))
+
     def compose(self) -> np.ndarray:
+        """One 1200 x 1100 BGR frame of the whole console."""
         mount_frame = self.ctx.mount_camera.latest() if self.ctx.mount_camera is not None else None
         armcam = self.ctx.arm_camera.latest() if self.ctx.arm_camera is not None else None
-        tiles = [
-            self._pose_tile(mount_frame).copy(),
-            self._hands_tile(mount_frame).copy(),
-            self._detect_tile(armcam).copy(),
-        ]
-        _title(tiles[0], f"mount: YOLO pose [{provider_name(self.pose.obj) if self.pose else 'off'}]")
-        _title(tiles[1], f"mount: MediaPipe hands [{provider_name(self.hands.obj) if self.hands else 'off'}]")
-        _title(tiles[2], f"arm: YOLO detect [{provider_name(self.detector.obj) if self.detector else 'off'}]")
-        top = np.hstack(tiles)
+        detect = self._detect_tile(armcam).copy()
+        _title(detect, f"arm: YOLO detect [{provider_name(self.detector.obj) if self.detector else 'off'}]")
+        top = np.hstack([*self._webcam_tiles(mount_frame), detect])
         bottom = np.hstack([self._view_tile(), self._panel()])
         return np.vstack([top, bottom])
+
+    def close(self) -> None:
+        """Stop the camera fan-out threads (closing the cameras they wrap) and the 3D view."""
+        for cam in (self.ctx.mount_camera, self.ctx.arm_camera):
+            if isinstance(cam, FanoutCamera):
+                cam.close()
+        if self.view is not None:
+            (getattr(self.view, "close", None) or self.view.release)()
 
     # ------------------------------------------------------------ loop
 
@@ -543,3 +574,4 @@ class TwinConsole:
             cv2.destroyWindow(WINDOW)
             if self.view is not None:
                 (getattr(self.view, "close", None) or self.view.release)()
+                self.view = None

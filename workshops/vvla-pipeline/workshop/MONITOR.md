@@ -16,15 +16,13 @@ Every source is optional. On a plain dev machine with no `radeontop` or
 ## From the workshop folder
 
 ```bash
-./launch_monitor.sh          # or:  python3 common/resource_hud.py
+./launch_monitor.sh          # or:  python -m vla_pipeline.utils.resource_monitor --hud
 ```
 
 ## From any notebook
 
-The setup cell already puts `common` on the path, so:
-
 ```python
-from common.monitor import open_monitor, close_monitor
+from vvla_workshop.monitor import open_monitor, close_monitor
 open_monitor()     # pops the HUD on top of everything
 close_monitor()    # dismiss it  (toggle_monitor() flips between the two)
 ```
@@ -37,6 +35,6 @@ right-click. Press `t` to toggle always-on-top. Re-run the launcher (or
 
 ## Files
 
-- `common/resource_hud.py` — the HUD (standalone; reused by both entry points).
+- `../vla_pipeline/utils/resource_monitor.py` — the HUD (`--hud`; reused by both entry points).
 - `common/monitor.py` — `open_monitor` / `close_monitor` / `toggle_monitor` for notebooks.
 - `launch_monitor.sh` — one-line launcher for the workshop folder.

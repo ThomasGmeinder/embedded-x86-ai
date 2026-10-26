@@ -5,8 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The pipeline's arm layer keeps main's names: ``DirectArm`` owns the Feetech
-bus. Its code is the workshop's ``LeRobotArm`` (``test_copies.py``)."""
+"""The pipeline's arm layer keeps main's names: ``DirectArm`` owns the Feetech bus."""
 
 from __future__ import annotations
 

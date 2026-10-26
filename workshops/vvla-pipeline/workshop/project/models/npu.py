@@ -5,31 +5,27 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The NPU session factory - the centerpiece of the workshop.
+"""TODOs 1.1-1.3: the NPU session factory - the centerpiece of the workshop.
 
-Every ONNX model this pipeline runs on the XDNA2 NPU goes through ONE
-function: :func:`build_npu_session`. Vision at camera rate lives or dies on
-getting this right, and the two classic Ryzen AI failure modes both start
-here:
+Every ONNX model the pipeline runs on the XDNA2 NPU goes through ONE
+function, ``build_npu_session``. The two classic Ryzen AI failure modes both
+start here:
 
 1. **Silent CPU fallback.** Requesting the NPU is not the same as getting
    it. Always verify which execution provider a session *actually* got
-   (:func:`active_provider`) - a model that quietly landed on CPU still
-   works, just 10-30× slower, and you won't know unless you look.
+   (``active_provider``) - a model that quietly landed on CPU still works,
+   just 10-30x slower.
 2. **Load order.** The models on the NPU share buffers within a process,
-   created by its first NPU session and freed when the last one closes. A
-   larger model opened while a smaller one is open fails with ``HW context
-   creation unsuccessful / sub buffer size and offset``. That is NOT a stale
-   cache and NOT a full NPU: open YOLO-pose first and keep it open, so
-   YOLO-detect can load after it (``models.vision.size_npu`` does this).
+   created by its first NPU session and freed when the last one closes. Open
+   YOLO-pose first and keep it open, so YOLO-detect can load after it.
 
-Compiled NPU artifacts are keyed by ``cache_dir + cache_key`` and are
-portable: the first compile can take tens of minutes (done once, from the
-Ryzen AI SDK venv), then every load is ~1 s from the cache. Each model MUST
-use a unique ``cache_key`` or the entries collide.
+Compiled NPU artifacts are keyed by ``cache_dir + cache_key``: the first
+compile can take tens of minutes, then every load is ~1 s from the cache.
+Each model MUST use a unique ``cache_key``.
 
+Reference: ``vla_pipeline/utils/npu_session.py`` (same names and parameters).
 Notebook: ``notebooks/01_ai_models/01_npu_yolo.ipynb``
-Self-test: ``python -m models.selftest``
+Self-test: ``python -m vvla_workshop.selftest_models``
 """
 
 from __future__ import annotations
@@ -39,7 +35,7 @@ from pathlib import Path
 
 import onnxruntime as ort
 
-from common.config import resolve
+from vla_pipeline.utils.config import resolve
 
 logger = logging.getLogger(__name__)
 
@@ -56,45 +52,6 @@ def npu_available() -> bool:
     # <<< TODO 1.1
 
 
-def build_npu_session(
-    onnx_path,
-    device: str = "npu",
-    *,
-    vitisai_config="config/vaiep_config.json",
-    cache_dir="../../cache",
-    cache_key: str = "model",
-) -> ort.InferenceSession:
-    """Create an ``InferenceSession`` on the NPU (VitisAI EP) or the CPU.
-
-    Args:
-        onnx_path: Path to the FP32 ONNX model (resolved against the project
-            root).
-        device: ``"npu"`` or ``"cpu"``. ``"npu"`` must fall back to CPU (with
-            a warning) when the VitisAI EP is not present, so every component
-            still runs on machines without the Ryzen AI stack.
-        vitisai_config: VitisAI compiler pass configuration (JSON) - selects
-            the VAIML partitioning pass and BF16 conversion.
-        cache_dir: NPU compile cache directory (shared with the real
-            pipeline so nothing recompiles).
-        cache_key: Unique cache key for THIS model. Two models sharing a key
-            corrupt each other's compiled artifacts.
-
-    Returns:
-        A ready ``onnxruntime.InferenceSession``.
-    """
-    onnx_path = resolve(onnx_path)
-    if not onnx_path.exists():
-        raise FileNotFoundError(
-            f"{onnx_path} not found - run the repo's bootstrap (model export "
-            "step) or point the config at your model files."
-        )
-
-    # >>> TODO 1.2: build_npu_session - notebooks/01_ai_models/01_npu_yolo.ipynb
-    raise NotImplementedError(
-        "TODO 1.2 (build_npu_session): implement me - see notebooks/01_ai_models/01_npu_yolo.ipynb")
-    # <<< TODO 1.2
-
-
 def active_provider(session: ort.InferenceSession) -> str:
     """The execution provider this session ACTUALLY got (first = active).
 
@@ -107,15 +64,34 @@ def active_provider(session: ort.InferenceSession) -> str:
     # <<< TODO 1.3
 
 
-def report_placement(session: ort.InferenceSession, requested: str,
-                     name: str = "model") -> str:
-    """PROVIDED: log where a model landed vs. where you asked it to go."""
-    got = active_provider(session)
-    on_npu = got == "VitisAIExecutionProvider"
-    if requested == "npu" and not on_npu:
-        logger.warning("%s requested NPU but is running on %s - check the "
-                       "Ryzen AI wheel install and the NPU load order.",
-                       name, got)
-    else:
-        logger.info("%s running on %s", name, got)
-    return got
+def build_npu_session(
+    onnx_path: str | Path,
+    device: str = "npu",
+    *,
+    vitisai_config: str | Path = "config/vaiep_config.json",
+    cache_dir: str | Path = "cache",
+    cache_key: str = "model",
+) -> ort.InferenceSession:
+    """Create an ``InferenceSession`` on the NPU (VitisAI EP) or the CPU.
+
+    Args:
+        onnx_path: Path to the FP32 ONNX model (resolved against the repo root).
+        device: ``"npu"`` or ``"cpu"``. ``"npu"`` must fall back to CPU (with
+            a warning) when the VitisAI EP is not present, so every component
+            still runs on machines without the Ryzen AI stack.
+        vitisai_config: VitisAI compiler pass configuration (JSON) - selects
+            the VAIML partitioning pass and BF16 conversion.
+        cache_dir: NPU compile cache directory (shared with the pipeline so
+            nothing recompiles).
+        cache_key: Unique cache key for THIS model. Two models sharing a key
+            corrupt each other's compiled artifacts.
+    """
+    onnx_path = resolve(onnx_path)
+    if not onnx_path.exists():
+        raise FileNotFoundError(
+            f"{onnx_path} not found - run ./bootstrap.sh (model export step) first."
+        )
+    # >>> TODO 1.2: build_npu_session - notebooks/01_ai_models/01_npu_yolo.ipynb
+    raise NotImplementedError(
+        "TODO 1.2 (build_npu_session): implement me - see notebooks/01_ai_models/01_npu_yolo.ipynb")
+    # <<< TODO 1.2

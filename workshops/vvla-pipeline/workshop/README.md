@@ -16,17 +16,22 @@ runs on the CPU.
 ```
 notebooks/               phase 1 - read & run these first (each is self-contained)
   01_ai_models/          NPU session factory - MediaPipe on CPU - Llama on iGPU
-  02_ros2/               camera nodes/clients - SO-101 server/client - Llama intent node
+  02_ros2/               camera node and client - SO-101 server and client - Llama intent node
   03_integration/        registry dispatch - the mimic composition - the live UI -
                          the digital twin (MuJoCo arm, cameras, grasp; live console over ROS 2)
-common/                  PROVIDED helpers (imaging, motion, ROS codecs, fixtures,
-                         reporting, resource HUD) - one shared copy, imported below
-project/                 phase 2 - prebuilt project with 21 TODO stubs you implement
-  models/  ros/  integration/  app.py   your code + prebuilt harnesses
-solution/                identical tree, every TODO filled in (the answer key)
+common/                  PROVIDED helpers, installed as the vvla_workshop package
+                         (fixtures, self-tests and their reporting, the twin over ROS 2)
+project/                 phase 2 - 13 TODO stubs you implement (vvla_workshop.project)
+  models/  ros/  integration/
 launch_monitor.sh        always-on-top resource HUD: CPU% · GPU% · NPU inf/s | Idle
 MONITOR.md               how to open/close that HUD (from a shell or a notebook)
 ```
+
+The answer key is the pipeline itself, `../vla_pipeline/`: each TODO in
+`project/` has the name and parameters of a pipeline function that is
+finished (`TODO_INDEX` in `common/feedback.py` names it). The notebooks
+run the pipeline, and a cell in each lesson's "Your turn" section imports
+your functions and checks them.
 
 **The rule that decided what's a TODO:** if code would be byte-for-byte
 identical in any non-AMD, non-ROS project (letterboxing, decoders,
@@ -40,16 +45,19 @@ Before the steps below, install the Ryzen AI SDK and prerequisites as described 
 
 ```bash
 cd workshop
-./run_notebooks.sh                        # registers the kernel, installs missing
-                                          # deps, starts the llama server and the
-                                          # resource HUD, then serves Jupyter Lab.
-                                          # This shell stays here until you quit it.
+./run_notebooks.sh                        # starts the llama server and the resource
+                                          # HUD, then serves Jupyter Lab. This shell
+                                          # stays here until you quit it.
 ```
 
 Jupyter opens `notebooks/`. Read and run them in order: `01_ai_models`,
-`02_ros2`, `03_integration`.
+`02_ros2`, `03_integration`. In VS Code, open a notebook and pick the
+**Python (VVLA workshop)** kernel.
 
-The `02_ros2` notebooks and section 5 of `03_integration/02_digital_twin.ipynb` import `rclpy`. `bootstrap.sh` installs ROS 2 Jazzy and creates `.venv` with `--system-site-packages`. `./run_notebooks.sh` sources `/opt/ros/jazzy/setup.bash` before Jupyter starts.
+`bootstrap.sh` registers that kernel with the NPU runtime, ROS 2 Jazzy and
+`ros_ws/` in its `kernel.json`, so JupyterLab and VS Code start it the same
+way and the `02_ros2` notebooks and section 5 of
+`03_integration/02_digital_twin.ipynb` can import `rclpy`.
 
 After the notebooks, the TODOs are in `project/`. Follow [project/README.md](project/README.md).
 
@@ -65,7 +73,7 @@ opens it for you (pass `--no-monitor` to skip); to open or reopen it on its own:
 ```
 
 ```python
-from common.monitor import open_monitor, close_monitor
+from vvla_workshop.monitor import open_monitor, close_monitor
 open_monitor()       # floats on top; close_monitor() dismisses it
 ```
 
@@ -77,12 +85,10 @@ Drag to move it; close it with its ✕, the Esc key, or a right-click. It reads
 ## Instructor's corner
 
 ```bash
-diff -r project solution                  # exactly the 21 TODO bodies, nothing else
-cd solution && python -m models.selftest && python -m ros.selftest \
-  && python app.py --dry-run --synthetic --no-llm --headless --frames 60
+python -m vvla_workshop.selftest --quiet     # no FAIL on the stubs, and the pipeline passes every check
 ```
 
-`./run_notebooks.sh --test` runs every notebook and the commands above
+`./run_notebooks.sh --test` runs every notebook and the command above
 headless, after the same setup as the happy path. See
 [Automated tests](../README.md#automated-tests).
 

@@ -9,9 +9,10 @@
 frame, via **direct camera-frame motion mapping** (see
 :mod:`vla_pipeline.utils.gesture_map`).
 
-The image is treated as a control surface and its signals are mapped straight
-onto SO-101 joints - the same absolute-target, limit-clamped commands that
-``test_ros2_arm_motion`` issues - rather than solving the human arm's geometry:
+One tick of mimic is the whole pipeline in miniature::
+
+    camera frame ──► YOLO-pose (NPU) ──► wrist x/y + forearm ─┐
+                └──► MediaPipe (CPU) ──► size/roll/pinch ─────┴──► mapper ──► arm
 
 - **YOLOv26s-pose (NPU)** → the nearest person's right wrist position in the
   frame: horizontal → left/right (shoulder_pan), vertical → up/down
@@ -20,32 +21,29 @@ onto SO-101 joints - the same absolute-target, limit-clamped commands that
   controller**: when MediaPipe loses the hand the robot keeps following the
   wrist for x/y until the hand returns.
 - **MediaPipe Hands (CPU)** →
-    * hand **size** (how near the hand is) → forward/back (z): reaching forward
-      extends shoulder_lift with elbow_flex negative; the opposite pulls back,
+    * hand **size** (how near the hand is) → forward/back,
     * wrist→knuckle direction measured against the forearm (the wrist bend)
       → wrist_flex,
-    * thumb↔index **line** (with the knuckle-line reference, then the wrist→knuckle
-      angle, as reliability-weighted fallbacks) → wrist_roll (forward-most = the
-      calibration midpoint, 0),
-    * thumb↔index **distance** → gripper, as a continuous ramp: closed for the
-      first ``grip_close_frac`` of the calibrated min/max range, then opening
-      linearly up to ~90%.
+    * thumb↔index **line** (with the knuckle-line reference, then the
+      wrist→knuckle angle, as reliability-weighted fallbacks) → wrist_roll,
+    * thumb↔index **distance** → gripper, as a continuous ramp.
 
-The pinch always drives the gripper: a grip locked by *grip* or *pick_place*
-is released when mimic starts (``vla_pipeline.main``), so a held object drops
-when the fingers open. The gripper holds its last position whenever the hand
-is unseen and only moves when a new thumb↔index distance is measured.
+:func:`mimic_tick` is one tick (the workshop's TODO 3.3); :func:`run_mimic`
+is the behavior around it: the loop, the preview and the HUD that attributes
+each joint to the TODO that feeds it. The pinch always drives the gripper: a
+grip locked by *grip* or *pick_place* is released when mimic starts, so a
+held object drops when the fingers open.
 
 Depth neutral (optional, one-time per camera position):
     python -m vla_pipeline.behaviors.gesture_mimic --calibrate-depth
 Hold your hand at a comfortable mid-distance; paste the printed
-``hand_size_neutral`` into ``behaviors.gesture_mimic`` in ``config/pipeline.yaml``.
+``hand_size_neutral`` into ``mimic`` in ``config/pipeline.yaml``.
 With it left at 0 the neutral auto-calibrates from the first few frames.
 
 Gripper distance (recommended, one-time per operator):
     python -m vla_pipeline.behaviors.gesture_mimic --calibrate-grip
 Pinch your thumb & index together, then spread them wide when prompted; paste
-the printed ``grip_min`` / ``grip_max`` into ``config/pipeline.yaml``.
+the printed ``grip_min`` / ``grip_max`` into ``mimic`` in ``config/pipeline.yaml``.
 
 Independent test
 ----------------
@@ -58,180 +56,250 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
-from vla_pipeline.robot.arm_interface import ArmClient, DryRunArm, make_arm
+from vla_pipeline.dispatch import PipelineContext
+from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR, DryRunArm, make_arm
 from vla_pipeline.utils.config import load_config
-from vla_pipeline.utils.gesture_map import CameraMimicMapper, mapper_from_config
+from vla_pipeline.utils.gesture_map import mapper_from_config
 from vla_pipeline.vision.mediapipe_hands import HandTracker
-from vla_pipeline.vision.yolo_pose_npu import KP, PoseEstimator
+from vla_pipeline.vision.yolo_pose_npu import PoseEstimator, draw_skeleton, pick_arm, pick_nearest
 
 logger = logging.getLogger(__name__)
 
-def _primary_person(pose: PoseEstimator, frame):
-    """Largest-box detection → (kpts[17,3], boxes, scores, kpts_all) or Nones.
+WINDOW = "gesture mimic"
 
-    Runs inference once and reuses it for both control and the overlay so the
-    NPU isn't hit twice per frame.
+
+@dataclass
+class MimicSignals:
+    """One tick's worth of evidence for the HUD."""
+
+    joints: dict = None  # what was commanded (None = nothing sent)
+    wrist_xy: tuple = None  # pose model's wrist pick
+    elbow_xy: tuple = None  # same arm's elbow (forearm → wrist_flex)
+    boxes: object = None  # raw pose outputs, for the skeleton overlay
+    scores: object = None
+    kpts: object = None
+    obs: object = None  # HandObservation (or None)
+    raw: object = None  # raw MediaPipe results, for the hand overlay
+
+
+def mimic_tick(ctx, frame) -> MimicSignals:
+    """Turn ONE camera frame into ONE arm command.
+
+    The composition, in order:
+
+    1. ``ctx.pose.infer(frame)`` → boxes/scores/kpts; keep only the NEAREST
+       person (largest box, :func:`pick_nearest`), then pick a wrist AND its
+       elbow with :func:`pick_arm` (threshold: ``ctx.pose.kpt_threshold``).
+    2. ``ctx.hands.process(frame)`` → a HandObservation (or None) carrying
+       hand_size / roll_ti / roll_ref / roll_ti_weight / roll / pinch.
+    3. ``ctx.mapper.step(...)`` with everything from 1-2 (the elbow as
+       ``elbow_xy=``: wrist_flex measures the hand's direction against it;
+       without it the forearm is assumed vertical) → a clamped joint dict,
+       then ``ctx.arm.send_joints(joints)``. If NEITHER a wrist NOR a hand
+       was seen, send nothing (hold pose).
+
+    Returns a :class:`MimicSignals` with everything used, for the HUD,
+    including the RAW MediaPipe results for the hand overlay.
     """
-    boxes, scores, kpts_all = pose.infer(frame)
-    if len(boxes) == 0:
-        return None, boxes, scores, kpts_all
-    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-    return kpts_all[int(np.argmax(areas))], boxes, scores, kpts_all
+    boxes, scores, kpts = ctx.pose.infer(frame)
+    wrist_xy = elbow_xy = None
+    if len(boxes) > 0:
+        wrist_xy, elbow_xy = pick_arm(kpts[pick_nearest(boxes)], ctx.pose.kpt_threshold)
+
+    obs, raw = ctx.hands.process(frame) if ctx.hands else (None, None)
+
+    joints = None
+    if wrist_xy is not None or obs is not None:
+        h, w = frame.shape[:2]
+        joints = ctx.mapper.step(
+            wrist_xy,
+            w,
+            h,
+            elbow_xy=elbow_xy,
+            hand_size=obs.hand_size if obs else None,
+            roll_ti=obs.roll_ti if obs else None,
+            roll_ref=obs.roll_ref if obs else None,
+            roll_ti_weight=obs.roll_ti_weight if obs else 0.0,
+            roll_fallback=obs.roll if obs else None,
+            pinch=obs.pinch if obs else None,
+        )
+        ctx.arm.send_joints(joints)
+
+    return MimicSignals(joints=joints, wrist_xy=wrist_xy, elbow_xy=elbow_xy, boxes=boxes,
+                        scores=scores, kpts=kpts, obs=obs, raw=raw)
 
 
-def _pick_arm(kpts, thr: float, side: str = "r"):
-    """(wrist_xy, elbow_xy) of one fixed arm (default right), like the workshop.
+# =============================================================================
+# The loop, the preview, and the HUD around the tick
+# =============================================================================
 
-    wrist_xy is None when that wrist is below ``thr`` (and then so is elbow_xy);
-    elbow_xy is None when only the elbow is below it.
+HUD_ATTRIBUTION = [
+    "wrist x  -> shoulder_pan            [TODO 1.2 session -> TODO 3.3 tick]",
+    "wrist y  -> lift+elbow (locked)     [TODO 1.2 session -> TODO 3.3 tick]",
+    "wrist bend -> wrist_flex            [TODO 1.2+1.4     -> TODO 3.3 tick]",
+    "hand size-> fwd reach (lift+elbow)  [TODO 1.4 hands   -> TODO 3.3 tick]",
+    "thumb-index angle -> wrist_roll     [TODO 1.4 hands   -> TODO 3.3 tick]",
+    "pinch    -> gripper                 [TODO 1.4 hands   -> TODO 3.3 tick]",
+]
+
+
+def annotate_lines(frame, lines, origin=(12, 30), color=(0, 255, 255), scale=0.55):
+    """Stack text lines onto a frame (in place); returns the frame."""
+    x, y = origin
+    for line in lines:
+        cv2.putText(frame, line, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 2)
+        y += int(28 * scale / 0.55)
+    return frame
+
+
+_L1, _L2, _L3 = 70.0, 62.0, 34.0  # link lengths in panel pixels
+
+
+def draw_arm_panel(joints, width: int = 300, height: int = 480):
+    """Render a schematic SO-101 from a joint dict (degrees).
+
+    Top half: side view of the shoulder_lift → elbow_flex → wrist_flex chain.
+    Bottom half: top-down shoulder_pan needle + gripper jaw opening.
+    Pure visualization - the real kinematics live on the robot.
     """
-    w, e = KP[f"{side}_wrist"], KP[f"{side}_elbow"]
-    if kpts[w, 2] < thr:
-        return None, None
-    wrist = (float(kpts[w, 0]), float(kpts[w, 1]))
-    elbow = (float(kpts[e, 0]), float(kpts[e, 1])) if kpts[e, 2] >= thr else None
-    return wrist, elbow
+    panel = np.full((height, width, 3), 24, dtype=np.uint8)
+    j = {k: float(joints.get(k, 0.0))
+         for k in ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")}
+    label = dict(fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, color=(160, 160, 160), thickness=1)
 
+    # side view; shoulder_lift 0 = upright link, positive leans forward (screen right)
+    base = (width // 2, int(height * 0.42))
+    cv2.putText(panel, "side view", (12, 22), **label)
+    a1 = np.radians(j["shoulder_lift"] + 90.0)  # -90 (rest) → straight up
+    p1 = (int(base[0] + _L1 * np.cos(a1)), int(base[1] - _L1 * np.sin(a1)))
+    a2 = a1 - np.radians(j["elbow_flex"] - 90.0)
+    p2 = (int(p1[0] + _L2 * np.cos(a2)), int(p1[1] - _L2 * np.sin(a2)))
+    a3 = a2 - np.radians(j["wrist_flex"])
+    p3 = (int(p2[0] + _L3 * np.cos(a3)), int(p2[1] - _L3 * np.sin(a3)))
+    cv2.rectangle(panel, (base[0] - 26, base[1]), (base[0] + 26, base[1] + 14), (90, 90, 90), -1)
+    for a, b, c in ((base, p1, (0, 200, 255)), (p1, p2, (0, 255, 160)), (p2, p3, (255, 200, 0))):
+        cv2.line(panel, a, b, c, 5)
+        cv2.circle(panel, b, 5, (255, 255, 255), -1)
 
-def run_gesture_mimic(
-    cfg: dict,
-    arm: ArmClient,
-    pose: PoseEstimator,
-    hands: HandTracker,
-    camera,  # CameraClient (mount role)
-    stop_check=None,
-    show_preview: bool = True,
-) -> None:
-    """Run the mimic loop until 'q', Ctrl-C, or ``stop_check()`` is True."""
-    mapper = mapper_from_config(cfg)
-    thr = pose.kpt_threshold
-    missing = 0  # consecutive frames with no person (→ reset to avoid a jump)
+    # top view: shoulder_pan needle
+    c2 = (width // 2, int(height * 0.68))
+    cv2.putText(panel, "top view (pan)", (12, c2[1] - 46), **label)
+    cv2.circle(panel, c2, 40, (90, 90, 90), 2)
+    pan = np.radians(j["shoulder_pan"])
+    cv2.line(panel, c2, (int(c2[0] + 40 * np.sin(pan)), int(c2[1] - 40 * np.cos(pan))), (0, 200, 255), 4)
 
-    logger.info(
-        "Gesture mimic running (direct camera-frame mapping) - show your "
-        "hand to the mount camera. Move it around the frame; reach in/out "
-        "for forward/back; tilt to roll; pinch to grip."
-    )
-    try:
-        while True:
-            if stop_check and stop_check():
-                break
-            ok, frame = camera.read()
-            if not ok:
-                logger.warning("Mount camera frame unavailable - holding pose.")
-                time.sleep(0.05)
-                continue
-            h, w = frame.shape[:2]
+    # gripper jaws
+    gy = int(height * 0.86)
+    cv2.putText(panel, "gripper", (12, gy - 26), **label)
+    half = 6 + int(44 * np.clip(j["gripper"] / 100.0, 0.0, 1.0))
+    for sign in (-1, 1):
+        x = width // 2 + sign * half
+        cv2.line(panel, (x, gy - 18), (x, gy + 18), (0, 160, 255), 6)
 
-            # --- Hand location from YOLO pose (NPU) ---
-            kpts, boxes, scores, kpts_all = _primary_person(pose, frame)
-            wrist_xy, elbow_xy = (
-                _pick_arm(kpts, thr) if kpts is not None else (None, None)
-            )
-            if kpts is None:
-                missing += 1
-                if missing == 5:
-                    mapper.reset()  # person gone a while → drop stale smoothing
-            else:
-                missing = 0
-
-            # --- Depth / roll / gripper from MediaPipe (CPU) ---
-            obs, mp_results = hands.process(frame)
-            hand_size = obs.hand_size if obs is not None else None
-            hand_roll = obs.roll if obs is not None else None
-            roll_ti = obs.roll_ti if obs is not None else None
-            roll_ref = obs.roll_ref if obs is not None else None
-            roll_ti_w = obs.roll_ti_weight if obs is not None else 0.0
-            pinch = obs.pinch if obs is not None else None
-
-            # --- Map → command (skip while we have neither a hand nor a wrist) ---
-            if wrist_xy is not None or obs is not None:
-                joints = mapper.step(
-                    wrist_xy,
-                    w,
-                    h,
-                    hand_size=hand_size,
-                    hand_roll_deg=hand_roll,
-                    roll_ti_deg=roll_ti,
-                    roll_ref_deg=roll_ref,
-                    roll_ti_weight=roll_ti_w,
-                    pinch=pinch,
-                    elbow_xy=elbow_xy,
-                )
-                arm.send_joints(joints)
-            else:
-                joints = None
-
-            if show_preview:
-                vis = frame
-                if kpts is not None:
-                    vis = pose.draw(frame, boxes, scores, kpts_all)
-                vis = hands.draw(vis, obs, mp_results)
-                _hud(vis, joints, wrist_xy, obs)
-                cv2.imshow("gesture_mimic", vis)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if show_preview:
-            try:
-                cv2.destroyWindow("gesture_mimic")
-            except cv2.error:
-                pass
-        logger.info("Gesture mimic stopped - returning to rest pose.")
-        # Park home as ONE goal. We deliberately do NOT pass stop_check here:
-        # on a voice "stop" the stop event is already set, and honoring it would
-        # abort this park instantly and leave the arm wherever it was - we want
-        # it to complete the single trip home.
-        arm.go_to_rest()
-
-
-def _hud(vis, joints, wrist_xy, obs) -> None:
-    """Draw a compact status line + the commanded joints for the operator."""
-    cv2.putText(
-        vis,
-        "gesture mimic [direct] - 'q' to stop",
-        (12, 30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (0, 255, 255),
-        2,
-    )
-    if wrist_xy is not None:
-        cv2.circle(vis, (int(wrist_xy[0]), int(wrist_xy[1])), 8, (0, 255, 0), 2)
-    if joints:
-        grip_deg = joints.get("gripper")  # absent until MediaPipe reports a pinch
-        grip = "hold" if grip_deg is None else f"{grip_deg:3.0f} ({_grip_label(grip_deg)})"
-        line = (
-            f"pan {joints['shoulder_pan']:+5.0f}  lift {joints['shoulder_lift']:+5.0f}  "
-            f"elb {joints['elbow_flex']:+5.0f}  wflex {joints['wrist_flex']:+5.0f}  "
-            f"roll {joints['wrist_roll']:+5.0f}  grip {grip}"
-        )
-        cv2.putText(
-            vis,
-            line,
-            (12, vis.shape[0] - 16),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (255, 255, 255),
-            2,
-        )
+    # numbers
+    y = height - 74
+    for k in j:
+        cv2.putText(panel, f"{k:>13s} {j[k]:+7.1f}", (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1)
+        y += 18
+    return panel
 
 
 def _grip_label(grip_deg: float) -> str:
     """Describe the continuous gripper opening for the HUD."""
-    from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR
-
     if grip_deg <= GRIPPER_CLOSED_FLOOR + 2.0:
         return "closed"
     if grip_deg >= 85.0:
         return "open"
     return f"{grip_deg:.0f}%"
+
+
+def _preview(ctx, frame, signals: MimicSignals, provider: str):
+    """The camera frame with the pose and hand overlays, the HUD, and the schematic arm beside it."""
+    vis = frame.copy()
+    if signals.kpts is not None and len(signals.kpts) > 0:
+        vis = draw_skeleton(frame, signals.boxes, signals.scores, signals.kpts, ctx.pose.kpt_threshold)
+    if ctx.hands is not None:
+        vis = ctx.hands.draw(vis, signals.obs, signals.raw)
+    if signals.wrist_xy is not None:
+        wrist = (int(signals.wrist_xy[0]), int(signals.wrist_xy[1]))
+        cv2.circle(vis, wrist, 9, (0, 255, 0), 2)
+        if signals.elbow_xy is not None:  # the forearm wrist_flex follows
+            elbow = (int(signals.elbow_xy[0]), int(signals.elbow_xy[1]))
+            cv2.line(vis, elbow, wrist, (0, 255, 255), 2)
+            cv2.circle(vis, elbow, 6, (0, 255, 255), 2)
+    grip = (signals.joints or {}).get("gripper")
+    status = f"gesture mimic - pose on {provider}"
+    status += "" if grip is None else f"  grip {grip:3.0f} ({_grip_label(grip)})"
+    annotate_lines(vis, [status] + HUD_ATTRIBUTION, scale=0.5)
+    panel = draw_arm_panel({**ctx.arm.get_joints(), **(signals.joints or {})}, width=300, height=vis.shape[0])
+    return np.hstack([vis, panel])
+
+
+def run_mimic(ctx, cmd=None, tick=mimic_tick) -> MimicSignals | bool:
+    """Mimic until 'q', a stop, or ``ctx.max_frames``; then park.
+
+    ``tick`` turns one frame into one arm command (default :func:`mimic_tick`;
+    a lesson passes its own).
+    """
+    from vla_pipeline.behaviors.manipulation import release_to_pinch
+
+    if ctx.pose is None or ctx.mount_camera is None:
+        ctx.say("Gesture mimic needs the mount camera and pose model.")
+        return False
+    if ctx.mapper is None:
+        ctx.mapper = mapper_from_config(ctx.cfg)
+    provider = getattr(ctx.pose, "provider", "?")
+    if release_to_pinch(ctx.shared_state):
+        ctx.say("Your pinch drives the gripper now. Open your fingers to let go.")
+    logger.info("Mimic running (pose on %s) - move your hand; 'q' quits.", provider)
+    frames = 0
+    missing = 0  # consecutive frames with no person (→ reset to avoid a jump)
+    last = MimicSignals()
+    try:
+        while not ctx.stop_check():
+            ok, frame = ctx.mount_camera.read()
+            if not ok:
+                time.sleep(0.05)
+                continue
+            last = tick(ctx, frame)
+            frames += 1
+            # Person gone a while → drop stale smoothing/roll-center state so
+            # the arm doesn't lurch when they reappear.
+            if last.kpts is None or len(last.kpts) == 0:
+                missing += 1
+                if missing == 5:
+                    ctx.mapper.reset()
+            else:
+                missing = 0
+            if not ctx.headless or ctx.max_frames:
+                canvas = _preview(ctx, frame, last, provider)
+                if ctx.headless:
+                    ctx.shared_state["last_ui_frame"] = canvas
+                else:
+                    cv2.imshow(WINDOW, canvas)
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
+            if ctx.max_frames and frames >= ctx.max_frames:
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if not ctx.headless:
+            try:
+                cv2.destroyWindow(WINDOW)
+            except cv2.error:
+                pass
+        logger.info("Mimic stopped after %d frames - parking the arm.", frames)
+        # Park home as ONE goal, deliberately without stop_check: on a voice
+        # "stop" the stop event is already set, and honoring it would abort
+        # this park and leave the arm wherever it was.
+        ctx.arm.go_to_rest(duration_s=1.5)
+    return last
 
 
 # =============================================================================
@@ -266,7 +334,7 @@ def calibrate_depth(
         f"\nMeasured neutral hand size: {neutral:.4f} "
         f"(n={len(samples)}, std {np.std(samples):.4f})"
     )
-    print("Paste into config/pipeline.yaml under behaviors.gesture_mimic:\n")
+    print("Paste into config/pipeline.yaml under mimic:\n")
     print(f"    hand_size_neutral: {neutral:.4f}")
 
 
@@ -313,7 +381,7 @@ def calibrate_grip(
             f"than min ({grip_min:.3f}). Re-run and spread wider."
         )
     print(f"\nMeasured grip_min={grip_min:.4f}, grip_max={grip_max:.4f}")
-    print("Paste into config/pipeline.yaml under behaviors.gesture_mimic:\n")
+    print("Paste into config/pipeline.yaml under mimic:\n")
     print(f"    grip_min: {grip_min:.4f}")
     print(f"    grip_max: {grip_max:.4f}")
 
@@ -366,9 +434,11 @@ def main() -> None:
         return
 
     pose = PoseEstimator(cfg, device=args.device)
-    arm: ArmClient = DryRunArm(verbose=False) if args.dry_run else make_arm(cfg)
+    arm = DryRunArm(verbose=False) if args.dry_run else make_arm(cfg)
+    ctx = PipelineContext(cfg=cfg, arm=arm, pose=pose, hands=hands, mount_camera=camera,
+                          mapper=mapper_from_config(cfg))
     try:
-        run_gesture_mimic(cfg, arm, pose, hands, camera)
+        run_mimic(ctx)
     finally:
         camera.close()
         hands.close()

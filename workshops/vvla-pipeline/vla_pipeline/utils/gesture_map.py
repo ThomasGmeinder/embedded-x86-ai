@@ -8,10 +8,7 @@
 """Camera-frame to joint mapping for gesture mimic.
 
 :class:`MimicMapper` maps camera-frame signals straight onto SO-101 joints,
-smoothed by a One Euro filter per axis. :class:`CameraMimicMapper` accepts
-the keyword names :mod:`vla_pipeline.behaviors.gesture_mimic` passes. The
-workshop keeps its own copy of the mapper (``workshop/common/motion.py``);
-``tests/sim/test_copies.py`` fails when the two drift apart.
+smoothed by a One Euro filter per axis.
 """
 
 from __future__ import annotations
@@ -330,21 +327,6 @@ class MimicMapper:
 
 
 
-class CameraMimicMapper(MimicMapper):
-    """:class:`MimicMapper` with the pipeline step() keyword names."""
-
-    def step(self, wrist_xy, frame_w, frame_h, **kwargs):
-        if "hand_roll_deg" in kwargs:
-            kwargs.setdefault("roll_fallback", kwargs.pop("hand_roll_deg"))
-        if "roll_ti_deg" in kwargs:
-            kwargs["roll_ti"] = kwargs.pop("roll_ti_deg")
-        if "roll_ref_deg" in kwargs:
-            kwargs["roll_ref"] = kwargs.pop("roll_ref_deg")
-        return super().step(wrist_xy, frame_w, frame_h, **kwargs)
-
-
-def mapper_from_config(cfg: dict) -> CameraMimicMapper:
-    """Build a mapper from ``behaviors.gesture_mimic`` or a top-level ``mimic``."""
-    behaviors = cfg.get("behaviors") or {}
-    section = behaviors.get("gesture_mimic") or cfg.get("mimic") or {}
-    return CameraMimicMapper(section)
+def mapper_from_config(cfg: dict) -> MimicMapper:
+    """Build a mapper from the config's ``mimic`` section."""
+    return MimicMapper(cfg.get("mimic") or {})

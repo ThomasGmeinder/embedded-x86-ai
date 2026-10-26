@@ -9,7 +9,7 @@
 
 A small set of named moves, each a list of joint keyframes, played at the
 configured BPM. Works over ROS 2 or direct serial - and with ``--dry-run``
-on machines without the arm.
+on machines without the arm. ``run_dance`` is the workshop's TODO 3.4.
 
 Independent test
 ----------------
@@ -25,7 +25,8 @@ import logging
 import random
 import time
 
-from vla_pipeline.robot.arm_interface import ArmClient, DryRunArm, make_arm
+from vla_pipeline.dispatch import PipelineContext
+from vla_pipeline.robot.arm_interface import DryRunArm, make_arm
 from vla_pipeline.utils.config import load_config
 
 logger = logging.getLogger(__name__)
@@ -77,15 +78,16 @@ DANCE_MOVES = {
 
 
 
-def run_dance(
-    cfg: dict,
-    arm: ArmClient,
-    duration_s: float | None = None,
-    stop_check=None,
-    seed: int | None = None,
-) -> None:
-    """Play a randomized sequence of dance moves at the configured BPM until duration_s elapses."""
-    d = cfg["behaviors"]["dance"]
+def run_dance(ctx, cmd=None, duration_s: float | None = None, seed: int | None = None) -> None:
+    """Beat-paced keyframe choreography until the clock (or a stop) ends it.
+
+    ``dance.bpm`` and ``dance.duration_s`` come from ``ctx.cfg`` (``duration_s``
+    overrides the second). One beat is ``60/bpm`` seconds. The move order is
+    shuffled, then cycled; each move's keyframes play x4 through
+    ``ctx.arm.go_to``. The deadline AND ``ctx.stop_check()`` are checked
+    between keyframes: a stop holds the pose, the clock running out parks.
+    """
+    d = ctx.cfg["dance"]
     bpm = float(d["bpm"])
     duration_s = float(d["duration_s"]) if duration_s is None else duration_s
     beat = 60.0 / bpm
@@ -99,23 +101,23 @@ def run_dance(
     deadline = time.time() + duration_s
     try:
         while time.time() < deadline:
-            if stop_check and stop_check():
+            if ctx.stop_check():
                 break
             move = next(move_cycle)
             logger.info("[dance] move: %s", move)
             # Two bars of the move (4 beats each keyframe alternation).
             for keyframe in DANCE_MOVES[move] * 4:
-                if time.time() >= deadline or (stop_check and stop_check()):
+                if time.time() >= deadline or ctx.stop_check():
                     break
-                arm.go_to(keyframe, duration_s=beat * 0.9, fps=30.0, stop_check=stop_check)
+                ctx.arm.go_to(keyframe, duration_s=beat * 0.9, fps=30.0, stop_check=ctx.stop_check)
     except KeyboardInterrupt:
         pass
     finally:
-        if stop_check and stop_check():
+        if ctx.stop_check():
             logger.info("Dance stopped - holding position.")
         else:
             logger.info("Dance over - bowing out to rest pose.")
-            arm.go_to_rest(stop_check=stop_check)
+            ctx.arm.go_to_rest(stop_check=ctx.stop_check)
 
 
 # =============================================================================
@@ -137,9 +139,9 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    arm: ArmClient = DryRunArm() if args.dry_run else make_arm(cfg)
+    arm = DryRunArm() if args.dry_run else make_arm(cfg)
     try:
-        run_dance(cfg, arm, duration_s=args.duration)
+        run_dance(PipelineContext(cfg=cfg, arm=arm), duration_s=args.duration)
         print("\ndance PASSED")
     finally:
         arm.close()

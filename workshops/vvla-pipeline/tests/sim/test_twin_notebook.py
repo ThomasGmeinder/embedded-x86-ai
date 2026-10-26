@@ -12,14 +12,15 @@ The module starts one ``vvla-workshop`` kernel and runs the notebook through
 ``ui_events`` loop and its dispatch thread. The test types into the console's
 text box and clicks its buttons with the same widget messages a browser sends.
 So a typed command takes the console's own path: ``submit`` ->
-``voice.on_transcript`` -> voice's waiting commands -> ``voice.dispatch_loop``
--> ``voice.run`` -> ``handle_transcript`` (``voice`` is the notebook's
-``common.twin_voice.VoiceCommands``).
+``dispatcher.on_transcript`` -> the dispatch thread's ``dispatcher.run`` ->
+``handle_transcript`` (the pipeline's :class:`~vla_pipeline.dispatch.Dispatcher`).
 
 What the kernel does is checked three ways: a second client on the
 kernel's iopub channel (matched by content, so it does not matter which
 cell the dispatch thread's output is attributed to), ROS readings of the
 twin taken by this process, and the kernel namespace once the session ends.
+``RECORDER`` listens to the context's dispatch events and shows one record
+per behavior that ran: what was asked and how it ended.
 
 The in-memory copy of the notebook starts with ``RIG_STANDINS``
 (:mod:`notebook_harness`): a photo of people is the webcam and there is no
@@ -38,7 +39,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import signal
 import threading
 import time
@@ -47,6 +47,7 @@ from pathlib import Path
 import pytest
 
 from notebook_harness import (
+    CPU_FALLBACK,
     NOTEBOOKS,
     PIPE_ROOT,
     Console,
@@ -75,7 +76,8 @@ pytest.importorskip("rclpy")
 nbformat = pytest.importorskip("nbformat")
 pytest.importorskip("nbclient")
 
-from common.twin_voice import RESET_LINE  # noqa: E402
+from vla_pipeline.console import RESET_LINE  # noqa: E402
+from vla_pipeline.robot.arm_interface import REST_POSE  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +87,8 @@ SESSION_ENDED = "session ended, arm parked"  # the console cell's last line
 NAMESPACE = '''\
 import json as _json
 print("NS " + _json.dumps({
-    "trace": voice.trace,
-    "dispatcher_alive": dispatcher.is_alive(),
+    "trace": _trace,
+    "dispatcher_alive": worker.is_alive(),
     "log": [line for line, _color in console._log],
     "pid": twin.pid,
     "twin_log": str(twin.log_path),
@@ -107,17 +109,38 @@ _fh = _logging.FileHandler({path!r}, mode="a")
 _fh.setFormatter(_logging.Formatter(
     "%(asctime)s.%(msecs)03d %(levelname)s %(name)s [%(threadName)s]: %(message)s", "%H:%M:%S"))
 _root.addHandler(_fh)
-for _name in ("common", "integration", "models", "ros", "so101_sim", "vla_pipeline"):
+for _name in ("so101_sim", "vla_pipeline", "vvla_workshop"):
     _logging.getLogger(_name).setLevel(_logging.INFO)
 import faulthandler as _faulthandler, signal as _signal
 _faulthandler.register(_signal.SIGUSR1, file=_fh.stream, all_threads=True)  # the test's thread dump
 print("KERNEL_LOG", getattr(globals().get("twin"), "log_path", ""))
 '''
 
-# voice.reset_scene() returns None. It clears ctx.stop_event, which the console cell's finally leaves set.
+# One record per behavior the console ran, shown as JSON output (Watcher.record) and kept in _trace.
+RECORDER = '''\
+from IPython.display import display as _display
+
+_trace = []
+_asked = {}
+
+
+def _record(event, **data):
+    if event == "parsed":
+        _asked["text"] = data["text"]
+    elif event == "behavior_end":
+        record = {"text": _asked.pop("text", None), "intent": data["intent"], "ok": data["ok"],
+                  "stopped": data["stopped"]}
+        _trace.append(record)
+        _display({"application/json": record}, raw=True)
+
+
+ctx.listeners.append(_record)
+'''
+
+# console.reset_scene() clears ctx.stop_event, which the console cell's finally leaves set.
 SETTLE = '''\
-voice.reset_scene()
-voice.trace.clear()
+console.reset_scene()
+_trace.clear()
 console._log.clear()
 print("SETTLED")
 '''
@@ -127,8 +150,6 @@ import json as _json
 print("SESSIONS " + _json.dumps(_SESSIONS))
 '''
 
-# Same line the notebook-run test rejects. Checked once on this kernel's whole transcript.
-_FALLBACK = re.compile(r"fall(s|ing)? back to (the )?cpu", re.I)
 
 
 def _assert_dispatcher_dead(namespace: dict) -> None:
@@ -229,6 +250,7 @@ class NotebookKernel:
                 try:
                     await self._through("c0000014")
                     await self._log_to_file()
+                    await self._execute_new(RECORDER)
                     self._open.set()
                     self._opened.set()
                     await self._close_now.wait()
@@ -308,8 +330,8 @@ class NotebookKernel:
 
     async def _settle(self) -> None:
         text = await self._execute_new(SETTLE)
-        if "reset failed" in text or "SETTLED" not in text:
-            raise RuntimeError(f"voice.reset_scene() did not park the arm:\n{text}")
+        if RESET_LINE not in text or "SETTLED" not in text:
+            raise RuntimeError(f"console.reset_scene() did not park the arm:\n{text}")
 
     async def _end_cell(self, task, console: Console, end_with: str) -> None:
         from nbclient.exceptions import CellExecutionError
@@ -384,7 +406,7 @@ class NotebookKernel:
             # recorded whether this scenario's twin was still alive.
             self.needs_new_kernel = True
         else:
-            # Settle a failed scenario too: the next case on this kernel checks voice.trace.
+            # Settle a failed scenario too: the next case on this kernel checks _trace.
             try:
                 await self._settle()
             except Exception:
@@ -405,7 +427,7 @@ class NotebookKernel:
                 raise
         _assert_yolo_on_npu(sessions)
         assert self.watcher is not None
-        fallback = [line.strip() for line in self.watcher.text().splitlines() if _FALLBACK.search(line)]
+        fallback = [line.strip() for line in self.watcher.text().splitlines() if CPU_FALLBACK.search(line)]
         assert not fallback, f"02_digital_twin fell back to the CPU: {fallback}"
         if self.last_pid is not None and not process_gone(self.last_pid):
             # A second hands.close() raises, so skip this when a scenario already ran c0000018.
@@ -414,11 +436,11 @@ class NotebookKernel:
 
 
 @pytest.fixture(scope="module")
-def observers(workshop_cfg):
-    from common.twin_ros import TwinScene
+def observers(pipeline_cfg):
+    from vvla_workshop.twin_ros import TwinScene
 
     join_test_domain()
-    probe = Probe(workshop_cfg)
+    probe = Probe(pipeline_cfg)
     scene = TwinScene()
     yield probe, scene
     scene.close()
@@ -451,6 +473,7 @@ def test_console_pickup(observers, kernel, text, body, spoken):
     seen = {}
 
     async def script(console):
+        seen["before"] = await asyncio.to_thread(scene.reading, body, timeout=None)
         console.type(text)
         record = await console.record(text)
         seen["record"] = record
@@ -458,30 +481,32 @@ def test_console_pickup(observers, kernel, text, body, spoken):
         await until(lambda: console.said(f"Got the {spoken}"), f"'Got the {spoken}'", console.watcher)
 
     namespace = kernel.run(script)
-    record, reading = seen["record"], seen["reading"]
-    assert record["body"] == body
-    assert record["grasped"], record
-    assert record["z"] - record["z0"] > 0.03, record
-    assert reading["grasped"] and reading["xyz"][2] > 0.08, reading
+    record, before, reading = seen["record"], seen["before"], seen["reading"]
+    assert record["intent"] == "pick_place" and record["ok"] and not record["stopped"], record
+    assert reading["grasped"], reading
+    assert reading["xyz"][2] - before["xyz"][2] > 0.03, (before, reading)
+    assert reading["xyz"][2] > 0.08, reading
     assert namespace["trace"] == [record], "the namespace trace and the iopub record differ"
     _assert_dispatcher_dead(namespace)
 
 
-def test_console_reset(observers, kernel, workshop_cfg):
+def test_console_reset(observers, kernel, pipeline_cfg):
     """The GUI sequence on the console's own widgets: pick up the toothbrush,
     drop it, press reset, and pick the toothbrush up again."""
-    from common.motion import REST_POSE
-
     probe, scene = observers
-    home = xml_poses(workshop_cfg)
+    home = xml_poses(pipeline_cfg)
     seen = {}
 
     async def script(console):
         console.type("pick up the toothbrush")
         first = await console.record("pick up the toothbrush")
-        assert first["grasped"], first
+        assert first["ok"], first
+        held = await asyncio.to_thread(scene.reading, "toothbrush", after=time.time(), timeout=None)
+        assert held["grasped"], held
+        drop_from = console.watcher.mark()
         console.type("drop it")
         seen["drop"] = await console.record("drop it")
+        seen["released"] = console.watcher.said("Released.", since=drop_from)
         seen["dropped"] = await asyncio.to_thread(scene.reading, "toothbrush", after=time.time(), timeout=None)
         seen["jaw"] = (await asyncio.to_thread(probe.joints, after=time.time()))["gripper"]
         console.click("reset")
@@ -491,12 +516,14 @@ def test_console_reset(observers, kernel, workshop_cfg):
         said_at = time.time()
         seen["parked"] = await asyncio.to_thread(probe.joints, after=said_at)
         seen["scene"] = await asyncio.to_thread(scene.latest, after=said_at, timeout=None, settled=True)
+        seen["rest"] = seen["scene"]["bodies"]["toothbrush"]
         again = console.watcher.mark()
         console.type("pick up the toothbrush")
         seen["again"] = await console.record("pick up the toothbrush", since=again)
+        seen["lifted"] = await asyncio.to_thread(scene.reading, "toothbrush", after=time.time(), timeout=None)
 
     namespace = kernel.run(script)
-    assert "Released." in seen["drop"]["said"], seen["drop"]
+    assert seen["released"], "'drop it' did not say 'Released.'"
     dropped = seen["dropped"]
     assert not dropped["grasped"], f"the toothbrush is still between the jaws after 'drop it': {dropped}"
     assert seen["jaw"] > 80.0, f"'drop it' opened the jaws only to {seen['jaw']:.0f}"
@@ -510,8 +537,9 @@ def test_console_reset(observers, kernel, workshop_cfg):
         assert got["xyz"] == pytest.approx(list(qpos[:3]), abs=0.01), name
         assert quat_close(got["quat"], qpos[3:7]), name
         assert not got["grasped"], name
-    again = seen["again"]
-    assert again["grasped"] and again["z"] - again["z0"] > 0.03, again
+    assert seen["again"]["ok"], seen["again"]
+    lifted = seen["lifted"]
+    assert lifted["grasped"] and lifted["xyz"][2] - seen["rest"]["xyz"][2] > 0.03, (seen["rest"], lifted)
     texts = [r["text"] for r in namespace["trace"]]
     assert texts == ["pick up the toothbrush", "drop it", "pick up the toothbrush"], texts
     panel = " ".join(line.strip() for line in namespace["log"])  # the panel wraps long lines
@@ -542,8 +570,6 @@ def test_console_end_session_during_mimic(observers, kernel):
 def test_console_interrupted(observers, kernel):
     """The kernel's stop button ends the console like "end session": the arm
     parks at rest, and the twin keeps running until the cleanup cell closes it."""
-    from common.motion import REST_POSE
-
     probe, _scene = observers
     seen = {}
 
@@ -594,9 +620,7 @@ def test_console_run_and_advance(observers, kernel):
 def test_console_stop(observers, kernel):
     """The red stop button ends the console cell: the in-flight pickup is not a grasp
     and the arm parks. Saying "stop" only halts the behavior. The module teardown closes the twin."""
-    from common.motion import REST_POSE
-
-    probe, _scene = observers
+    probe, scene = observers
     seen = {}
 
     async def script(console):
@@ -607,10 +631,12 @@ def test_console_stop(observers, kernel):
         await until(lambda: console.said(SESSION_ENDED), "the console cell to end", console.watcher)
         seen["record"] = await console.record("pick up the bottle")
         seen["joints"] = await asyncio.to_thread(probe.joints, after=time.time())
+        seen["bottle"] = await asyncio.to_thread(scene.reading, "bottle", after=time.time(), timeout=None)
 
     namespace = kernel.run(script)
     assert namespace["parked"], "the stop button did not end the console cell"
-    assert seen["record"]["grasped"] is False, seen["record"]
+    assert seen["record"]["stopped"], seen["record"]
+    assert not seen["bottle"]["grasped"], seen["bottle"]
     assert [r["text"] for r in namespace["trace"]] == ["pick up the bottle"]
     joints = seen["joints"]
     assert joints, "no joint state from the twin after stop"

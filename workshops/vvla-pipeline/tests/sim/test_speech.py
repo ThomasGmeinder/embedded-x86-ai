@@ -7,10 +7,10 @@
 
 """The microphone front end: which sounds reach Whisper, and how the rest is reported.
 
-Synthetic blocks through the energy detector (``webrtcvad`` is switched off):
+Synthetic blocks through the energy detector (``audio.vad.backend: energy``):
 a loud block is speech, a silent one is not. A fake ``sounddevice`` stream
-feeds :class:`common.speech.MicListener` the same blocks, so no microphone
-is needed.
+feeds :class:`vla_pipeline.audio.vad_listener.FastListener` the same blocks,
+so no microphone is needed.
 """
 
 from __future__ import annotations
@@ -24,14 +24,14 @@ import pytest
 
 pytestmark = pytest.mark.sim
 
-CFG = {"audio": {"hangover_s": 1.2, "min_speech_s": 0.25, "pre_roll_s": 0.3, "startup_grace_s": 0.0}}
+CFG = {"audio": {"vad": {"backend": "energy", "hangover_s": 1.2, "min_speech_s": 0.25, "pre_roll_s": 0.3}}}
 
 
 def _blocks():
-    from common.speech import BLOCK
+    from vla_pipeline.audio.vad_listener import BLOCK_SAMPLES
 
-    quiet = np.zeros(BLOCK, np.float32)
-    loud = (0.2 * np.sin(np.linspace(0, 60 * np.pi, BLOCK))).astype(np.float32)
+    quiet = np.zeros(BLOCK_SAMPLES, np.float32)
+    loud = (0.2 * np.sin(np.linspace(0, 60 * np.pi, BLOCK_SAMPLES))).astype(np.float32)
     return quiet, loud
 
 
@@ -43,15 +43,14 @@ def _utterance(ms: int) -> list:
 
 def _segments(blocks) -> tuple[list, list]:
     """Utterances the segmenter keeps (in blocks) and the speech (s) of those it drops."""
-    from common.speech import BLOCK, Segmenter
+    from vla_pipeline.audio.vad_listener import BLOCK_SAMPLES, SpeechSegmenter, VadConfig
 
-    seg = Segmenter(CFG)
-    seg._vad = None
+    seg = SpeechSegmenter(VadConfig.from_cfg(CFG))
     kept, dropped = [], []
     for block in blocks:
         audio = seg.push(block)
         if audio is not None:
-            kept.append(len(audio) // BLOCK)
+            kept.append(len(audio) // BLOCK_SAMPLES)
         if seg.dropped_s:
             dropped.append(seg.dropped_s)
     return kept, dropped
@@ -79,8 +78,7 @@ def test_click_is_dropped_and_measured():
 
 
 class _FakeStream:
-    """``sounddevice.InputStream``: plays ``script`` blocks into the callback back to back
-    (``MicListener`` queues every block, unbounded)."""
+    """``sounddevice.InputStream``: plays ``script`` blocks into the callback back to back."""
 
     script: list = []
 
@@ -102,16 +100,17 @@ class _FakeStream:
         pass
 
 
-def test_mic_listener_reports_what_never_becomes_text(monkeypatch):
-    from common import speech
+def test_the_listener_reports_what_never_becomes_text(monkeypatch):
+    from vla_pipeline.audio import vad_listener
 
     quiet, _ = _blocks()
     script = [(b, False) for b in [quiet] * 20 + _utterance(120) + _utterance(450)]
     script[5] = (quiet, True)  # the device lost a block while the CPU was busy
     _FakeStream.script = script
     monkeypatch.setitem(sys.modules, "sounddevice", types.SimpleNamespace(InputStream=_FakeStream))
-    monkeypatch.setattr(speech, "_webrtc_vad", lambda _aggressiveness: None)
-    monkeypatch.setattr(speech.MicListener, "OVERFLOW_REPORT_S", 0.0)
+    monkeypatch.setattr(vad_listener.FastListener, "OVERFLOW_REPORT_S", 0.0)
+    # The fake plays faster than a microphone: an unbounded queue keeps every block.
+    monkeypatch.setattr(vad_listener, "_AUDIO_QUEUE_BLOCKS", 0)
 
     texts, drops = [], []
     three = threading.Event()
@@ -121,7 +120,7 @@ def test_mic_listener_reports_what_never_becomes_text(monkeypatch):
         if len(drops) >= 3:
             three.set()
 
-    mic = speech.MicListener(CFG, lambda audio: "", texts.append, on_drop=dropped).start()
+    mic = vad_listener.FastListener(CFG, lambda audio: "").start(texts.append, on_drop=dropped)
     mic.opened.wait()
     assert mic.error is None, mic.error
     three.wait()  # the listener's own reports: too short, no words, audio lost

@@ -22,12 +22,10 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
-WORKSHOP = ROOT / "workshop" / "solution"
+from vla_pipeline.utils.config import REPO_ROOT as ROOT  # noqa: E402
 STRICT = os.environ.get("VVLA_TEST_STRICT") == "1"
 YOLO_CACHES = ("yolo26s_pose_fp32", "yolo26s_detect_fp32")
 WHISPER_CACHES = ("whisper_base_encoder", "whisper_base_decoder")
@@ -52,12 +50,9 @@ def _need(caches, strict: bool = STRICT) -> None:
         (pytest.fail if strict else pytest.skip)(reason)
 
 
-def _providers(code: str, cwd: Path, path: Path) -> dict:
+def _providers(code: str) -> dict:
     """Run ``code`` in a fresh interpreter; it prints a JSON dict of providers."""
-    out = subprocess.run(
-        [sys.executable, "-c", f"import sys; sys.path.insert(0, {str(path)!r})\n{code}"],
-        cwd=cwd, capture_output=True, text=True, timeout=300,
-    )
+    out = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=300)
     assert out.returncode == 0, out.stderr[-2000:]
     return json.loads(out.stdout.strip().splitlines()[-1])
 
@@ -73,7 +68,6 @@ def test_pipeline_detector_before_pose():
         "det = ObjectDetector(cfg, device='npu')\n"
         "pose = PoseEstimator(cfg, device='npu')\n"
         "print(json.dumps({'detect': det.session.get_providers()[0], 'pose': pose.session.get_providers()[0]}))",
-        ROOT, ROOT,
     )
     assert got == {"detect": "VitisAIExecutionProvider", "pose": "VitisAIExecutionProvider"}
 
@@ -93,21 +87,6 @@ def test_pipeline_whisper_after_both_yolos():
         "w = WhisperNPU(cfg)\n"
         "print(json.dumps({'pose': pose.session.get_providers()[0], 'detect': det.session.get_providers()[0],\n"
         "                  'encoder': w.model.encoder.get_providers()[0], 'decoder': w.model.decoder.get_providers()[0]}))",
-        ROOT, ROOT,
     )
     assert set(got.values()) == {"VitisAIExecutionProvider"}, got
 
-
-def test_workshop_detector_before_pose():
-    _need(YOLO_CACHES)
-    got = _providers(
-        "import json\n"
-        "from common.config import load_config\n"
-        "from models.vision import ObjectDetector, PoseEstimator\n"
-        "cfg = load_config()\n"
-        "det = ObjectDetector(cfg, device='npu')\n"
-        "pose = PoseEstimator(cfg, device='npu')\n"
-        "print(json.dumps({'detect': det.provider, 'pose': pose.provider}))",
-        WORKSHOP, WORKSHOP,
-    )
-    assert got == {"detect": "VitisAIExecutionProvider", "pose": "VitisAIExecutionProvider"}

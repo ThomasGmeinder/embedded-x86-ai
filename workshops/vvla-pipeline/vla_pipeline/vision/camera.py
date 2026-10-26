@@ -147,30 +147,54 @@ class DirectCamera(CameraClient):
             self._cap = None
 
 
+def from_image_msg(msg) -> np.ndarray | None:
+    """Decode a ``bgr8``/``rgb8`` ``sensor_msgs/Image`` into a BGR ndarray (or None)."""
+    if msg.encoding not in ("bgr8", "rgb8"):
+        return None
+    frame = np.frombuffer(bytes(msg.data), dtype=np.uint8).reshape(msg.height, msg.width, 3)
+    if msg.encoding == "rgb8":
+        frame = frame[..., ::-1]
+    return frame.copy()
+
+
 class Ros2Camera(CameraClient):
     """Latest-frame subscriber on a camera node's image topic.
 
     Keeps only the newest frame (best-effort QoS, depth 1) so vision can never
-    back up behind the publisher, and decodes ``bgr8``/``rgb8`` messages without
-    cv_bridge to avoid ABI coupling.
+    back up behind the publisher, and reports ``(False, None)`` when the stream
+    goes stale (``stale_after_s``), so a dead publisher looks like a dead
+    camera, not like a frozen image.
     """
 
     def __init__(self, role: str, topic: str, stale_after_s: float = 1.0):
+        self.role = role
+        self._stale_after = float(stale_after_s)
+        self._cond = threading.Condition()  # notified on every new frame, and on close
+        self._frame: np.ndarray | None = None
+        self._stamp = 0.0
+        self._closed = False
+        self._executor = None
+        self._node = None
+        self._setup_ros(topic)
+        logger.info("[camera:%s] subscribed to %s", role, topic)
+
+    def _setup_ros(self, topic: str) -> None:
+        """Create the client node, the subscription, and a spin thread.
+
+        Init rclpy if needed; make a node named ``camera_client_<role>``;
+        subscribe to ``topic`` (``sensor_msgs/Image``) with best-effort /
+        keep-last / depth-1 QoS routing into ``self._on_image``; then spin a
+        ``SingleThreadedExecutor`` on a daemon thread so messages keep
+        arriving while the caller's thread does vision work.
+        """
         import rclpy
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
         from sensor_msgs.msg import Image
 
-        self.role = role
-        self._stale_after = float(stale_after_s)
         if not rclpy.ok():
             rclpy.init()
-        self._node = rclpy.create_node(f"camera_client_{role}")
-        self._cond = threading.Condition()  # notified on every new frame, and on close
-        self._frame: np.ndarray | None = None
-        self._stamp = 0.0
-        self._closed = False
-
+        self._node = rclpy.create_node(f"camera_client_{self.role}")
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
@@ -179,21 +203,15 @@ class Ros2Camera(CameraClient):
         self._node.create_subscription(Image, topic, self._on_image, qos)
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
-        self._thread = threading.Thread(target=self._executor.spin, daemon=True)
-        self._thread.start()
-        logger.info("[camera:%s] subscribed to %s", role, topic)
+        threading.Thread(target=self._executor.spin, daemon=True).start()
 
     def _on_image(self, msg) -> None:
         """Decode an incoming Image message into the cached latest frame."""
-        if msg.encoding not in ("bgr8", "rgb8"):
+        frame = from_image_msg(msg)
+        if frame is None:
             return
-        frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(
-            msg.height, msg.width, 3
-        )
-        if msg.encoding == "rgb8":
-            frame = frame[..., ::-1]
         with self._cond:
-            self._frame = frame.copy()
+            self._frame = frame
             self._stamp = time.time()
             self._cond.notify_all()
 
@@ -223,8 +241,10 @@ class Ros2Camera(CameraClient):
         with self._cond:
             self._closed = True
             self._cond.notify_all()
-        self._executor.shutdown()
-        self._node.destroy_node()
+        if self._executor is not None:
+            self._executor.shutdown()
+        if self._node is not None:
+            self._node.destroy_node()
 
 
 class SimCameraClient(CameraClient):
@@ -262,17 +282,9 @@ class SimCameraClient(CameraClient):
 
 def make_camera(cfg: dict, role: str) -> CameraClient:
     """Build the CameraClient for ``cameras.<role>`` from the pipeline config."""
-    cams = cfg.get("cameras") or {}
-    c = cams.get(role)
-    if c is None:  # backward compat: fall back to the legacy single `camera:`
-        legacy = cfg.get("camera", {})
-        c = {
-            "device": legacy.get("index", 0),
-            "width": legacy.get("width", 640),
-            "height": legacy.get("height", 480),
-            "fps": legacy.get("fps", 30),
-            "use_ros2": False,
-        }
+    c = (cfg.get("cameras") or {}).get(role)
+    if c is None:
+        raise KeyError(f"no cameras.{role} in the config")
     if c.get("use_ros2", False):
         return Ros2Camera(role, c["topic"], stale_after_s=c.get("stale_after_s", 1.0))
     if c.get("source", "device") == "sim":

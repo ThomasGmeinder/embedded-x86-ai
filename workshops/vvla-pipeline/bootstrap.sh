@@ -20,7 +20,9 @@
 #      1b. Installs ROCm ${ROCM_VERSION} from repo.radeon.com if /opt/rocm is absent
 #      1c. Auto-detects the GPU arch (GFX_ARCH) via amdgpu-arch / rocminfo
 #      1d. Installs ROS 2 Jazzy from packages.ros.org if /opt/ros/jazzy is absent,
-#          then ros2_control, the controllers, xacro and the ROS build tools
+#          then ros2_control, the controllers, xacro, the ROS build tools, and
+#          MoveIt 2 (MoveItPy, Task Constructor, pick_ik, Setup Assistant), the
+#          MuJoCo ros2_control hardware, the Feetech driver and v4l2_camera
 #   2. Installs uv (if missing) and creates a uv venv at ./.venv
 #      (--system-site-packages so the ROS 2 Jazzy python stack stays importable)
 #   3. Installs Python deps into the venv:
@@ -29,16 +31,19 @@
 #        - Ryzen AI onnxruntime (VitisAI EP) from $RYZEN_AI_WHEELS - installed
 #          LAST (section 4c) so nothing clobbers it; ROCm is never used for
 #          onnxruntime (llama.cpp + torch only)
+#        - this repo itself, editable (pyproject.toml: vla_pipeline, vvla_workshop)
 #   4. Builds llama.cpp with HIP/ROCm for the DETECTED arch into third_party/
 #      4e. Builds topic_based_ros2_control (the ros2_control hardware side that
 #          talks to the arm servers over topics) into the colcon workspace ros_ws/
+#      4f. Registers the "vvla-workshop" Jupyter kernel with the NPU runtime,
+#          ROS 2 and ros_ws/ in its kernel.json (VS Code and Jupyter alike)
 #   5. Downloads the models:
 #        - Whisper-base ONNX encoder/decoder
 #        - Whisper tokenizer + feature extractor (openai/whisper-base.en)
 #        - Llama-3.2-3B-Instruct GGUF Q4_K_M        (hf download)
 #      YOLO ONNX export is manual (Ultralytics is AGPL-3.0). See the README:
-#        python scripts/export_yolo26s_pose.py
-#        python scripts/export_yolo26s_detect.py
+#        python scripts/export_yolo26s.py pose
+#        python scripts/export_yolo26s.py detect
 #   6. Verifies the environment and prints next steps
 #
 # Flags:
@@ -386,9 +391,14 @@ if [[ ! -f /opt/ros/jazzy/setup.bash ]]; then
   fi
 fi
 if [[ "$SKIP_APT" -eq 0 && -f /opt/ros/jazzy/setup.bash ]]; then
-  log "Installing ros2_control, the controllers, xacro and the ROS build tools (sudo)"
+  log "Installing ros2_control, the controllers, xacro, the ROS build tools and MoveIt 2 (sudo)"
   sudo apt install -y ros-jazzy-ros2-control ros-jazzy-ros2-controllers ros-jazzy-xacro ros-dev-tools \
-    || die "ros2_control install failed - check packages.ros.org availability for ${UBUNTU_CODENAME}."
+    ros-jazzy-moveit ros-jazzy-moveit-py ros-jazzy-moveit-setup-assistant \
+    ros-jazzy-moveit-task-constructor-core ros-jazzy-pick-ik \
+    ros-jazzy-mujoco-ros2-control ros-jazzy-mujoco-ros2-control-plugins \
+    ros-jazzy-feetech-ros2-driver ros-jazzy-v4l2-camera \
+    ros-jazzy-launch-pytest ros-jazzy-nav2-common \
+    || die "ROS 2 package install failed - check packages.ros.org availability for ${UBUNTU_CODENAME}."
 fi
 
 # -----------------------------------------------------------------------------
@@ -587,11 +597,15 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 4c2. SO-101 digital twin (run_pipeline.sh --digital-twin, app.py --digital-twin)
+# 4c2. The pipeline and the workshop helpers, and the SO-101 digital twin
 # -----------------------------------------------------------------------------
-# Editable and --no-deps so the twin can't re-resolve numpy; its deps are
-# installed alongside numpy<2. The STL meshes are fetched (pinned + checksummed)
-# rather than committed.
+# Editable and --no-deps, so neither can re-resolve numpy: their dependencies
+# are installed above. pyproject.toml maps vla_pipeline/ and the workshop's
+# vvla_workshop package; the notebooks and tests import both from here.
+log "Installing the pipeline and the workshop helpers (vla_pipeline, vvla_workshop)"
+uv pip install --no-deps -e "${REPO_ROOT}" || die "Could not install the pipeline package (pyproject.toml)."
+
+# The STL meshes are fetched (pinned + checksummed) rather than committed.
 log "Installing the SO-101 digital twin (so101_sim, MuJoCo)"
 uv pip install 'mujoco>=3.1.3' 'PyOpenGL>=3.1' 'numpy<2' \
   && uv pip install --no-deps -e "${REPO_ROOT}/so101_sim" \
@@ -643,13 +657,53 @@ done
 ) || die "topic_based_ros2_control build failed - see ${ROS_WS}/log/latest_build."
 
 # -----------------------------------------------------------------------------
+# 4f. The notebooks' Jupyter kernel, with the runtime environment in it
+# -----------------------------------------------------------------------------
+# VS Code and JupyterLab start a kernel from its kernel.json alone and source
+# nothing, so the NPU runtime (scripts/ryzen_ai_env.sh), ROS 2 and the ros_ws
+# overlay built above are written into it. The notebooks ask for this kernel
+# by name.
+KERNEL_NAME="vvla-workshop"
+log "Registering the Jupyter kernel '${KERNEL_NAME}' with the NPU runtime and ROS 2 environment"
+python -m ipykernel install --user --name "$KERNEL_NAME" --display-name "Python (VVLA workshop)"
+KERNEL_ENV_JSON="$(
+  set +eu
+  # shellcheck disable=SC1091
+  source /opt/ros/jazzy/setup.bash
+  # shellcheck disable=SC1091
+  source "${ROS_WS}/install/setup.bash"
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/scripts/ryzen_ai_env.sh"
+  python - <<'PY'
+import json, os
+keys = [
+    "PATH", "VIRTUAL_ENV", "LD_LIBRARY_PATH", "PYTHONPATH",
+    "XLNX_VART_FIRMWARE", "XILINX_XRT", "HSA_OVERRIDE_GFX_VERSION", "FASTDDS_BUILTIN_TRANSPORTS",
+    "AMENT_PREFIX_PATH", "AMENT_CURRENT_PREFIX", "COLCON_PREFIX_PATH", "CMAKE_PREFIX_PATH", "PKG_CONFIG_PATH",
+    "ROS_DISTRO", "ROS_VERSION", "ROS_PYTHON_VERSION", "ROS_LOCALHOST_ONLY", "RMW_IMPLEMENTATION",
+]
+print(json.dumps({k: os.environ[k] for k in keys if os.environ.get(k)}))
+PY
+)" || die "Could not read the runtime environment for the kernel."
+python - "$KERNEL_NAME" "$KERNEL_ENV_JSON" <<'PY' || die "Could not write the kernel's environment."
+import json, sys
+from pathlib import Path
+from jupyter_client.kernelspec import KernelSpecManager
+path = Path(KernelSpecManager().get_kernel_spec(sys.argv[1]).resource_dir) / "kernel.json"
+spec = json.loads(path.read_text())
+spec["env"] = json.loads(sys.argv[2])
+path.write_text(json.dumps(spec, indent=1) + "\n")
+print(f"  {path}: {', '.join(sorted(spec['env']))}")
+PY
+
+# -----------------------------------------------------------------------------
 # 5. Models
 # -----------------------------------------------------------------------------
 if [[ "$SKIP_MODELS" -eq 0 ]]; then
   mkdir -p "$MODELS_DIR" "$LLAMA_OUT_DIR" "${REPO_ROOT}/cache" "${REPO_ROOT}/logs"
 
   log "Pre-downloading NPU-optimized Whisper ONNX (amd/whisper-base-en-onnx-npu)"
-  PYTHONPATH="${REPO_ROOT}" python - <<'PY' || warn "Whisper ONNX pre-download failed - it will be retried on first run; or set whisper.encoder_onnx/decoder_onnx in config/pipeline.yaml to local files (e.g. exported via scripts/export_whisper_onnx.py)."
+  python - <<'PY' || warn "Whisper ONNX pre-download failed - it will be retried on first run; or set whisper.encoder_onnx/decoder_onnx in config/pipeline.yaml to local files (e.g. exported via scripts/export_whisper_onnx.py)."
 from vla_pipeline.audio.whisper_npu import download_whisper_onnx
 from vla_pipeline.utils.config import load_config, resolve
 cfg = load_config()
@@ -661,7 +715,7 @@ print("decoder:", dec)
 PY
 
   log "Caching the Whisper tokenizer and feature extractor"
-  PYTHONPATH="${REPO_ROOT}" python - <<'PY' || warn "Whisper tokenizer download failed - the first voice run will try Hugging Face again. Check the network, then rerun ./bootstrap.sh --skip-apt --skip-llama."
+  python - <<'PY' || warn "Whisper tokenizer download failed - the first voice run will try Hugging Face again. Check the network, then rerun ./bootstrap.sh --skip-apt --skip-llama."
 from vla_pipeline.audio.whisper_npu import download_whisper_tokenizer
 from vla_pipeline.utils.config import load_config
 cfg = load_config()
@@ -799,13 +853,15 @@ cat <<EOF
      python \$(which ros2) launch launch/strix_vla.launch.py dry_run:=true   # + robot_node --client-test
      python -m vla_pipeline.robot.test_ros2_arm_motion
      python -m vla_pipeline.behaviors.gesture_mimic --dry-run
-     python -m vla_pipeline.behaviors.fetch_block --dry-run
      python -m vla_pipeline.behaviors.dance --dry-run
-     python -m vla_pipeline.behaviors.grip --dry-run
+
+ The workshop notebooks (kernel "vvla-workshop", registered above):
+
+     cd workshop && ./run_notebooks.sh
 
  Before first hardware run:
    * Edit config/pipeline.yaml: motor_port (lerobot-find-port), robot_id,
-     camera.index, and teach behaviors.fetch_block.block_pose.
+     cameras.<role>.device, and teach fetch_block.block_pose.
    * Serial permissions: sudo chmod 666 /dev/ttyACM0   (resets on replug)
 
  Run the whole pipeline (single entry point):

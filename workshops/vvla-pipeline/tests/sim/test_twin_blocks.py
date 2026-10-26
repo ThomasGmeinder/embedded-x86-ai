@@ -21,10 +21,10 @@ pytestmark = pytest.mark.sim
 
 
 @pytest.fixture
-def world(workshop_cfg):
+def world(pipeline_cfg):
     from twin_ros_rig import _offline_world
 
-    w = _offline_world(workshop_cfg)
+    w = _offline_world(pipeline_cfg)
     yield w
     w.close()
 
@@ -110,7 +110,7 @@ class _Feed:
 
 
 def test_fanout_judges_a_stamped_frame_by_its_capture_time():
-    from common.twin_console import FanoutCamera
+    from vla_pipeline.console import FanoutCamera
 
     feed = _Feed(stamped=True)
     fan = FanoutCamera(feed, timeout_s=1.0)
@@ -125,7 +125,7 @@ def test_fanout_judges_a_stamped_frame_by_its_capture_time():
 
 
 def test_fanout_falls_back_to_arrival_time_without_a_stamp():
-    from common.twin_console import FanoutCamera
+    from vla_pipeline.console import FanoutCamera
 
     feed = _Feed(stamped=False)
     fan = FanoutCamera(feed, timeout_s=1.0)

@@ -8,7 +8,7 @@
 """Component 1 - AI models on the Ryzen AI stack (NPU / iGPU / CPU).
 
 Your TODOs live in ``npu.py`` (NPU session factory), ``hands.py`` (MediaPipe
-on CPU), and ``llm.py`` (llama.cpp on the iGPU). Run the harness with:
+on CPU), and ``llm.py`` (llama.cpp on the iGPU). Check them with:
 
-    python -m models.selftest
+    python -m vvla_workshop.selftest_models
 """

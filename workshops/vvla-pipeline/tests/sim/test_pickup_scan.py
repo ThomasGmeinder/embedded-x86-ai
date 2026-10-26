@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Both stacks' copies of the look-then-move pickup, without a full scene.
+"""The pipeline's look-then-move pickup, without a full scene.
 
 A settled frame is stored with the joints that took it. A clipped box loses
 to a smaller one the table locate will accept. One empty frame does not end
@@ -16,15 +16,15 @@ locates the object again before the second solve.
 from __future__ import annotations
 
 import copy
-import importlib
 import time
 
 import numpy as np
 import pytest
 
+from vla_pipeline.behaviors import manipulation as mod
+
 pytestmark = pytest.mark.sim
 
-MODULES = ["common.manipulation", "vla_pipeline.behaviors.manipulation"]
 POSE = {
     "shoulder_pan": 0.0,
     "shoulder_lift": -30.0,
@@ -121,22 +121,16 @@ _find = _Detector().find
 
 
 def _pp():
-    """The stack's own ``pick_place`` config, with the poses and pans these fakes walk."""
+    """The pipeline's own ``pick_place`` config, with the poses and pans these fakes walk."""
     from vla_pipeline.utils.config import load_config
 
-    pp = copy.deepcopy(load_config()["behaviors"]["pick_place"])
+    pp = copy.deepcopy(load_config()["pick_place"])
     pp.update(scan_pose=dict(POSE), scan_pans=[0.0, -14.0, 39.0], scan_near_pose=dict(NEAR),
               scan_near_pans=[0.0, -14.0], retries=1)
     return pp
 
 
-def _mod(name):
-    return importlib.import_module(name)
-
-
-@pytest.mark.parametrize("module", MODULES)
-def test_frame_is_captured_after_the_move_and_paired_with_those_joints(module, caplog):
-    mod = _mod(module)
+def test_frame_is_captured_after_the_move_and_paired_with_those_joints(caplog):
     arm, camera = _Arm(), _Camera([_frame(0), _frame(1), _frame(1)])
     views, status, _, _ = mod._sweep_views(
         arm, camera, _find, "ball", dict(POSE), [0.0, -14.0, 39.0], _pp(), None,
@@ -151,9 +145,7 @@ def test_frame_is_captured_after_the_move_and_paired_with_those_joints(module, c
     assert "joints pan -14.0" in caplog.text
 
 
-@pytest.mark.parametrize("module", MODULES)
-def test_clipped_larger_box_loses_to_a_valid_smaller_one(module):
-    mod = _mod(module)
+def test_clipped_larger_box_loses_to_a_valid_smaller_one():
     arm, camera = _Arm(), _Camera([_frame(2), _frame(1)])
     views, status, _, _ = mod._sweep_views(
         arm, camera, _find, "ball", dict(POSE), [0.0, -14.0], _pp(), None,
@@ -167,9 +159,7 @@ def test_clipped_larger_box_loses_to_a_valid_smaller_one(module):
     assert not any(view["det"].box == (0.0, 5.0, 90.0, 90.0) for view in views)
 
 
-@pytest.mark.parametrize("module", MODULES)
-def test_ungraspable_sighting_does_not_end_the_sweep(module, caplog):
-    mod = _mod(module)
+def test_ungraspable_sighting_does_not_end_the_sweep(caplog):
     arm, camera = _Arm(), _Camera([_frame(1), _frame(1)])
     tried = []
 
@@ -187,9 +177,7 @@ def test_ungraspable_sighting_does_not_end_the_sweep(module, caplog):
     assert "not graspable at pan 0.0" in caplog.text
 
 
-@pytest.mark.parametrize("module", MODULES)
-def test_one_empty_frame_does_not_end_the_sweep(module):
-    mod = _mod(module)
+def test_one_empty_frame_does_not_end_the_sweep():
     arm, camera = _Arm(), _Camera([_frame(0), _frame(1), _frame(0)])
     views, status, _, _ = mod._sweep_views(
         arm, camera, _find, "ball", dict(POSE), [0.0, -14.0, 39.0], _pp(), None,
@@ -202,9 +190,7 @@ def test_one_empty_frame_does_not_end_the_sweep(module):
     assert views[0]["joints"]["shoulder_pan"] == -14.0
 
 
-@pytest.mark.parametrize("module", MODULES)
-def test_near_sweep_runs_only_when_the_high_sweep_stored_nothing(module, caplog):
-    mod = _mod(module)
+def test_near_sweep_runs_only_when_the_high_sweep_stored_nothing(caplog):
     pp = _pp()
     empty = _Camera([_frame(0), _frame(0), _frame(0), _frame(1), _frame(0)])
     arm = _Arm()
@@ -227,9 +213,7 @@ class _DeadCamera:
         return False, None
 
 
-@pytest.mark.parametrize("module", MODULES)
-def test_an_arm_camera_without_frames_refuses_the_pick_at_the_first_pan(module):
-    mod = _mod(module)
+def test_an_arm_camera_without_frames_refuses_the_pick_at_the_first_pan():
     arm, said = _Arm(), []
 
     class _Ctx:
@@ -266,20 +250,16 @@ def test_ball_descent_stays_within_5_mm_of_the_vertical():
     )
     assert solved is not None
     pre, grasp = solved
-    for module in MODULES:
-        mod = _mod(module)
-        path = mod._descent_poses(kin, pre, grasp, 0.03, -0.005)
-        assert path == joint_line(pre, grasp)
-        assert mod._path_within(kin, pre, path, 0.03, -0.005)
+    path = mod._descent_poses(kin, pre, grasp, 0.03, -0.005)
+    assert path == joint_line(pre, grasp)
+    assert mod._path_within(kin, pre, path, 0.03, -0.005)
 
 
-@pytest.mark.parametrize("module", MODULES)
 @pytest.mark.parametrize("second_xy,second_pan", [
     ((0.28, 0.08), 40.0),  # the object moved
     ((0.204, 0.0), 11.0),  # it did not: the first plan failed, so the fresh one still runs
 ], ids=["moved", "unmoved"])
-def test_a_slipped_grasp_grasps_from_the_fresh_fix(module, monkeypatch, second_xy, second_pan):
-    mod = _mod(module)
+def test_a_slipped_grasp_grasps_from_the_fresh_fix(monkeypatch, second_xy, second_pan):
     frames = [_frame(1), _frame(1)]
     arm, camera = _Arm(), _Camera(frames)
     events = []

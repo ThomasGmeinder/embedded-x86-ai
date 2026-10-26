@@ -14,7 +14,7 @@
       "prop": "bottle",
       "kg": 0.06
     },
-    "envelope": "common.motion.JOINT_LIMITS",
+    "envelope": "vla_pipeline.robot.arm_interface.JOINT_LIMITS",
     "samples": 20000,
     "seed": 0
   },

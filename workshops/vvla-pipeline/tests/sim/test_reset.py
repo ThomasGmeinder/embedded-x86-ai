@@ -21,15 +21,6 @@ import pytest
 pytestmark = pytest.mark.sim
 
 
-@pytest.fixture
-def world():
-    from so101_sim.world import SimWorld
-
-    sim = SimWorld(start=False)
-    yield sim
-    sim.close()
-
-
 def _state(model, data, sig: int) -> np.ndarray:
     import mujoco
 

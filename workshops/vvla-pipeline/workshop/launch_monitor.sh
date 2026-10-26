@@ -14,8 +14,8 @@
 #
 # Run it from a terminal or double-click it in a file manager. Close the HUD
 # from its  ✕ , the Esc key, or a right-click. Run again to re-open it.
-# From a notebook, use instead:  from common.monitor import open_monitor
+# From a notebook, use instead:  from vvla_workshop.monitor import open_monitor
 # ---------------------------------------------------------------------------
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec python3 "$here/common/resource_hud.py" "$@"
+exec "$here/../.venv/bin/python" -m vla_pipeline.utils.resource_monitor --hud "$@"

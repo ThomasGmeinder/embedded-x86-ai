@@ -23,6 +23,7 @@ and it interrupts any running behavior via the shared stop event.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
@@ -67,16 +68,126 @@ class ParsedCommand:
 
 
 # Transcript keywords that trigger STOP without an LLM round trip. Matched
-# case-insensitively as whole words on the raw Whisper output.
+# case-insensitively as whole words on the raw transcript - the safety stop
+# must never wait on a language model.
 STOP_KEYWORDS = ("stop", "halt", "freeze", "abort", "emergency")
+_STOP_RE = re.compile(r"\b(" + "|".join(STOP_KEYWORDS) + r")\b", re.IGNORECASE)
+
+
+def is_stop(transcript: str) -> bool:
+    """True when the raw transcript contains a stop keyword."""
+    return bool(_STOP_RE.search(transcript or ""))
+
+
+# Whisper, fed the first burst of room noise the moment the mic goes hot,
+# reliably hallucinates a few stock phrases ("you", "thank you.", "Bye.",
+# subtitle credits). With the grammar forcing every transcript into one valid
+# command, such a phantom utterance would dispatch a real behavior, so these
+# are dropped before they reach the LLM. Phrases match the transcript
+# lowercased and stripped of whitespace and trailing punctuation, whole.
+DEFAULT_NOISE_PHRASES = (
+    "",
+    "you",
+    "thank you",
+    "thanks",
+    "bye",
+    "goodbye",
+    "hello",
+    "hi",
+    "hmm",
+    "uh",
+    "um",
+    "ah",
+    "oh",
+    "yeah",
+    "okay",
+    "ok",
+    "the",
+    "a",
+    "so",
+    "and",
+    "thank you for watching",
+    "thanks for watching",
+    "please subscribe",
+    "subtitles by the amara.org community",
+    ".",
+    "..",
+    "...",
+)
+
+# Whisper's non-speech annotations: [BLANK_AUDIO], (sighs), *music*.
+_NON_SPEECH_TAG = re.compile(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*")
+
+
+def _normalize_transcript(text: str) -> str:
+    """Lowercase, strip surrounding whitespace and trailing punctuation/quotes."""
+    return re.sub(r"[\s\.\,\!\?\"\'`]+$", "", (text or "").strip().lower()).strip()
+
+
+def make_noise_gate(cfg: dict):
+    """Build an ``is_noise(text) -> bool`` predicate from config.
+
+    ``audio.noise_phrases`` (optional) replaces the defaults; a transcript with
+    no alphabetic content is always noise.
+    """
+    phrases = (cfg.get("audio") or {}).get("noise_phrases")
+    phrase_set = {_normalize_transcript(p) for p in (phrases if phrases is not None else DEFAULT_NOISE_PHRASES)}
+
+    def is_noise(text: str) -> bool:
+        """True for known silence-hallucination phrases and empty transcripts."""
+        norm = _normalize_transcript(_NON_SPEECH_TAG.sub(" ", text or ""))
+        if not norm or not any(c.isalpha() for c in norm):
+            return True
+        return norm in phrase_set
+
+    return is_noise
+
+
+is_noise = make_noise_gate({})
+
+
+# A keyword stand-in for the LLM, for runs without llama-server (--mock, tests).
+_KEYWORD_ROUTES = [
+    (r"\b(stop|halt|freeze|abort)\b", "stop", None),
+    (r"\b(release|open|drop)\b|\blet go\b", "release", None),
+    (r"\b(copy|mirror|follow|mimic)\b", "gesture_mimic", None),
+    (r"\b(block|cube)\b", "fetch_block", None),
+    (r"\b(pick|grab|bring|fetch|get)\b", "pick_place", "OBJECT"),
+    (r"\bplace\b|\b(set|put|lay)\b.*\b(down|table)\b", "place", None),
+    (r"\b(dance|groove|party|moves)\b", "dance", None),
+    (r"\b(hold|take)\b", "grip", None),
+    (r"\b(wave|hi|hello|greet)\b", "wave", None),
+    (r"\b(home|rest|reset)\b", "home", None),
+]
+_OBJECT_WORDS = ("ball", "bottle", "cup", "mug", "phone", "apple", "banana", "book", "toothbrush",
+                 "remote", "orange", "teddy", "pen")
+
+
+def offline_parse_text(text: str) -> dict:
+    """Keyword routing → the same ``{"command", "object"}`` dict the LLM emits."""
+    low = (text or "").lower()
+    for pattern, command, obj_mode in _KEYWORD_ROUTES:
+        if re.search(pattern, low):
+            obj = ""
+            if obj_mode == "OBJECT":
+                obj = next((word for word in _OBJECT_WORDS if word in low), "")
+            return {"command": command, "object": obj}
+    return {"command": "unknown", "object": ""}
+
+
+def keyword_parse(text: str) -> ParsedCommand:
+    """:func:`offline_parse_text` as a :class:`ParsedCommand`: a parser that needs no LLM."""
+    d = offline_parse_text(text)
+    params = {"object": d["object"]} if d.get("object") else {}
+    return ParsedCommand(Intent.from_string(d["command"]), params=params, transcript=text)
 
 
 class CommandRegistry:
     """Maps intents to behavior entry points; the orchestrator just dispatches.
 
-    Handlers receive ``(ctx, cmd: ParsedCommand)`` where ``ctx`` is the
-    orchestrator's :class:`~vla_pipeline.main.PipelineContext` (arm, cameras,
-    models, shared state, stop_check).
+    Handlers receive ``(ctx, cmd: ParsedCommand)`` where ``ctx`` is a
+    :class:`~vla_pipeline.dispatch.PipelineContext` (arm, cameras, models,
+    shared state, stop_check).
     """
 
     def __init__(self) -> None:
@@ -93,6 +204,10 @@ class CommandRegistry:
             return fn
 
         return deco
+
+    def add(self, intent: Intent, fn: Callable) -> None:
+        """Non-decorator registration (same rules as :meth:`register`)."""
+        self.register(intent)(fn)
 
     def get(self, intent: Intent) -> Callable | None:
         """Return the handler registered for intent, or None."""
