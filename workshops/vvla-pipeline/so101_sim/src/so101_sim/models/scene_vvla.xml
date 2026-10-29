@@ -1,4 +1,8 @@
 <mujoco model="so101 vvla digital twin">
+  <!--
+    Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+    SPDX-License-Identifier: BSD-3-Clause
+  -->
   <include file="so101.xml"/>
 
   <statistic center="0.18 0 0.08" extent="0.55"/>
