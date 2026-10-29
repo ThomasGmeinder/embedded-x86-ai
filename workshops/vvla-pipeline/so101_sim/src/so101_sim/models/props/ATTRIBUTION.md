@@ -27,8 +27,8 @@ geometries defined in `scene_vvla.xml`.
 
 - Source: [`toothbrush.obj`](https://github.com/merlinyx/fabhacks/blob/main/fabhacks/parts/meshes/toothbrush.obj)
 - Project: [FabHacks](https://github.com/merlinyx/fabhacks)
-- Copyright: FabHacks contributors
-- License: [MIT](https://github.com/merlinyx/fabhacks/blob/main/LICENSE)
+- Copyright: Yuxuan Mei
+- License: MIT, shipped as [`LICENSE.toothbrush`](LICENSE.toothbrush)
 - File: `toothbrush.obj`
 
 ## Prepared-file checksums
