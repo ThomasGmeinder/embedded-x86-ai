@@ -22,9 +22,10 @@ cell the dispatch thread's output is attributed to), ROS readings of the
 twin taken by this process, and the kernel namespace once the session ends.
 
 The in-memory copy of the notebook starts with ``RIG_STANDINS``
-(:mod:`notebook_harness`): a photo of people is the webcam and there is no
-microphone. Whisper, Llama on the iGPU and YOLO on the NPU are real. The
-file on disk is not changed.
+(:mod:`notebook_harness`): a generated frame is the webcam, pose comes from
+``ScriptedPose``, and there is no microphone. Whisper, Llama on the iGPU
+and the YOLO sessions on the NPU are real. Arm-camera detection still runs
+the detector. The file on disk is not changed.
 
 ``cd workshop && ./run_notebooks.sh --test``
 (without that setup YOLO cannot load the NPU and the test fails). The

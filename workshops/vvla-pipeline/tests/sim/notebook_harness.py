@@ -18,7 +18,8 @@ and ``REPORT`` last. The rig's hardware is replaced, nothing else:
 
 * the arm and the arm camera: the MuJoCo digital twin (``robot.backend: sim``,
   ``cameras.arm.source: sim``),
-* the webcam: Ultralytics' ``zidane.jpg`` (two people), panned slowly,
+* the webcam: a generated frame, panned slowly, with pose from
+  ``common.fixtures.ScriptedPose`` (the real pose session still opens),
 * the microphone: none (Whisper still loads; Llama stays real).
 
 ``RIG_STANDINS`` also records every ONNX Runtime session the kernel makes,
@@ -46,9 +47,8 @@ KERNEL = "vvla-workshop"
 RIG_STANDINS = '''\
 # notebook test: the rig's hardware is replaced; the notebook is not
 #   arm + arm camera -> the MuJoCo digital twin (robot.backend: sim, cameras.arm.source: sim)
-#   webcam           -> Ultralytics' zidane.jpg (two people), panned slowly
+#   webcam           -> a generated frame, panned; pose is ScriptedPose
 #   microphone       -> none
-import importlib.util as _ilu
 import sys as _sys
 import threading as _threading
 import time as _time
@@ -86,23 +86,28 @@ def _twin_config(path=None):
 
 _config.load_config = _twin_config
 
-_spec = _ilu.find_spec("ultralytics")
-_PHOTO = _Path(_spec.submodule_search_locations[0]) / "assets" / "zidane.jpg" if _spec else None
-if _PHOTO is None or not _PHOTO.is_file():
-    raise RuntimeError(
-        "the webcam stand-in is Ultralytics' zidane.jpg: run the README's install step "
-        "`pip install ultralytics` in .venv"
-    )
+import models.vision as _vision
+from common.fixtures import ScriptedPose as _ScriptedPose
+
+_scripted_pose = _ScriptedPose()
+
+
+def _scripted_infer(self, frame_bgr, conf=None):
+    return _scripted_pose.infer(frame_bgr)
+
+
+_vision.PoseEstimator.infer = _scripted_infer
 
 
 class _PhotoCamera:
-    """The webcam: two people panning left and right. ``read()`` blocks until
-    the next frame is due at the camera's 30 fps, as the device does."""
+    """The webcam: a generated frame, panned. ``read()`` blocks until the
+    next frame is due at the camera's 30 fps, as the device does."""
 
     def __init__(self, *args, **kwargs):
-        img = _cv2.imread(str(_PHOTO))
-        width = round(img.shape[1] * 480 / img.shape[0])
-        self._img = _cv2.resize(img, (width, 480))
+        width, height = 960, 480
+        x = _np.linspace(0, 255, width, dtype=_np.uint8)
+        row = _np.stack([x, x[::-1], _np.full(width, 40, _np.uint8)], axis=1)
+        self._img = _np.broadcast_to(row, (height, width, 3)).copy()
         self._t0 = self._last = _time.monotonic()
         self._open = True
 
