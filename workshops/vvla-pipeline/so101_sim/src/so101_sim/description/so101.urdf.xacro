@@ -6,6 +6,7 @@
   gripper joint frame taken from the twin's MJCF (../models/so101.xml), so that
   the same radians put both models in the same pose. Limits are arguments in
   radians and N·m; robot_description() fills them from the host stack's tables.
+  Modifications Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="so101">
   <xacro:arg name="joint_commands_topic" default="/so101/joint_command"/>

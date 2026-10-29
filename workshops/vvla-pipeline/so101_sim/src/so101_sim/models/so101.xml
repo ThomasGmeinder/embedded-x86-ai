@@ -1,4 +1,8 @@
 <mujoco model="so101">
+  <!--
+    Modifications Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+    Modified from MuJoCo Menagerie robotstudio_so101 (Apache-2.0). See README.md and LICENSE.
+  -->
   <!-- noslip: without it the soft friction lets a held object creep down the
        fingers (~0.4 mm/s for the bottle) at any grip force. -->
   <option integrator="implicitfast" timestep="0.002" cone="elliptic" iterations="10" ls_iterations="20" impratio="10"
