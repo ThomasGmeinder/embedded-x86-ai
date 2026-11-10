@@ -16,6 +16,7 @@ the interesting work is *wiring them up* (see ``models/llm.py``,
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -67,9 +68,30 @@ STOP_KEYWORDS = ("stop robot",)
 _STOP_RE = re.compile(r"\b(" + "|".join(STOP_KEYWORDS) + r")\b", re.IGNORECASE)
 
 
+def command_from_json(text: str) -> ParsedCommand | None:
+    """A command JSON string already produced by the audio model, or None."""
+    raw = (text or "").strip()
+    if not raw.startswith("{"):
+        return None
+    try:
+        data = json.loads(raw)
+        command = data["command"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+    params: dict[str, str] = {}
+    obj = str(data.get("object", "") or "").strip()
+    if obj:
+        params["object"] = obj
+    return ParsedCommand(Intent.from_string(str(command)), params=params, transcript="")
+
+
 def is_stop(transcript: str) -> bool:
     """True when the raw transcript contains a stop keyword."""
-    return bool(_STOP_RE.search(transcript or ""))
+    text = transcript or ""
+    if _STOP_RE.search(text):
+        return True
+    cmd = command_from_json(text)
+    return cmd is not None and cmd.intent is Intent.STOP
 
 
 class CommandRegistry:

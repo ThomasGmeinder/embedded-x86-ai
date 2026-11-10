@@ -45,6 +45,7 @@ from vla_pipeline.llm.intents import (
     CommandRegistry,
     Intent,
     ParsedCommand,
+    command_from_json,
 )
 from vla_pipeline.utils.config import ensure_dirs, load_config
 
@@ -210,7 +211,11 @@ _STOP_RE = re.compile(r"\b(" + "|".join(STOP_KEYWORDS) + r")\b", re.IGNORECASE)
 
 def is_stop(transcript: str) -> bool:
     """True when the raw transcript contains a stop keyword."""
-    return bool(_STOP_RE.search(transcript or ""))
+    text = transcript or ""
+    if _STOP_RE.search(text):
+        return True
+    cmd = command_from_json(text)
+    return cmd is not None and cmd.intent is Intent.STOP
 
 
 # =============================================================================
@@ -396,9 +401,9 @@ def main() -> None:
         console = TwinConsole(ctx, voice="typed" if args.text_commands else "mic")
 
     from vla_pipeline.dispatch import Dispatcher
-    from vla_pipeline.llm.llama_intent import LlamaIntentParser
+    from vla_pipeline.llm.voice import open_voice
 
-    llm = LlamaIntentParser(cfg)
+    llm = open_voice(cfg, device=args.device)
     # Ignore any transcript for a short grace window after launch - the mic goes
     # hot before the user is ready and the first frames are usually room noise
     # that Whisper hallucinates into words. Voice ('stop' included) only starts
@@ -420,22 +425,15 @@ def main() -> None:
 
     # ---------------- listener thread (always hot) ----------------
     if not args.text_commands:
-        from vla_pipeline.audio.vad_listener import FastListener
-        from vla_pipeline.audio.whisper_npu import WhisperNPU
-
-        whisper = WhisperNPU(cfg, device=args.device)
-        listener = FastListener(cfg, whisper.transcribe)
-
-        def _listen() -> None:
-            """Run the always-hot listener loop, forwarding transcripts to :func:`_on_transcript`."""
-            listener.run_forever(
-                on_transcript=lambda t: _on_transcript(t),
-                stop_check=shutdown.is_set,
+        if llm.error:
+            logger.warning("Voice is unavailable (%s). Use --text-commands.", llm.error)
+        else:
+            llm.start(
+                _on_transcript,
                 on_level=console.on_level if console is not None else None,
                 on_busy=console.note_asr if console is not None else None,
+                stop_check=shutdown.is_set,
             )
-
-        threading.Thread(target=_listen, daemon=True, name="listener").start()
     else:
 
         def _stdin_loop() -> None:
@@ -455,7 +453,7 @@ def main() -> None:
     # ---------------- dispatch loop (main thread, unless the console owns it) ----------------
     ctx.say(
         "Ready. Try: 'copy my movements', 'pick up the ball', 'wave', "
-        "'dance', 'hold this', 'go home' - or 'stop' at any time. "
+        "'dance', 'hold this', 'go home' - or 'stop robot' at any time. "
         "In the twin window: space stops, r resets the arm and the table."
     )
     try:

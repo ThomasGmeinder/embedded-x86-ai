@@ -23,6 +23,8 @@ and it interrupts any running behavior via the shared stop event.
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
@@ -69,6 +71,54 @@ class ParsedCommand:
 # Matched as a phrase: a check for the word "stop" would also fire on
 # "stop talking".
 STOP_KEYWORDS = ("stop robot",)
+
+
+def command_from_json(text: str) -> ParsedCommand | None:
+    """A command JSON string already produced by the audio model, or None."""
+    raw = (text or "").strip()
+    if not raw.startswith("{"):
+        return None
+    try:
+        data = json.loads(raw)
+        command = data["command"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+    params: dict[str, str] = {}
+    obj = str(data.get("object", "") or "").strip()
+    if obj:
+        params["object"] = obj
+    return ParsedCommand(Intent.from_string(str(command)), params=params, transcript="")
+
+
+_KEYWORD_ROUTES = [
+    (r"\bstop robot\b", "stop", None),
+    (r"\b(release|open|drop)\b|\blet go\b", "release", None),
+    (r"\b(copy|mirror|follow|mimic)\b", "gesture_mimic", None),
+    (r"\b(block|cube)\b", "fetch_block", None),
+    (r"\b(pick|grab|bring|fetch|get)\b", "pick_place", "OBJECT"),
+    (r"\b(dance|groove|party|moves)\b", "dance", None),
+    (r"\b(hold|take)\b", "grip", None),
+    (r"\b(wave|hi|hello|greet)\b", "wave", None),
+    (r"\bgo home\b", "home", None),
+]
+_OBJECT_WORDS = (
+    "ball", "bottle", "cup", "mug", "phone", "apple", "banana", "book",
+    "toothbrush", "remote", "orange", "teddy",
+)
+
+
+def keyword_parse(text: str) -> ParsedCommand:
+    """Keyword stand-in used when the language model is not available."""
+    low = (text or "").lower()
+    for pattern, command, obj_mode in _KEYWORD_ROUTES:
+        if re.search(pattern, low):
+            params = {}
+            if obj_mode == "OBJECT":
+                obj = next((word for word in _OBJECT_WORDS if word in low), "")
+                if obj:
+                    params["object"] = obj
+            return ParsedCommand(Intent.from_string(command), params=params, transcript=text)
+    return ParsedCommand(Intent.UNKNOWN, transcript=text)
 
 
 class CommandRegistry:

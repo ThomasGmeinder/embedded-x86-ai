@@ -8,6 +8,33 @@ system:
   cache_dir: cache            # VitisAI NPU compile cache (first compile is slow)
   log_dir: logs
 
+# gemma4-e4b-it: Silero on the CPU, Gemma 4 E4B audio on the iGPU via llama-server.
+# whisper_llama: WebRTC voice-activity detection, Whisper, then Llama 3.2.
+voice_intent: gemma4-e4b-it
+
+gemma4-e4b-it:
+  server_bin: third_party/llama.cpp/build/bin/llama-server
+  model_gguf: models/gemma-4-E4B-it/gemma-4-E4B-it-Q4_0.gguf
+  mmproj: models/gemma-4-E4B-it/mmproj-gemma-4-E4B-it-Q8_0.gguf
+  host: 127.0.0.1
+  port: 8082
+  n_gpu_layers: 99
+  ctx_size: 2048              # a 6 s clip is about 150 audio tokens
+  grammar_file: config/intent.gbnf
+  autostart: true
+  temperature: 0.0
+  parallel: 1
+  no_warmup: true
+  hsa_override_gfx_version: "11.5.0"  # Strix Point; "11.5.1" is Strix Halo
+  vad_model: models/silero_vad.onnx
+  window_s: 6
+  hop_s: 1
+  min_dbfs: -35
+  vad_threshold: 0.5
+  min_voice_ms: 100
+  cooldown_s: 5
+  max_age_s: 10
+
 audio:
   sample_rate: 16000
   mic_device: null            # null = default input device (or index from `python -m sounddevice`)

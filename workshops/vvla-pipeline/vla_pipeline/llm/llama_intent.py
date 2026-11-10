@@ -27,6 +27,7 @@ Independent test
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import logging
 import os
@@ -48,8 +49,9 @@ READY_LINE = "listening on http://"
 class LlamaIntentParser:
     """Manage a llama.cpp server and turn transcripts into :class:`ParsedCommand`."""
 
-    def __init__(self, cfg: dict):
-        l = cfg["llm"]
+    def __init__(self, cfg: dict, *, section: str = "llm"):
+        l = cfg[section]
+        self._audio = bool(l.get("mmproj"))
         self.host: str = l["host"]
         self.port: int = int(l["port"])
         self.base = f"http://{self.host}:{self.port}"
@@ -108,6 +110,13 @@ class LlamaIntentParser:
             "--parallel",
             str(self._cfg.get("parallel", 1)),
         ]
+        if self._cfg.get("mmproj"):
+            mmproj = resolve(self._cfg["mmproj"])
+            if not mmproj.exists():
+                raise FileNotFoundError(
+                    f"{mmproj} not found - the Gemma audio projector has not finished downloading."
+                )
+            cmd += ["--mmproj", str(mmproj)]
         if self._cfg.get("no_warmup", False):
             cmd.append("--no-warmup")
         # Smaller compute ubatches keep each GPU submission short, so a 3-D
@@ -193,23 +202,25 @@ class LlamaIntentParser:
     # Intent parsing
     # ------------------------------------------------------------------
 
-    def parse(self, transcript: str) -> ParsedCommand:
-        """Map one spoken transcript to a ParsedCommand (grammar-constrained)."""
-        if not transcript or not transcript.strip():
-            return ParsedCommand(Intent.UNKNOWN, transcript=transcript or "")
+    def _complete(self, user_content, transcript: str) -> ParsedCommand:
+        """One chat completion, grammar-constrained, into a ParsedCommand."""
         payload = {
             "messages": [
                 {"role": "system", "content": INTENT_SYSTEM_PROMPT},
-                {"role": "user", "content": transcript.strip()},
+                {"role": "user", "content": user_content},
             ],
             "temperature": self.temperature,
-            "max_tokens": 48,
+            "max_tokens": 48
             "grammar": self.grammar,
         }
+        if self._audio:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         t0 = time.perf_counter()
         r = self._http.post(
             f"{self.base}/v1/chat/completions", json=payload, timeout=30
         )
+        if r.status_code >= 400:
+            logger.error("llama-server rejected the request: %s", r.text[:500])
         r.raise_for_status()
         content = r.json()["choices"][0]["message"]["content"]
         latency_ms = (time.perf_counter() - t0) * 1e3
@@ -233,6 +244,21 @@ class LlamaIntentParser:
         )
         return ParsedCommand(intent, params=params, transcript=transcript)
 
+    def parse(self, transcript: str) -> ParsedCommand:
+        """Map one spoken transcript to a ParsedCommand (grammar-constrained)."""
+        if not transcript or not transcript.strip():
+            return ParsedCommand(Intent.UNKNOWN, transcript=transcript or "")
+        return self._complete(transcript.strip(), transcript)
+
+    def parse_audio(self, wav: bytes) -> ParsedCommand:
+        """Map one WAV clip to a ParsedCommand. The clip is the user message."""
+        encoded = base64.b64encode(wav).decode("ascii")
+        content = [
+            {"type": "text", "text": "Classify the spoken robot instruction in this audio."},
+            {"type": "input_audio", "input_audio": {"data": encoded, "format": "wav"}},
+        ]
+        return self._complete(content, "")
+
 
 # =============================================================================
 # Standalone component test
@@ -251,8 +277,8 @@ _SELFTEST_CASES = [
     ("open your hand", Intent.RELEASE, None),
     ("drop it", Intent.RELEASE, None),
     ("wave hello", Intent.WAVE, None),
-    ("go back to your home position", Intent.HOME, None),
-    ("stop right now", Intent.STOP, None),
+    ("go home", Intent.HOME, None),
+    ("stop robot", Intent.STOP, None),
     ("what's the weather like today", Intent.UNKNOWN, None),
 ]
 

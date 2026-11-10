@@ -24,10 +24,9 @@ import threading
 import time
 from collections import deque
 
-from common import speech
 from common.fixtures import offline_parse_text
 from common.imaging import resolve_class
-from common.intents import CommandRegistry, Intent, ParsedCommand, is_noise, is_stop
+from common.intents import CommandRegistry, Intent, ParsedCommand, command_from_json, is_noise, is_stop
 
 RESET_LINE = "Reset. Arm parked, objects back on the table."
 # How long the microphone may take to open before the console falls back to
@@ -69,7 +68,9 @@ class VoiceCommands:
             VoiceCommands._current.close()
         self.ctx, self.console, self.twin = ctx, console, twin
         self._handle = handle_transcript
-        self._parse_intent, self.llm = self._brain(cfg)
+        self._listening = None
+        self._live = threading.Event()
+        self._parse_intent, self.llm, self.mic = self._open(console)
         behaviors = build_registry()
         ctx.registry = CommandRegistry()
         for intent in behaviors.intents():
@@ -79,13 +80,6 @@ class VoiceCommands:
         self._running = False  # a behavior runs
         self.holding = threading.Event()  # set while reset restores the scene
         self.trace: list[dict] = []
-        self._listening: queue.Queue[str] | None = None  # set while listen() takes the sentences
-        self._live = threading.Event()  # set while dispatch_loop runs: the console takes spoken commands
-        # looked up on the module so a test can swap the microphone out
-        whisper = speech.Whisper(cfg)
-        self.mic = speech.MicListener(
-            cfg, whisper.transcribe, self._utterance, on_level=console.on_level, on_drop=self._dropped
-        ).start()
         console.transcribing = lambda: self.mic.transcribing
         if not self.mic.opened.wait(MIC_OPEN_S):
             self.mic.error = f"it did not open within {MIC_OPEN_S:.0f} s"
@@ -94,21 +88,24 @@ class VoiceCommands:
             print(f"no microphone ({self.mic.error}) - type commands under the console")
         VoiceCommands._current = self
 
-    @staticmethod
-    def _brain(cfg: dict):
-        """Llama on the iGPU (llama-server, started if needed), else the keyword match."""
-        try:
-            from models.llm import LlamaIntentParser
+    def _open(self, console):
+        """The pipeline's speech front end. ``voice_intent`` in pipeline.yaml chooses it."""
+        from vla_pipeline.llm.voice import open_voice
+        from vla_pipeline.utils.config import load_config
 
-            llm = LlamaIntentParser(cfg)
-            return llm.parse, llm
-        except Exception as e:
-            print(f"llama-server unavailable ({e}) - a keyword match picks the commands")
-            return keyword_parse, None
+        session = open_voice(load_config())
+        session.start(self._utterance, on_level=console.on_level, on_drop=self._dropped)
+        if session.error:
+            print(f"voice model unavailable ({session.error}) - a keyword match picks the commands")
+            self._parse_fallback = keyword_parse
+        else:
+            self._parse_fallback = None
+        return session.parse, session.llm, session
 
     def parse(self, text: str) -> ParsedCommand:
         """Pick one command for ``text``, and show it in the console."""
-        cmd = self._parse_intent(text)
+        ready = command_from_json(text)
+        cmd = ready if ready is not None else self._parse_intent(text)
         self.console.parsed(cmd)
         return cmd
 
@@ -129,6 +126,12 @@ class VoiceCommands:
 
     def _explain(self, text: str) -> None:
         """Print the command the parser picks for ``text``, and how long it took."""
+        ready = command_from_json(text)
+        if ready is not None:
+            who = "Gemma" if self.mic.kind == "gemma4-e4b-it" else "The parser"
+            params = ", ".join(f"{k}: {v}" for k, v in (ready.params or {}).items() if v)
+            print(f"{who} picked: {ready.intent.value}" + (f" ({params})" if params else ""))
+            return
         t0 = time.perf_counter()
         cmd = self._parse_intent(text)
         ms = 1000 * (time.perf_counter() - t0)
@@ -159,7 +162,13 @@ class VoiceCommands:
                     text = heard.get(timeout=left)
                 except queue.Empty:
                     break
-                print(f'Whisper heard: "{text}"')
+                spoken = command_from_json(text)
+                if spoken is not None and spoken.transcript:
+                    print(f'Heard: "{spoken.transcript}"')
+                elif text.startswith("{"):
+                    print(f"Heard a command: {text}")
+                else:
+                    print(f'Whisper heard: "{text}"')
                 if is_noise(text):
                     print("That is noise, so it is ignored. Say a command.")
                     continue
@@ -177,7 +186,8 @@ class VoiceCommands:
         if is_noise(text):  # a cough, keyboard clicks, silence: shown, never run
             self.console.ignored(text)
             return
-        self.console.heard(text)
+        spoken = command_from_json(text)
+        self.console.heard(spoken.transcript if spoken is not None and spoken.transcript else text)
         if is_stop(text):
             self.console.stopped()
             self._handle(self.ctx, text, self.parse)  # ctx.request_stop(): the running behavior ends

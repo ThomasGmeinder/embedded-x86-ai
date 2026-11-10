@@ -35,7 +35,7 @@ import queue
 import threading
 import time
 
-from vla_pipeline.llm.intents import Intent, ParsedCommand
+from vla_pipeline.llm.intents import Intent, ParsedCommand, command_from_json
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,8 @@ class Dispatcher:
     def on_transcript(self, text: str) -> None:
         """Gate one transcript (grace, stop, noise) and queue it for dispatch."""
         logger.info("Heard: %r", text)
-        self._emit("heard", text=text)
+        spoken = command_from_json(text)
+        self._emit("heard", text=spoken.transcript if spoken is not None and spoken.transcript else text)
         if self._clock() - self.start_time < self.startup_grace_s:
             logger.info("Ignoring %r (startup grace period).", text)
             self._emit("ignored", text=text, reason="grace")
@@ -126,13 +127,17 @@ class Dispatcher:
             logger.info("Stop heard before %r was dispatched - command not parsed.", text)
             self._emit("cancelled", text=text)
             return None
-        try:
-            cmd = self.parse(text)
-        except Exception:
-            logger.exception("Intent parse failed for %r.", text)
-            self.ctx.say("I couldn't understand that command because the language service is unavailable.")
-            self._emit("parse_error", text=text)
-            return None
+        ready = command_from_json(text)
+        if ready is not None:
+            cmd = ready
+        else:
+            try:
+                cmd = self.parse(text)
+            except Exception:
+                logger.exception("Intent parse failed for %r.", text)
+                self.ctx.say("I couldn't understand that command because the language service is unavailable.")
+                self._emit("parse_error", text=text)
+                return None
         self._emit("parsed", text=text, intent=cmd.intent.value, params=dict(cmd.params or {}))
         if cmd.intent in (Intent.UNKNOWN, Intent.STOP):
             if cmd.intent is Intent.UNKNOWN:
