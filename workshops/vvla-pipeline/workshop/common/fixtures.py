@@ -221,7 +221,7 @@ class ScriptedHands:
 # ----------------------------------------------------------------------------
 
 _KEYWORD_ROUTES = [
-    (r"\b(stop|halt|freeze|abort)\b", "stop", None),
+    (r"\bstop robot\b", "stop", None),
     (r"\b(release|open|drop)\b|\blet go\b", "release", None),
     (r"\b(copy|mirror|follow|mimic)\b", "gesture_mimic", None),
     (r"\b(block|cube)\b", "fetch_block", None),
@@ -229,7 +229,7 @@ _KEYWORD_ROUTES = [
     (r"\b(dance|groove|party|moves)\b", "dance", None),
     (r"\b(hold|take)\b", "grip", None),
     (r"\b(wave|hi|hello|greet)\b", "wave", None),
-    (r"\b(home|rest|reset)\b", "home", None),
+    (r"\bgo home\b", "home", None),
 ]
 
 _OBJECT_WORDS = (

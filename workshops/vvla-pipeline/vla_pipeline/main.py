@@ -466,7 +466,7 @@ def main() -> None:
                 target=dispatcher.run, args=(shutdown,), daemon=True, name="dispatch"
             )
             worker.start()
-            console.run(shutdown, on_stop=lambda: _on_transcript("stop"))
+            console.run(shutdown, on_stop=lambda: _on_transcript("stop robot"))
             shutdown.set()
             ctx.stop_event.set()
             dispatcher.stop()

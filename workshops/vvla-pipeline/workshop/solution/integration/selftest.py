@@ -305,7 +305,7 @@ def check_dispatch(rep: Reporter, cfg: dict) -> None:
         def parse_then_hear_stop(text: str) -> ParsedCommand:
             """The LLM parses; meanwhile the always-hot listener hears 'stop'."""
             cmd = parse(text)
-            handle_transcript(ctx, "stop", parse)
+            handle_transcript(ctx, "stop robot", parse)
             return cmd
 
         handle_transcript(ctx, "show me a dance", parse_then_hear_stop)

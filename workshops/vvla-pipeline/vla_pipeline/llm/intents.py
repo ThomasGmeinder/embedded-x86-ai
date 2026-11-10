@@ -65,9 +65,10 @@ class ParsedCommand:
         return self.params.get("object")
 
 
-# Transcript keywords that trigger STOP without an LLM round trip. Matched
-# case-insensitively as whole words on the raw Whisper output.
-STOP_KEYWORDS = ("stop", "halt", "freeze", "abort", "emergency")
+# The only spoken stop. A bare "stop" is crowd noise on a tradeshow floor.
+# Matched as a phrase: a check for the word "stop" would also fire on
+# "stop talking".
+STOP_KEYWORDS = ("stop robot",)
 
 
 class CommandRegistry:
@@ -106,9 +107,11 @@ class CommandRegistry:
 # eval scripts share one source of truth. The grammar (config/intent.gbnf)
 # guarantees the output shape; this prompt steers the choice.
 INTENT_SYSTEM_PROMPT = """\
-You are the command router for a robot arm. Map the user's spoken request to
-exactly one command and answer ONLY with a JSON object
-{"command": "<name>", "object": "<object or empty string>"}.
+You are the command router for a robot arm on a crowded floor. Other people
+are talking. Ignore background conversation, a second speaker, questions,
+quotes, negations, and anything not addressed to the robot: those are
+"unknown". Map a clear instruction to exactly one command and answer ONLY
+with a JSON object {"command": "<name>", "object": "<object or empty string>"}.
 "object" is the thing to act on for pick_place (one or two plain words,
 e.g. "ball", "water bottle"); for every other command use "".
 
@@ -127,8 +130,9 @@ Commands:
   object or drop it ("release", "open", "drop it", "let go",
   "open your hand").
 - "wave": the user wants a wave / greeting ("wave at me", "say hi").
-- "home": return to the rest/home position ("go home", "reset position",
-  "rest now").
-- "stop": stop moving immediately ("stop", "halt", "freeze").
+- "home": the speaker says "go home". "home", "rest", and "reset" alone
+  are "unknown".
+- "stop": the speaker says "stop robot". "stop", "halt", "freeze",
+  "stop it", "abort", and "stop talking" are "unknown".
 - "unknown": anything else.
 """

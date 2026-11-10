@@ -368,7 +368,7 @@ class TwinRig:
         """The console's stop button: ``handle_transcript`` with "stop", from another thread."""
         from integration.dispatch import handle_transcript
 
-        handle_transcript(self.ctx, "stop", keyword_parse)
+        handle_transcript(self.ctx, "stop robot", keyword_parse)
 
     def close(self) -> None:
         from rigs import raise_crashes

@@ -133,8 +133,8 @@ Llama is constrained by `config/intent.gbnf` so it can only ever emit `{"command
 | "hold this", "take this pencil" | `grip` | Closes until contact (current/stall + grace window), confirms with the arm camera, then **locks the grip** until "release". A following `gesture_mimic` hands the gripper to your pinch, so the object drops when you open your fingers. |
 | "dance", "show me some moves" | `dance` | BPM-paced keyframe choreography. |
 | "wave at me", "say hi" | `wave` | Raises the arm and waves `behaviors.wave.cycles` times. |
-| "go home", "reset position" | `home` | Returns to the rest pose. |
-| "stop", "halt", "freeze" | `stop` | **Keyword-matched on the raw transcript — bypasses the LLM** and interrupts any running behavior immediately. |
+| "go home" | `home` | Returns to the rest pose. "home" or "reset" alone is not a command. |
+| "stop robot" | `stop` | **Keyword-matched on the raw text — bypasses the LLM** and interrupts any running behavior immediately. "stop" alone is not a command. |
 
 ## Tested environment
 

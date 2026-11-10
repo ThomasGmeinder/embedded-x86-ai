@@ -60,7 +60,7 @@ SCRIPTS = {
     },
     "03_intent_node": {
         "578bb604bee3": [
-            ("type", "stop"), ("wait_for", "stop fast path"),
+            ("type", "stop robot"), ("wait_for", "stop fast path"),
             ("type", "pick up the ball"), ("wait_for", "[LLM parse]"),
         ],
     },
