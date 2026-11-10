@@ -7,36 +7,25 @@
 
 """Run a workshop notebook the way a student does in JupyterLab.
 
-Each notebook runs top to bottom in its own ``vvla-workshop`` kernel, the
-kernel ``bootstrap.sh`` registers, started as VS Code starts it: ROS 2 and the
-NPU runtime come from its ``kernel.json`` alone (:func:`kernel_env`). A cell
-that loops on ``ui_events``
-(a live camera, a console, the dance controls) runs while a scripted
-student types into its text box and clicks its buttons with the widget
-messages a browser sends, then clicks the button that ends it.
-
-Only the in-memory copy of a notebook changes: ``RIG_STANDINS`` goes first,
-and ``REPORT`` last. The rig's hardware is replaced, nothing else:
-
-* the arm and the arm camera: the MuJoCo digital twin (``robot.backend: sim``,
-  ``cameras.arm.source: sim``),
-* the webcam: Ultralytics' ``zidane.jpg`` (two people), panned slowly,
-* the microphone: none, a device that does not exist (``audio.mic_device``);
-  Whisper still loads and Llama stays real.
-
-``RIG_STANDINS`` also records every ONNX Runtime session the kernel makes,
-with the provider it got, so a test can check where YOLO ran.
+Each notebook runs top to bottom, as stored, in its own ``vvla-workshop``
+kernel, the kernel ``bootstrap.sh`` registers, started as VS Code starts it:
+ROS 2 and the NPU runtime come from its ``kernel.json`` alone
+(:func:`kernel_env`). A cell that loops on ``ui_events`` (a live camera, a
+console, the dance controls) runs while a scripted student types into its
+text box and clicks its buttons with the widget messages a browser sends,
+then clicks the button that ends it. The test reads each cell's output as
+the cell prints it. A finished line, or a line the cell checker treats as
+an error, ends a wait for a phrase that has not appeared.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import re
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from vla_pipeline.utils.config import REPO_ROOT as PIPE_ROOT
@@ -46,106 +35,19 @@ logger = logging.getLogger(__name__)
 NOTEBOOKS = PIPE_ROOT / "workshop" / "notebooks"
 # A line that says a model left the NPU; the notebook tests reject it.
 CPU_FALLBACK = re.compile(r"fall(s|ing)? back to (the )?cpu", re.I)
+# Jupyter paints a cell's stderr red and still marks the cell as run. An
+# exception already fails the cell. These lines do too: a ROS error or
+# warning, a Python traceback, a joint commanded outside its limit, and
+# librcutils' error-overwrite banner.
+CELL_ERROR = re.compile(
+    r"\[ERROR\]"
+    r"|\[WARN\]"
+    r"|Traceback \(most recent call last\)"
+    r"|outside its limit"
+    r"|rcutils_set_error_state"
+    r"|error state is being overwritten"
+)
 KERNEL = "vvla-workshop"
-
-RIG_STANDINS = '''\
-# notebook test: the rig's hardware is replaced; the notebook is not
-#   arm + arm camera -> the MuJoCo digital twin (robot.backend: sim, cameras.arm.source: sim)
-#   webcam           -> Ultralytics' zidane.jpg (two people), panned slowly
-#   microphone       -> none: audio.mic_device names a device that does not exist
-import importlib.util as _ilu
-import time as _time
-from pathlib import Path as _Path
-
-import cv2 as _cv2
-import numpy as _np
-import onnxruntime as _ort
-
-_SESSIONS = []  # (model, provider) of every ONNX Runtime session this kernel makes
-
-
-class _RecordedSession(_ort.InferenceSession):
-    def __init__(self, path_or_bytes, *args, **kwargs):
-        super().__init__(path_or_bytes, *args, **kwargs)
-        model = path_or_bytes if isinstance(path_or_bytes, (str, _Path)) else "<bytes>"
-        _SESSIONS.append((str(model), self.get_providers()[0]))
-
-
-_ort.InferenceSession = _RecordedSession
-
-import vla_pipeline.utils.config as _config
-
-_load_config = _config.load_config
-
-
-def _twin_config(path=None):
-    cfg = _load_config(path)
-    cfg["robot"]["backend"] = "sim"
-    cfg["cameras"]["arm"]["source"] = "sim"
-    cfg["audio"]["mic_device"] = "no microphone in the notebook test"
-    return cfg
-
-
-_config.load_config = _twin_config
-
-_spec = _ilu.find_spec("ultralytics")
-_PHOTO = _Path(_spec.submodule_search_locations[0]) / "assets" / "zidane.jpg" if _spec else None
-if _PHOTO is None or not _PHOTO.is_file():
-    raise RuntimeError(
-        "the webcam stand-in is Ultralytics' zidane.jpg: run the README's install step "
-        "`pip install ultralytics` in .venv"
-    )
-
-
-class _PhotoCamera:
-    """The webcam: two people panning left and right. ``read()`` blocks until
-    the next frame is due at the camera's 30 fps, as the device does."""
-
-    def __init__(self, *args, **kwargs):
-        img = _cv2.imread(str(_PHOTO))
-        width = round(img.shape[1] * 480 / img.shape[0])
-        self._img = _cv2.resize(img, (width, 480))
-        self._t0 = self._last = _time.monotonic()
-        self._open = True
-
-    def isOpened(self):
-        return self._open
-
-    def read(self):
-        if not self._open:
-            return False, None
-        wait = self._last + 1 / 30 - _time.monotonic()
-        if wait > 0:
-            _time.sleep(wait)
-        self._last = _time.monotonic()
-        span = self._img.shape[1] - 640
-        x = int(span * (0.5 + 0.5 * _np.sin(0.5 * (self._last - self._t0))))
-        return True, self._img[:, x : x + 640].copy()
-
-    def grab(self):
-        return self._open
-
-    def retrieve(self):
-        return self.read()
-
-    def release(self):
-        self._open = False
-
-    def set(self, *args):
-        return True
-
-    def get(self, prop):
-        sizes = {_cv2.CAP_PROP_FRAME_WIDTH: 640.0, _cv2.CAP_PROP_FRAME_HEIGHT: 480.0, _cv2.CAP_PROP_FPS: 30.0}
-        return sizes.get(prop, 0.0)
-
-
-_cv2.VideoCapture = _PhotoCamera
-'''
-
-REPORT = '''\
-import json as _json
-print("REPORT " + _json.dumps({"sessions": _SESSIONS}))
-'''
 
 # A cell that loops on ui_events ends when one of these is clicked, in this order of preference.
 FINISH = ("end session", "done", "stop")
@@ -153,16 +55,21 @@ FINISH = ("end session", "done", "stop")
 
 def kernel_env() -> dict:
     """This process's environment without what the kernel's ``kernel.json``
-    sets (ROS 2, the NPU runtime) and without a display.
+    sets (ROS 2, the NPU runtime), without a display, and without pytest's
+    ``PYTEST_CURRENT_TEST``.
 
     The kernel then gets ROS 2 and the NPU only from its kernelspec, as when
     VS Code starts it, and the notebooks' resource HUD fails quietly instead
-    of opening windows.
+    of opening windows. ipykernel does not capture file-descriptor output
+    while ``PYTEST_CURRENT_TEST`` is set. Without that capture, what ROS and
+    MoveIt print from C++ never reaches a cell, and :func:`cell_errors`
+    misses it, though JupyterLab shows it in the cell.
     """
     from jupyter_client.kernelspec import KernelSpecManager
 
     baked = KernelSpecManager().get_kernel_spec(KERNEL).env
-    return {k: v for k, v in os.environ.items() if k not in baked and k not in ("DISPLAY", "WAYLAND_DISPLAY")}
+    dropped = ("DISPLAY", "WAYLAND_DISPLAY", "PYTEST_CURRENT_TEST")
+    return {k: v for k, v in os.environ.items() if k not in baked and k not in dropped}
 
 
 class Watcher:
@@ -380,18 +287,6 @@ class Console:
     def text_box(self) -> str | None:
         return next((cid for cid, s in self._new().items() if s.get("_model_name") == "TextModel"), None)
 
-    def find_widgets(self) -> bool:
-        """The 02_digital_twin console's widgets: its text box and its three buttons."""
-        found = {}
-        for comm_id, state in self._new().items():
-            model = state.get("_model_name")
-            if model == "TextModel" and state.get("placeholder", "").startswith("or type a command"):
-                found["typed"] = comm_id
-            elif model == "ButtonModel" and state.get("description") in ("stop", "reset", "end session"):
-                found[state["description"]] = comm_id
-        self.widgets = found
-        return {"typed", "stop", "reset", "end session"} <= found.keys()
-
     def type(self, text: str, comm_id: str | None = None) -> None:
         """Type ``text`` into a text box and press Enter."""
         target = comm_id or self.widgets.get("typed") or self.text_box()
@@ -401,46 +296,108 @@ class Console:
         comm_id = self.widgets.get(label) or self.buttons()[label]
         self.watcher.send_comm(comm_id, {"method": "custom", "content": {"event": "click"}})
 
-    async def record(self, text: str, since: Mark | None = None) -> dict:
-        """The record of ``text`` after ``since`` (default: since the scenario began)."""
-        after = self.since if since is None else since
-        return await until(lambda: self.watcher.record(text, since=after), f"the record of {text!r}", self.watcher)
 
+def _install_kernel_parent_death() -> None:
+    """The notebook kernel dies with this process, including a SIGKILL of pytest.
 
-def cell_index(nb, cell_id: str) -> int:
-    return next(i for i, c in enumerate(nb.cells) if c.get("id") == cell_id)
+    Jupyter only records the parent pid. A killed pytest reparents the kernel to
+    systemd, and that kernel keeps the twin's domain lock. ``prctl`` is set in
+    the child before exec, so the kernel gets SIGKILL when this process dies.
+    """
+    import ctypes
+    import signal
 
+    from jupyter_client.manager import KernelManager
 
-def cell_stdout(cell) -> str:
-    return "".join(o.get("text", "") for o in cell.get("outputs", []) if o.get("output_type") == "stream")
+    if getattr(KernelManager, "_vvla_pdeath", False):
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    original = KernelManager._launch_kernel
 
+    def launch(self, kernel_cmd, **kw):
+        previous = kw.get("preexec_fn")
 
-def with_standins(nb):
-    """``nb`` with ``RIG_STANDINS`` first and ``REPORT`` last (in memory)."""
-    import nbformat
+        def die_with_parent():
+            libc.prctl(1, signal.SIGKILL)
+            if previous is not None:
+                previous()
 
-    nb.cells.insert(0, nbformat.v4.new_code_cell(RIG_STANDINS))
-    nb.cells.append(nbformat.v4.new_code_cell(REPORT))
-    return nb
+        kw["preexec_fn"] = die_with_parent
+        return original(self, kernel_cmd, **kw)
 
-
-def report(nb) -> dict:
-    """What ``REPORT`` printed, once it has run."""
-    line = next(t for t in cell_stdout(nb.cells[-1]).splitlines() if t.startswith("REPORT "))
-    return json.loads(line[len("REPORT "):])
+    KernelManager._launch_kernel = launch
+    KernelManager._vvla_pdeath = True
 
 
 def client_for(nb, path: Path):
     """An nbclient client with no per-cell timeout: each cell ends on its own reply."""
     from nbclient import NotebookClient
 
+    _install_kernel_parent_death()
     return NotebookClient(nb, kernel_name=KERNEL, timeout=None, resources={"metadata": {"path": str(path.parent)}})
+
+
+def _stream_text(output) -> str:
+    text = output.get("text", "")
+    return "".join(text) if isinstance(text, list) else text
+
+
+def cell_errors(cell, tolerate=None) -> str:
+    """Error text Jupyter showed for ``cell`` while still counting the cell as run.
+
+    An exception is a separate failure: nbclient raises before this is asked.
+    ``tolerate`` is a pattern for a line the cell is written to produce.
+    """
+    found = []
+    for output in cell.get("outputs") or []:
+        kind = output.get("output_type")
+        if kind == "error":
+            found.append(f"{output.get('ename', 'error')}: {output.get('evalue', '')}")
+        elif kind == "stream" and output.get("name") == "stderr":
+            found.extend(
+                line for line in _stream_text(output).splitlines()
+                if CELL_ERROR.search(line) and not (tolerate and tolerate.search(line))
+            )
+    return "\n".join(found)
+
+
+def assert_cell_clean(cell, where: str, tolerate=None) -> None:
+    """Raise when ``cell`` printed an error. ``where`` names the notebook and the cell."""
+    found = cell_errors(cell, tolerate)
+    if found:
+        raise AssertionError(f"{where} printed an error:\n{found}")
+
+
+def cell_text(cell) -> str:
+    """The stdout, stderr and exception text Jupyter showed for ``cell``."""
+    parts = []
+    for output in cell.get("outputs") or []:
+        kind = output.get("output_type")
+        if kind == "stream":
+            parts.append(_stream_text(output))
+        elif kind == "error":
+            parts.append(f"{output.get('ename', 'error')}: {output.get('evalue', '')}\n")
+    return "".join(parts)
+
+
+def cell_answer(stdout: str, stderr: str) -> str | None:
+    """What ``stdout`` and ``stderr`` have finished showing, or None while they are still going.
+
+    A complete stdout line is the cell's answer. A line :data:`CELL_ERROR`
+    matches is the cell turning red. A trailing partial line is not an answer yet.
+    """
+    errors = [line for line in stderr.splitlines() if CELL_ERROR.search(line)]
+    if errors:
+        return "\n".join(errors)
+    if "\n" not in stdout:
+        return None
+    finished = stdout[: stdout.rfind("\n") + 1].strip()
+    return finished or None
 
 
 @dataclass
 class NotebookRun:
     output: str
-    sessions: list = field(default_factory=list)
 
 
 # A student action: ("type", text), ("click", label), ("wait_for", phrase), or
@@ -477,8 +434,28 @@ async def _interact(client, watcher, nb, index: int, actions) -> None:
                 mark = watcher.mark()
                 console.click(action[1])
         elif kind == "wait_for":
-            await until(lambda: task.done() or watcher.said(action[1], since=mark),
-                        f"{action[1]!r} from cell {cell}", watcher, task=task)
+            phrase = action[1]
+            shown = mark
+
+            def answer():
+                nonlocal shown
+                fresh, fresh_err = watcher.output_since(shown)
+                if fresh or fresh_err:
+                    logger.info("cell %s:\n%s", cell, (fresh + fresh_err).rstrip())
+                    shown = watcher.mark()
+                if task.done():
+                    return True
+                out, err = watcher.output_since(mark)
+                if phrase in out:
+                    return True
+                said = cell_answer(out, err)
+                if said is None:
+                    return False
+                raise AssertionError(
+                    f"{cell} showed:\n{said}\nwhile the test was waiting for {phrase!r}"
+                )
+
+            await until(answer, f"{phrase!r} from cell {cell}", watcher, task=task)
         elif kind == "updates":
             await until(lambda: task.done() or watcher.updates_since(mark) >= action[1],
                         f"{action[1]} widget updates from cell {cell}", watcher, task=task)
@@ -493,13 +470,17 @@ async def _interact(client, watcher, nb, index: int, actions) -> None:
     task.result()
 
 
-def run_notebook(path: Path, script: dict | None = None) -> NotebookRun:
-    """Every cell of ``path`` in order, in a fresh kernel; ``script`` maps a
-    looping cell's id to the student's actions (default: watch it draw three frames)."""
+def run_notebook(path: Path, script: dict | None = None, tolerate: dict | None = None) -> NotebookRun:
+    """Every cell of ``path`` in order, as stored, in a fresh kernel.
+
+    ``script`` maps a looping cell's id to the student's actions (default:
+    watch it draw three frames). ``tolerate`` maps a cell id to a pattern for
+    stderr that cell is written to print. Any other error line still fails it.
+    """
     import nbformat
     from nbclient.exceptions import CellExecutionError
 
-    nb = with_standins(nbformat.read(path, as_version=4))
+    nb = nbformat.read(path, as_version=4)
     client = client_for(nb, path)
     script = script or {}
 
@@ -517,7 +498,14 @@ def run_notebook(path: Path, script: dict | None = None) -> NotebookRun:
                             await client.async_execute_cell(cell, i)
                     except CellExecutionError as e:
                         raise AssertionError(f"{path.name}, cell {cell.get('id')}:\n{e}") from None
-                return NotebookRun(output=watcher.text(), sessions=report(nb)["sessions"])
+                    shown = cell_text(cell).rstrip()
+                    if shown:
+                        logger.info("%s cell %s:\n%s", path.name, cell.get("id"), shown)
+                    assert_cell_clean(
+                        cell, f"{path.name}, cell {cell.get('id')}",
+                        (tolerate or {}).get(cell.get("id")),
+                    )
+                return NotebookRun(output=watcher.text())
             finally:
                 watcher.close()
 

@@ -24,6 +24,14 @@ import pytest
 
 launch_pytest = pytest.importorskip("launch_pytest")  # ROS 2 Jazzy
 
+PAN = "shoulder_pan_joint"
+OPTICAL = "wrist_cam_optical_frame"
+
+
+def off(joints: dict, target: dict) -> float:
+    """The largest absolute joint error between ``joints`` and ``target``."""
+    return max(abs(joints[name] - value) for name, value in target.items())
+
 
 @pytest.fixture(scope="session")
 def ros_domain():
@@ -90,6 +98,92 @@ def arm(ros_node, pipeline_cfg):
     robot = MoveItArm(pipeline_cfg, node_name="moveit_test_arm", sim=True)
     yield robot
     robot.close()
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Remember the test result so the bag fixture can keep a failed run."""
+    outcome = yield
+    report = outcome.get_result()
+    setattr(item, "rep_" + report.when, report)
+
+
+class Bag:
+    """An MCAP bag of the twin topics a test is watching. ``close`` deletes it when the test passed."""
+
+    def __init__(self, path, node):
+        import threading
+
+        import rosbag2_py
+        from mujoco_ros2_control_msgs.msg import FreeJointStateArray
+        from sensor_msgs.msg import JointState
+
+        self.path = path
+        self._node = node
+        self._lock = threading.Lock()
+        self._counts: dict[str, int] = {}
+        self._open = True
+        self._writer = rosbag2_py.SequentialWriter()
+        self._writer.open(
+            rosbag2_py.StorageOptions(uri=path, storage_id="mcap"),
+            rosbag2_py.ConverterOptions("cdr", "cdr"),
+        )
+        topics = (
+            ("/joint_states", "sensor_msgs/msg/JointState", JointState),
+            ("/free_joint_states", "mujoco_ros2_control_msgs/msg/FreeJointStateArray", FreeJointStateArray),
+        )
+        self._subs = []
+        for index, (name, type_name, msg_type) in enumerate(topics):
+            self._writer.create_topic(rosbag2_py.TopicMetadata(index, name, type_name, "cdr"))
+            self._subs.append(node.create_subscription(msg_type, name, self._on(name), 10))
+
+    def count(self, topic: str) -> int:
+        with self._lock:
+            return self._counts.get(topic, 0)
+
+    def _on(self, topic: str):
+        from rclpy.serialization import serialize_message
+
+        def on_msg(msg, topic=topic):
+            stamp = msg.header.stamp
+            when = int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+            with self._lock:
+                if not self._open:
+                    return
+                self._writer.write(topic, serialize_message(msg), when)
+                self._counts[topic] = self._counts.get(topic, 0) + 1
+
+        return on_msg
+
+    def close(self, passed: bool) -> None:
+        import shutil
+
+        with self._lock:
+            if not self._open:
+                return
+            self._open = False
+            self._writer.close()
+        for sub in self._subs:
+            self._node.destroy_subscription(sub)
+        if passed:
+            shutil.rmtree(self.path, ignore_errors=True)
+        else:
+            print(f"bag kept: {self.path}")
+
+
+@pytest.fixture(autouse=True)
+def bag(request, ros_node):
+    """Record ``/joint_states`` and ``/free_joint_states`` for this test. The file stays when the test fails."""
+    import os
+    import re
+
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", request.node.name)
+    recorder = Bag(f"/tmp/vvla-bag-{name}-{os.getpid()}", ros_node)
+    try:
+        yield recorder
+    finally:
+        report = getattr(request.node, "rep_call", None)
+        recorder.close(report is not None and report.passed)
 
 
 def next_message(node, msg_type, topic: str, accept=lambda _m: True, timeout_s: float = 30.0):

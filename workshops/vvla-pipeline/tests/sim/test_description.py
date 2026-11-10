@@ -5,8 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The ros2_control robot description: limits from the pipeline's JOINT_LIMITS,
-and the twin's geometry, so the same radians pose both models alike."""
+"""The description the bringup loads: upstream ``so_arm101``, same joint axes as the twin."""
 
 from __future__ import annotations
 
@@ -16,20 +15,19 @@ import numpy as np
 import pytest
 
 pytestmark = pytest.mark.sim
-pytest.importorskip("xacro")  # ROS 2 Jazzy
+pytest.importorskip("xacro")
 
-from so101_sim.mapping import BODY_JOINTS as BODY  # noqa: E402
+from so101_sim import MJCF_JOINTS  # noqa: E402
+
+ARM = tuple(f"{name}_joint" for name in MJCF_JOINTS)
 
 
-def _description(cfg: dict):
-    from so101_sim.description import robot_description
-    from vla_pipeline.robot import arm_interface as module
+def _urdf() -> ET.Element:
+    import xacro
+    from ament_index_python.packages import get_package_share_path
 
-    urdf = robot_description(
-        cfg, module.JOINT_LIMITS, joint_commands_topic="/cmd", joint_states_topic="/state",
-        initial_state_timeout=7.0,
-    )
-    return cfg, module, ET.fromstring(urdf)
+    path = get_package_share_path("so_arm101_description") / "urdf" / "so_arm101.urdf.xacro"
+    return ET.fromstring(xacro.process_file(str(path)).toxml())
 
 
 def _origin(element) -> np.ndarray:
@@ -64,79 +62,93 @@ def _joint_frames(root, q: dict) -> dict:
     return frames
 
 
-def test_limits_and_hardware_side_come_through_the_twin_joint_map(pipeline_cfg):
-    """The limits are the pipeline's JOINT_LIMITS. The hardware side waits for the
-    first joint state and stays quiet while every joint is within one encoder step."""
-    from so101_sim.config import load_sim_config
-    from so101_sim.mapping import JointMap
+def test_the_bringup_description_is_not_the_topic_bridge():
+    """The arm joints are the twin's, and the hardware plugin is not the topic bridge."""
+    root = _urdf()
+    names = {j.get("name") for j in root.findall("joint") if j.get("type") == "revolute"}
+    assert set(ARM) <= names, names
+    plugins = [p.text or "" for p in root.findall("ros2_control/hardware/plugin")]
+    assert plugins and all("TopicBasedSystem" not in p for p in plugins), plugins
 
-    cfg, module, root = _description(pipeline_cfg)
-    sim = load_sim_config(cfg)
-    jmap = JointMap(sim["joint_map"], sim["gripper_map"])
-    for name, (lower, upper) in module.JOINT_LIMITS.items():
-        limit = root.find(f"joint[@name='{name}']/limit")
-        ends = sorted((jmap.to_rad(name, lower), jmap.to_rad(name, upper)))
-        assert [float(limit.get("lower")), float(limit.get("upper"))] == pytest.approx(ends), name
-        assert float(limit.get("effort")) == sim["current_model"]["stall_torque_nm"]
-    from so101_sim.control import JOINT_STATE_STALE_S
 
-    hardware = {p.get("name"): p.text for p in root.findall("ros2_control/hardware/param")}
-    threshold = float(hardware.pop("trigger_joint_command_threshold"))
-    assert hardware == {
-        "joint_commands_topic": "/cmd", "joint_states_topic": "/state",
-        "initial_state_timeout": "7.0",
-        "joint_state_timeout": repr(float(JOINT_STATE_STALE_S)),
-    }
-    assert threshold == pytest.approx(sum(jmap.steps_to_rad(name, 1.0) for name in module.JOINT_LIMITS))
+def test_the_upstream_controllers_drive_those_joints():
+    import yaml
+    from ament_index_python.packages import get_package_share_path
+
+    path = get_package_share_path("so_arm101_description") / "control" / "ros2_controllers.yaml"
+    controllers = yaml.safe_load(path.read_text())
+    arm = [
+        name.removeprefix("<robot_namespace>")
+        for name in controllers["joint_trajectory_controller"]["ros__parameters"]["joints"]
+    ]
+    jaw = controllers["gripper_controller"]["ros__parameters"]["joint"].removeprefix("<robot_namespace>")
+    assert tuple(arm) == ARM[:5]
+    assert jaw == "gripper_joint"
 
 
 @pytest.mark.parametrize("q", [
     {},
-    {"shoulder_pan": 0.3, "shoulder_lift": -0.4, "elbow_flex": 0.5, "wrist_flex": -0.2, "wrist_roll": 0.6,
-     "gripper": 0.8},
+    {"shoulder_pan_joint": 0.3, "shoulder_lift_joint": -0.4, "elbow_flex_joint": 0.5,
+     "wrist_flex_joint": -0.2, "wrist_roll_joint": 0.6, "gripper_joint": 0.8},
 ], ids=["zero", "bent"])
-def test_every_joint_turns_about_the_twin_axis(pipeline_cfg, q):
+def test_every_joint_turns_about_the_twin_axis(q):
     import mujoco
 
-    from so101_sim import MJCF_JOINTS
-    from so101_sim.world import SimWorld
+    from so101_sim.assets import require
+    from so101_sim.config import DEFAULT_SCENE
 
-    _cfg, _module, root = _description(pipeline_cfg)
-    frames = _joint_frames(root, q)
-    world = SimWorld(start=False)
-    try:
-        m, d = world.model, world.data
-        d.qpos[:] = 0.0
-        for name, angle in q.items():
-            d.qpos[m.jnt_qposadr[m.joint(MJCF_JOINTS[name]).id]] = angle
-        mujoco.mj_forward(m, d)
-        base = m.body("base").id
-        rot, pos = d.xmat[base].reshape(3, 3), d.xpos[base]
-        for name in (*BODY, "gripper"):
-            jid = m.joint(MJCF_JOINTS[name]).id
-            anchor = rot.T @ (d.xanchor[jid] - pos)
-            axis = rot.T @ d.xaxis[jid]
-            frame = frames[name]
-            assert np.linalg.norm(frame[:3, 3] - anchor) < 1e-4, f"{name} anchor off by {frame[:3, 3] - anchor} m"
-            angle = np.degrees(np.arccos(np.clip(frame[:3, 2] @ axis, -1.0, 1.0)))
-            assert angle < 0.2, f"{name} axis off by {angle:.2f} deg"
-    finally:
-        world.close()
+    frames = _joint_frames(_urdf(), q)
+    require()
+    m = mujoco.MjModel.from_xml_path(str(DEFAULT_SCENE))
+    d = mujoco.MjData(m)
+    d.qpos[:] = 0.0
+    for name, angle in q.items():
+        d.qpos[m.jnt_qposadr[m.joint(name).id]] = angle
+    mujoco.mj_forward(m, d)
+    base = m.body("base").id
+    rot, pos = d.xmat[base].reshape(3, 3), d.xpos[base]
+    for name in ARM:
+        jid = m.joint(name).id
+        anchor = rot.T @ (d.xanchor[jid] - pos)
+        axis = rot.T @ d.xaxis[jid]
+        frame = frames[name]
+        assert np.linalg.norm(frame[:3, 3] - anchor) < 1e-4, f"{name} anchor off by {frame[:3, 3] - anchor} m"
+        angle = np.degrees(np.arccos(np.clip(frame[:3, 2] @ axis, -1.0, 1.0)))
+        assert angle < 0.2, f"{name} axis off by {angle:.2f} deg"
 
 
-def test_controllers_drive_the_description_joints(pipeline_cfg):
-    import yaml
+def test_the_toothbrush_the_camera_sees_lies_along_the_box_the_jaws_grip():
+    """The wrist camera yaws the grasp by the visible handle; the jaws close on the collision box.
 
-    from so101_sim.description import CONTROLLERS_FILE
+    The handle's footprint on the table, by area, has its long axis on the box's Y.
+    """
+    import cv2
+    import mujoco
 
-    _cfg, _module, root = _description(pipeline_cfg)
-    hardware = {j.get("name") for j in root.findall("ros2_control/joint")}
-    controllers = yaml.safe_load(CONTROLLERS_FILE.read_text())
-    for name in ("arm_controller", "arm_forward_controller"):
-        assert tuple(controllers[name]["ros__parameters"]["joints"]) == BODY, name
-    assert controllers["gripper_forward_controller"]["ros__parameters"]["joints"] == ["gripper"]
-    assert controllers["gripper_action_controller"]["ros__parameters"]["joint"] == "gripper"
-    assert hardware == {*BODY, "gripper"}
-    assert "update_rate" not in controllers["controller_manager"]["ros__parameters"], (
-        "the launch sets update_rate from robot.control_fps"
-    )
+    from so101_sim.assets import require
+    from so101_sim.config import DEFAULT_SCENE
+
+    require()
+    m = mujoco.MjModel.from_xml_path(str(DEFAULT_SCENE))
+    d = mujoco.MjData(m)
+    mujoco.mj_forward(m, d)
+    body = m.body("toothbrush").id
+    geom = m.geom("toothbrush_visual").id
+    mesh = m.geom_dataid[geom]
+    vertices = m.mesh_vert[m.mesh_vertadr[mesh]:m.mesh_vertadr[mesh] + m.mesh_vertnum[mesh]]
+    faces = m.mesh_face[m.mesh_faceadr[mesh]:m.mesh_faceadr[mesh] + m.mesh_facenum[mesh]]
+    rotation = d.xmat[body].reshape(3, 3).T @ d.geom_xmat[geom].reshape(3, 3)
+    offset = d.xmat[body].reshape(3, 3).T @ (d.geom_xpos[geom] - d.xpos[body])
+    xy = (vertices @ rotation.T + offset)[:, :2]
+    pixel_m = 1e-4
+    low = xy.min(0)
+    image = np.zeros(tuple(np.ceil((xy.max(0) - low) / pixel_m).astype(int)[::-1] + 1), np.uint8)
+    corners = np.round((xy - low) / pixel_m).astype(np.int32)
+    for face in faces:
+        cv2.fillConvexPoly(image, corners[face], 255)
+    rows, cols = np.nonzero(image)
+    points = np.stack([cols, rows], 1).astype(float)
+    _values, vectors = np.linalg.eigh(np.cov((points - points.mean(0)).T))
+    major = vectors[:, -1]
+    angle = np.degrees(np.arccos(abs(float(major[1]))))
+    assert angle < 1.0, f"the toothbrush handle is {angle:.2f} deg off its collision box's long axis"

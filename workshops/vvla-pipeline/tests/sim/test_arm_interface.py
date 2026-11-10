@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The pipeline's arm layer keeps main's names: ``DirectArm`` owns the Feetech bus."""
+"""``make_arm`` builds a MoveIt arm for the real bringup and for the twin."""
 
 from __future__ import annotations
 
@@ -14,12 +14,44 @@ import pytest
 pytestmark = pytest.mark.sim
 
 
-def test_the_real_backend_builds_a_direct_arm_from_the_robot_config(monkeypatch):
-    from vla_pipeline.robot import arm_interface
+def test_make_arm_builds_moveit_for_the_real_bringup_and_the_twin(monkeypatch):
+    from vla_pipeline.robot import arm_interface, moveit_arm
 
     built = []
-    monkeypatch.setattr(arm_interface, "DirectArm", lambda *args: built.append(args) or "bus arm")
-    cfg = {"robot": {"motor_port": "/dev/ttyACM7", "robot_id": "rig_arm", "max_relative_target": 5.0}}
+    monkeypatch.setattr(moveit_arm, "MoveItArm", lambda cfg, sim: built.append(sim) or "moveit")
 
-    assert arm_interface.make_arm(cfg) == "bus arm"
-    assert built == [("/dev/ttyACM7", "rig_arm", 5.0)]
+    assert arm_interface.make_arm({"robot": {"backend": "real"}}) == "moveit"
+    assert arm_interface.make_arm({"robot": {}}) == "moveit"
+    assert arm_interface.make_arm({"robot": {"backend": "sim"}}) == "moveit"
+    assert built == [False, False, True]
+
+
+def test_pick_on_an_uncalibrated_real_arm_asks_for_calibration():
+    """A real arm with no camera calibration refuses before it looks or moves."""
+    from types import SimpleNamespace
+
+    from vla_pipeline.behaviors.manipulation import run_pick_place
+
+    said = []
+    looked = []
+    ctx = SimpleNamespace(
+        cfg={"robot": {"backend": "real"}, "cameras": {"arm": {}}, "pick_place": {}},
+        arm=SimpleNamespace(node=object()),
+        detector=SimpleNamespace(find=lambda *_a, **_k: looked.append(1)),
+        say=said.append,
+        stop_check=lambda: False,
+    )
+    assert run_pick_place(ctx, SimpleNamespace(object_name="ball")) is False
+    assert said == [
+        "The arm camera isn't calibrated. "
+        "lerobot-calibrate, camera_calibration, and easy_handeye2 are not installed."
+    ]
+    assert looked == []
+
+
+def test_a_sim_camera_without_ros_is_refused():
+    from vla_pipeline.vision.camera import make_camera
+
+    cfg = {"cameras": {"arm": {"source": "sim", "use_ros2": False, "topic": "/cameras/arm/image_raw"}}}
+    with pytest.raises(RuntimeError, match="use_ros2: true"):
+        make_camera(cfg, "arm")

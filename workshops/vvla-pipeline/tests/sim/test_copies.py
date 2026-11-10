@@ -35,7 +35,7 @@ from vla_pipeline.utils.config import REPO_ROOT as ROOT
 
 pytestmark = pytest.mark.sim
 
-SCANNED = ("vla_pipeline", "workshop", "so101_sim/src/so101_sim", "scripts", "tests", "arm_calibrator", "launch")
+SCANNED = ("vla_pipeline", "workshop", "so101_sim/src/so101_sim", "scripts", "tests", "launch")
 SIMILAR = 0.75
 
 

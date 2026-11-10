@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The notebook twin's plumbing: ``so101_sim.node --notebook-twin`` and ``vvla_workshop.twin_ros``.
+"""The notebook twin's plumbing: the MuJoCo MoveIt bringup and ``vvla_workshop.twin_ros``.
 
 Tier 2 (ROS 2): ``./run_sim_tests.sh``.
 """
@@ -16,16 +16,10 @@ import os
 import signal
 import subprocess
 import sys
-import tempfile
-import threading
-import time
-from pathlib import Path
 
 import pytest
 
 from twin_ros_rig import (
-    BODY_JOINTS,
-    EXTENDED,
     TEST_DOMAIN_ID,
     assert_domain_free,
     default_scene_snapshot,
@@ -46,137 +40,83 @@ def no_twin():
     assert_domain_free("a twin node outlived its test", wait=True)
 
 
-@pytest.fixture
-def twin(pipeline_cfg, no_twin):
+@pytest.fixture(scope="session")
+def _moveit_twin():
+    """The one MoveItPy for this process. A second constructor segfaults on destruction."""
+    from vla_pipeline.utils.config import load_config
     from vvla_workshop.twin_ros import TwinSession
 
-    session = TwinSession(pipeline_cfg)
+    # Same adjustments as the pipeline_cfg fixture. A session fixture cannot
+    # depend on that function-scoped fixture.
+    cfg = load_config()
+    cfg["dance"]["duration_s"] = 5.0
+    cfg.setdefault("sim", {})["require_hw_gl"] = False
+    assert_domain_free("a twin already runs on the test domain")
+    os.environ["TWIN_ROS_DOMAIN_ID"] = str(TEST_DOMAIN_ID)
+    session = TwinSession(cfg)
     yield session
     session.close()
+    assert_domain_free("a twin node outlived its test", wait=True)
 
 
-def _stop(proc: subprocess.Popen) -> None:
-    """SIGINT, which rclpy turns into a clean shutdown, then the process's exit."""
-    if proc.poll() is None:
-        proc.send_signal(signal.SIGINT)
-        proc.wait()
+@pytest.fixture
+def twin(_moveit_twin):
+    """The process's MoveIt twin, parked, without constructing another MoveItPy.
 
+    Reset takes longer than the camera's staleness window, so wait for a frame
+    captured after the arm is parked. ``read()`` would otherwise report no frame.
+    """
+    import time
 
-def _first_state_or_exit(probe, proc: subprocess.Popen) -> None:
-    """Block until a joint state arrives or ``proc`` exits, whichever is first."""
-    up = threading.Event()
-    unsubscribe = probe.subscribe(up.set)
-    threading.Thread(target=lambda: (proc.wait(), up.set()), daemon=True).start()
-    try:
-        up.wait()
-    finally:
-        unsubscribe()
-
-
-def test_default_launch_is_unchanged(pipeline_cfg, probe, no_twin):
-    """Without --notebook-twin: the pipeline's CameraNode, no scene topic, and
-    the server's clamp to the grasp envelope. The reset service is every twin's."""
-    from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
-    from so101_sim.node import PROPS_SETTLED_TOPIC, RESET_SERVICE
-    from vla_pipeline.robot.arm_interface import GRASP_LIMITS
-    from vla_pipeline.robot.robot_node import Ros2ArmClient
-    from vla_pipeline.utils.config import DEFAULT_CONFIG
-
-    from std_msgs.msg import Bool
-
-    r = pipeline_cfg["robot"]
-    log = tempfile.NamedTemporaryFile(prefix="twin_default_", suffix=".log", delete=False)
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "so101_sim.node", "--config", str(DEFAULT_CONFIG), "--sim-cameras", "arm",
-         "--ros-args", "-r", f"{r['command_topic']}:={HARDWARE_COMMANDS}",
-         "-r", f"{r['state_topic']}:={HARDWARE_STATES}"],
-        stdout=log, stderr=subprocess.STDOUT, env=os.environ.copy(),
-    )
-    controllers = start_controllers(DEFAULT_CONFIG, log=log)
-    try:
-        _first_state_or_exit(probe, proc)
-        assert proc.poll() is None, Path(log.name).read_text()
-        probe.first_message("/cameras/arm/healthy", Bool)
-        assert PROPS_SETTLED_TOPIC not in probe.topics()
-        arm = Ros2ArmClient(pipeline_cfg)
-        try:
-            assert RESET_SERVICE in probe.services()
-            arm.go_to(EXTENDED)
-            arm.go_to({"wrist_flex": 90.0}, limits=GRASP_LIMITS)
-            wrist = arm.get_joints()["wrist_flex"]
-        finally:
-            arm.close()
-        # The pipeline's server clamps a goal to GRASP_LIMITS, so the 90 deg wrist reaches the twin
-        assert wrist >= 87.5, f"wrist settled at {wrist:.1f}"
-    finally:
-        stop_controllers(controllers)
-        _stop(proc)
-        log.close()
-        Path(log.name).unlink(missing_ok=True)
-
-
-def test_grasp_moves_keep_the_grasp_envelope(twin):
-    from vla_pipeline.robot.arm_interface import GRASP_LIMITS
-
-    twin.arm.go_to(EXTENDED)
-    twin.arm.go_to({"wrist_flex": 90.0}, limits=GRASP_LIMITS)
-    grasp = twin.arm.get_joints()["wrist_flex"]
-    twin.arm.go_to({"wrist_flex": 0.0})
-    twin.arm.go_to({"wrist_flex": 90.0})
-    desk = twin.arm.get_joints()["wrist_flex"]
-    assert grasp >= 87.5, f"a GRASP_LIMITS move settled at {grasp:.1f}, not near 90"
-    assert 64.0 <= desk <= 68.0, f"an ordinary move settled at {desk:.1f}, not at the 67.5 desk cap"
+    mark = time.time()
+    _moveit_twin.arm.reset()
+    cam = _moveit_twin.armcam
+    ok, _frame, _stamp = cam.frame_arrived_after(mark, 5.0)
+    if not ok:
+        raise AssertionError(
+            f"no arm camera frame after reset; joint stamp {_moveit_twin.arm.state_time():.3f}; "
+            f"last frame stamp {cam._stamp:.3f}; last arrival {cam._arrived:.3f}"
+        )
+    yield _moveit_twin
 
 
 def test_frames_are_stamped_after_the_arm_settles(twin):
+    """A frame taken after the arm arrives carries a later capture stamp, the twin's clock."""
     from vla_pipeline.console import FanoutCamera
 
-    twin.arm.go_to({"shoulder_pan": 20.0})
-    settled_at = time.time()
+    assert twin.arm.go_to({"shoulder_pan_joint": 0.35}) == "arrived"
+    settled_at = twin.arm.state_time()
     ok, frame = twin.armcam.read_after(settled_at)
     assert ok and frame is not None
     assert twin.armcam.last_stamp > settled_at
 
-    fan = FanoutCamera(twin.armcam)
+    fan = FanoutCamera(twin.armcam, own=False)
     try:
-        twin.arm.go_to({"shoulder_pan": -20.0})
-        settled_at = time.time()
+        assert twin.arm.go_to({"shoulder_pan_joint": -0.35}) == "arrived"
+        settled_at = twin.arm.state_time()
         ok, frame = fan.read_after(settled_at)
         assert ok and frame is not None
-        assert fan._wall > settled_at, "FanoutCamera judged the frame by arrival, not capture"
+        assert fan._wall > settled_at
     finally:
         fan.close()
 
 
-def test_the_props_are_tf_frames_with_a_typed_status(twin, probe):
-    """Standard ROS messages: a prop's pose through tf2, the settled flag as
-    std_msgs/Bool, the gripper's state on /diagnostics."""
-    import rclpy.time
-    from rclpy.duration import Duration
-    from std_msgs.msg import Bool
-    from tf2_ros import Buffer, TransformListener
+def test_the_props_are_on_free_joint_states(twin):
+    """Each prop is a free joint, at rest, and not reported as grasped."""
+    from so101_sim import PROP_BODIES as PROPS
 
-    from so101_sim.node import PROPS_SETTLED_TOPIC, WORLD_FRAME
-    from vla_pipeline.robot.arm_interface import GRIPPER_TORQUE_LIMIT
-    from vla_pipeline.robot.ros2_control_arm import REPLY_S, Spinner
-
-    scene = twin.scene.latest(after=time.time(), settled=True, timeout=None)
-    spin = Spinner("tf_probe")
-    try:
-        buffer = Buffer()
-        TransformListener(buffer, spin.node, spin_thread=False)
-        tf = buffer.lookup_transform(WORLD_FRAME, "sports_ball", rclpy.time.Time(), timeout=Duration(seconds=REPLY_S))
-        t = tf.transform.translation
-        assert [t.x, t.y, t.z] == pytest.approx(scene["bodies"]["sports_ball"]["xyz"], abs=0.005)
-    finally:
-        spin.close()
-    probe.first_message(PROPS_SETTLED_TOPIC, Bool)
-    assert scene["gripper"]["torque_limit"] == GRIPPER_TORQUE_LIMIT and not scene["gripper"]["tripped"], scene
+    scene = twin.scene.latest(settled=True, timeout=5.0)
+    assert scene is not None, "no settled scene"
+    assert set(PROPS) <= scene["bodies"].keys()
+    for name in PROPS:
+        assert scene["bodies"][name]["xyz"]
+        assert not scene["bodies"][name]["grasped"], name
 
 
 def test_a_goal_sent_as_soon_as_the_session_is_ready_is_taken(twin):
     """The session is ready once the controllers are; a goal sent at once arrives."""
-    assert twin.arm.move_to({"shoulder_pan": 15.0}) == "arrived"
+    assert twin.arm.go_to({"shoulder_pan_joint": 0.26}) == "arrived"
+    assert twin.arm.get_joints()["shoulder_pan_joint"] == pytest.approx(0.26, abs=0.05)
 
 
 _OTHER_DOMAIN = r"""
@@ -215,7 +155,6 @@ except ExternalShutdownException:
 def test_the_twin_domain_is_private(pipeline_cfg, no_twin):
     """A joint-state publisher on another domain is invisible to the twin, and the
     twin to it: once the twin and its clients are up, that domain lists none of its topics."""
-    from so101_sim.node import PROPS_SETTLED_TOPIC
     from vvla_workshop.twin_ros import TwinSession
 
     env = {**os.environ, "ROS_DOMAIN_ID": str(TEST_DOMAIN_ID + 1)}
@@ -229,11 +168,12 @@ def test_the_twin_domain_is_private(pipeline_cfg, no_twin):
                 break
         else:
             pytest.fail("the other domain's publisher exited before it started")
+        os.environ["TWIN_ROS_DOMAIN_ID"] = str(TEST_DOMAIN_ID)
         session = TwinSession(pipeline_cfg)
         try:
             joints = session.arm.get_joints()
-            assert joints["shoulder_lift"] == pytest.approx(-96.5, abs=2.0), joints
-            assert session.scene.latest(after=time.time(), timeout=None) is not None
+            assert joints["shoulder_lift_joint"] == pytest.approx(-1.68424, abs=0.05), joints
+            assert session.scene.latest(timeout=5.0) is not None
             other.stdin.close()
             out = other.stdout.read()
             other.wait()
@@ -243,15 +183,18 @@ def test_the_twin_domain_is_private(pipeline_cfg, no_twin):
         if other.poll() is None:
             other.kill()
     seen = next(line for line in out.splitlines() if line.startswith("SEEN")).split()[1:]
-    assert PROPS_SETTLED_TOPIC not in seen and "/cameras/arm/image_raw" not in seen, seen
+    assert "/sim/props_settled" not in seen and "/cameras/arm/image_raw" not in seen, seen
 
 
 def test_a_second_twin_on_the_domain_is_refused(pipeline_cfg, twin):
     from vvla_workshop.twin_ros import TwinSession
 
+    before = twin.scene.latest(timeout=5.0)
+    assert before is not None, "the twin published no scene"
     with pytest.raises(RuntimeError, match="already runs on ROS domain"):
         TwinSession(pipeline_cfg)
-    assert twin.scene.latest(after=time.time(), timeout=None) is not None, "the first twin stopped"
+    # The header stamp is the twin's clock, so a newer scene is after that stamp.
+    assert twin.scene.latest(after=before["stamp"], timeout=5.0) is not None, "the first twin stopped"
     assert twin.armcam.read()[0]
 
 
@@ -259,7 +202,9 @@ def test_the_node_dies_with_its_kernel(no_twin):
     from jupyter_client import KernelManager
 
     km = KernelManager(kernel_name="vvla-workshop")
-    km.start_kernel(env=os.environ.copy())
+    env = os.environ.copy()
+    env["TWIN_ROS_DOMAIN_ID"] = str(TEST_DOMAIN_ID)
+    km.start_kernel(env=env)
     kc = km.client()
     kc.start_channels()
     out: list[str] = []
@@ -292,34 +237,40 @@ def test_the_node_dies_with_its_kernel(no_twin):
             pass
 
 
-def test_reset_service_restores_the_scene_and_parks_the_arm(pipeline_cfg, probe, no_twin):
-    """The reset parks the arm through the controllers, then puts the props
-    back, so the server's first report after it shows the arm parked."""
-    from vla_pipeline.robot.arm_interface import REST_POSE
+def test_reset_service_restores_the_scene_and_parks_the_arm(pipeline_cfg, no_twin):
+    """Reset puts the arm on the SRDF home pose and the props back on the scene."""
     from vvla_workshop.twin_ros import TwinSession
 
+    os.environ["TWIN_ROS_DOMAIN_ID"] = str(TEST_DOMAIN_ID)
     moved = default_scene_snapshot(pipeline_cfg)
     moved["bodies"]["sports_ball"][:3] = [0.22, -0.04, 0.015]
-    home = xml_poses(pipeline_cfg)
+    home_props = xml_poses(pipeline_cfg)
     session = TwinSession(pipeline_cfg, scene=moved)
     try:
-        start = session.scene.latest(timeout=None)
+        start = session.scene.latest(timeout=5.0)
+        assert start is not None
         assert start["bodies"]["sports_ball"]["xyz"][:2] == pytest.approx([0.22, -0.04], abs=0.01)
-        session.arm.go_to({"shoulder_pan": 30.0, "shoulder_lift": -40.0, "elbow_flex": 40.0})
+        assert session.arm.go_to({
+            "shoulder_pan_joint": 0.52,
+            "shoulder_lift_joint": -0.70,
+            "elbow_flex_joint": 0.70,
+        }) == "arrived"
         assert session.reset_scene()
-        reset_at = time.time()
-        joints = probe.joints(after=reset_at)
-        scene = session.scene.latest(after=reset_at, settled=True, timeout=None)
-        for name, qpos in home.items():
+        joints = session.arm.get_joints()
+        for name, value in session.arm.named_state("home").items():
+            assert joints[name] == pytest.approx(value, abs=0.05), (name, joints[name], value)
+        open_jaws = session.arm.named_state("open")
+        jaw = session.arm.gripper_joint
+        assert joints[jaw] == pytest.approx(open_jaws[jaw], abs=0.05), joints[jaw]
+        scene = session.scene.latest(settled=True, timeout=5.0)
+        assert scene is not None, "the scene did not settle after reset"
+        for name, qpos in home_props.items():
             got = scene["bodies"][name]
             assert got["xyz"] == pytest.approx(list(qpos[:3]), abs=0.01), name
             assert quat_close(got["quat"], qpos[3:7]), name
             assert not got["grasped"], name
-        for k in BODY_JOINTS:
-            assert joints[k] == pytest.approx(REST_POSE[k], abs=3.0), (k, joints)
-        assert joints["gripper"] >= 70.0, joints
-        session.arm.go_to({"shoulder_pan": 20.0})
-        assert session.arm.get_joints()["shoulder_pan"] > 15.0, "the server drove back to a stale target"
+        assert session.arm.go_to({"shoulder_pan_joint": 0.35}) == "arrived"
+        assert session.arm.get_joints()["shoulder_pan_joint"] == pytest.approx(0.35, abs=0.05)
     finally:
         session.close()
 

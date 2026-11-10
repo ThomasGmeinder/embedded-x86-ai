@@ -14,14 +14,9 @@
     ./run_sim_tests.sh --sim-repeat 20 -x -k mimic    # hunt a flaky test
     ./run_sim_tests.sh --sim-eyes seg                 # ground-truth boxes instead of YOLO
 
-Videos + timelines land in ``_artifacts/sim_tests/<tier>/`` with an
-``index.html`` that plays them all. Each ``.jsonl`` timeline holds the
-props' poses, grasps and contacts every 0.2 s, every touch between a prop
-and another body, the run's log lines and the full failure message
-(:mod:`so101_sim.record`). A failed test also leaves
-``_artifacts/sim_tests/failures/<test>/``: what each fixture with a
-``failure_report`` saved (joint timeline, twin node log, notebook kernel log),
-summarized at the end of its report.
+A failed test leaves ``_artifacts/sim_tests/failures/<test>/``: what each
+fixture with a ``failure_report`` saved (joint timeline, twin node log,
+notebook kernel log), summarized at the end of its report.
 """
 
 from __future__ import annotations
@@ -31,7 +26,6 @@ import re
 import shutil
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -88,6 +82,63 @@ def _require_this_clone() -> None:
     root = (PIPE_ROOT / "so101_sim").resolve()
     if root not in src.parents:
         pytest.exit(f"so101_sim is {src}, not this clone's {root}\n{commands}", returncode=3)
+
+
+# These tests construct a MoveItPy in this process and need the domain empty.
+# Collected with the shared ``twin`` fixture, the second constructor segfaults
+# when the first MoveItPy is destroyed (moveit2#3721). ./run_sim_tests.sh
+# runs them in their own processes. Fail here, before any bringup.
+_OWN_MOVEIT_PY = frozenset({
+    "test_the_twin_domain_is_private",
+    "test_the_node_dies_with_its_kernel",
+    "test_reset_service_restores_the_scene_and_parks_the_arm",
+})
+
+
+def _still_selected(config, items):
+    """Items ``--deselect`` keeps. Pytest applies that option in its own hook,
+    and the node id it compares depends on the root directory."""
+    prefixes = tuple(config.getoption("deselect") or [])
+    if not prefixes:
+        return items
+    kept = []
+    for item in items:
+        node = item.nodeid
+        if any(node.startswith(prefix) or prefix.endswith(node) for prefix in prefixes):
+            continue
+        kept.append(item)
+    return kept
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(config, items):
+    items = _still_selected(config, items)
+    moveit_files = set()
+    shared, own = [], []
+    for item in items:
+        path = Path(str(item.fspath)).name
+        if path in {"test_twin_infra.py", "test_twin_ros.py"}:
+            moveit_files.add(path)
+        name = getattr(item, "originalname", None) or item.name.split("[", 1)[0]
+        if "twin" in item.fixturenames or "rig" in item.fixturenames:
+            shared.append(item.nodeid)
+        if name in _OWN_MOVEIT_PY:
+            own.append(item.nodeid)
+    if len(moveit_files) > 1:
+        pytest.exit(
+            "test_twin_infra.py and test_twin_ros.py each construct a MoveItPy. "
+            "A second one in this process segfaults on destruction (moveit2#3721). "
+            "Run ./run_sim_tests.sh.",
+            returncode=3,
+        )
+    if shared and own:
+        listed = "\n".join(own)
+        pytest.exit(
+            "These tests construct their own MoveItPy and need a free domain. "
+            "Collected with the shared twin, the second constructor segfaults "
+            f"(moveit2#3721):\n{listed}\nRun ./run_sim_tests.sh.",
+            returncode=3,
+        )
 
 
 def pytest_configure(config):
@@ -147,15 +198,6 @@ def _slug(nodeid: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_")
 
 
-def pytest_sessionfinish(session, exitstatus):
-    from so101_sim.record import write_index
-
-    results = getattr(session.config, "_sim_results", {})
-    for tier_dir, res in results.items():
-        if Path(tier_dir).is_dir():
-            write_index(tier_dir, res, title=f"SO-101 digital-twin scenarios ({Path(tier_dir).name})")
-
-
 # ---------------------------------------------------------------------------
 # configs / services
 # ---------------------------------------------------------------------------
@@ -176,151 +218,3 @@ def mock_llm():
 
     with MockLlamaServer() as server:
         yield server
-
-
-@pytest.fixture
-def world():
-    """A twin whose physics does not run (``SimWorld(start=False)``), one per test."""
-    from so101_sim.world import SimWorld
-
-    sim = SimWorld(start=False)
-    yield sim
-    sim.close()
-
-
-@pytest.fixture(scope="module")
-def probe(pipeline_cfg):
-    """The test domain's joint states and graph, read by this process (``twin_ros_rig.Probe``)."""
-    from twin_ros_rig import Probe, join_test_domain
-
-    join_test_domain()
-    p = Probe(pipeline_cfg)
-    yield p
-    p.close()
-
-
-@dataclass
-class Twin:
-    world: object
-    renderer: object
-
-
-@pytest.fixture(scope="session")
-def twins():
-    """``twins(cfg)``: the session's one SimWorld + RenderService, created on first use."""
-    made: list[Twin] = []
-
-    def get(cfg: dict) -> Twin:
-        if not made:
-            from so101_sim.render import RenderService
-            from so101_sim.world import SimWorld
-            from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR, REST_POSE
-
-            sim = dict(cfg.get("sim") or {})
-            gm = dict(sim.get("gripper_map") or {})
-            gm.setdefault("closed_cal", GRIPPER_CLOSED_FLOOR)
-            sim["gripper_map"] = gm
-            world = SimWorld({"sim": sim}, rest_pose=REST_POSE)
-            made.append(Twin(world, RenderService(world, require_hw=False)))
-        return made[0]
-
-    yield get
-    for t in made:
-        t.renderer.close()
-        t.world.close()
-
-
-def _video_path(request, tier: str) -> Path | None:
-    mode = request.config.getoption("--sim-video")
-    if mode == "none":
-        return None
-    out = Path(request.config.getoption("--sim-video-dir")) / tier
-    return out / f"{_slug(request.node.nodeid)}.mp4"
-
-
-def _finish(request, rig, tier: str) -> None:
-    item = request.node
-    call = getattr(item, "rep_call", None)
-    setup = getattr(item, "rep_setup", None)
-    if call is None:
-        status = "failed" if (setup is not None and setup.failed) else "skipped"
-        message = ""
-    else:
-        xfail = hasattr(call, "wasxfail")
-        if call.passed and not xfail:
-            status = "passed"
-        elif call.skipped and xfail:
-            status = "xfailed"
-        elif call.passed and xfail:
-            status = "xpassed"
-        else:
-            status = "failed" if call.failed else "skipped"
-        message = ""
-        if call.failed and call.longrepr is not None:
-            crash = getattr(call.longrepr, "reprcrash", None)
-            message = crash.message if crash is not None else str(call.longrepr)[-300:]
-        elif xfail:
-            message = str(call.wasxfail)
-    mode = request.config.getoption("--sim-video")
-    keep = mode == "all" or (mode == "failed" and status in ("failed", "xpassed"))
-    path = rig.finish(status, message, keep=keep)
-    if path is not None:
-        results = request.config._sim_results.setdefault(str(path.parent), {})
-        results[path.stem] = status
-
-
-@pytest.fixture(scope="session")
-def eyes(request, pipeline_cfg):
-    """``eyes()``: the pipeline's YOLOv26s ``ObjectDetector`` (one session),
-    or ``None`` with ``--sim-eyes seg``."""
-    made: list = []
-    kind = request.config.getoption("--sim-eyes")
-    device = request.config.getoption("--sim-yolo-device")
-
-    def get():
-        if kind == "seg":
-            return None
-        if not made:
-            from vla_pipeline.vision.yolo_detect_npu import ObjectDetector
-
-            made.append(ObjectDetector(pipeline_cfg, device=device))
-        providers = made[0].session.get_providers()
-        if device == "npu" and "VitisAIExecutionProvider" not in providers:
-            pytest.fail(
-                f"--sim-yolo-device npu, but the detector runs on {providers}: "
-                "source scripts/ryzen_ai_env.sh with RYZEN_AI_WHEELS set",
-                pytrace=False,
-            )
-        return made[0]
-
-    return get
-
-
-@pytest.fixture
-def rig(request, pipeline_cfg, twins, mock_llm, eyes):
-    """The tier-1 rig: the pipeline on the session's twin."""
-    from rigs import PipelineRig
-
-    mock_llm.requests.clear()
-    made = PipelineRig(
-        twins(pipeline_cfg), pipeline_cfg, mock_llm.base_url,
-        recorder_path=_video_path(request, "tier1"), title=f"pipeline: {request.node.name}",
-        detector=eyes(),
-    )
-    yield made
-    _finish(request, made, "tier1")
-
-
-@pytest.fixture
-def video_path(request):
-    """Per-test recording path for tier-2 rigs (None with --sim-video none)."""
-    return _video_path(request, "tier2")
-
-
-@pytest.fixture
-def finish_rig(request):
-    """Tier-2 tests register their rig here so it is stamped + closed."""
-    holder = {}
-    yield holder
-    if "rig" in holder:
-        _finish(request, holder["rig"], "tier2")
