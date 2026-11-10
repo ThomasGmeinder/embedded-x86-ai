@@ -138,6 +138,7 @@ class VoiceSession:
                 on_text(json.dumps({
                     "command": cmd.intent.value,
                     "object": cmd.object_name or "",
+                    "heard": cmd.transcript,
                 }))
 
         threading.Thread(target=worker, daemon=True, name="gemma-audio").start()

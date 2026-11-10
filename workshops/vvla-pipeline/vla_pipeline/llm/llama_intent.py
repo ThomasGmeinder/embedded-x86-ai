@@ -210,7 +210,7 @@ class LlamaIntentParser:
                 {"role": "user", "content": user_content},
             ],
             "temperature": self.temperature,
-            "max_tokens": 48
+            "max_tokens": 96,  # command JSON plus the short "heard" phrase
             "grammar": self.grammar,
         }
         if self._audio:
@@ -235,14 +235,15 @@ class LlamaIntentParser:
         obj = str(data.get("object", "") or "").strip()
         if obj:
             params["object"] = obj
+        heard = str(data.get("heard", "") or "").strip() or transcript
         logger.info(
             "Intent %r %s ← %r (%.0f ms)",
             intent.value,
             params or "",
-            transcript,
+            heard,
             latency_ms,
         )
-        return ParsedCommand(intent, params=params, transcript=transcript)
+        return ParsedCommand(intent, params=params, transcript=heard)
 
     def parse(self, transcript: str) -> ParsedCommand:
         """Map one spoken transcript to a ParsedCommand (grammar-constrained)."""

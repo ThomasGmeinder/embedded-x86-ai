@@ -82,7 +82,8 @@ def command_from_json(text: str) -> ParsedCommand | None:
     obj = str(data.get("object", "") or "").strip()
     if obj:
         params["object"] = obj
-    return ParsedCommand(Intent.from_string(str(command)), params=params, transcript="")
+    heard = str(data.get("heard", "") or "").strip()
+    return ParsedCommand(Intent.from_string(str(command)), params=params, transcript=heard)
 
 
 def is_stop(transcript: str) -> bool:

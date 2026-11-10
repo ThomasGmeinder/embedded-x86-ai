@@ -87,7 +87,8 @@ def command_from_json(text: str) -> ParsedCommand | None:
     obj = str(data.get("object", "") or "").strip()
     if obj:
         params["object"] = obj
-    return ParsedCommand(Intent.from_string(str(command)), params=params, transcript="")
+    heard = str(data.get("heard", "") or "").strip()
+    return ParsedCommand(Intent.from_string(str(command)), params=params, transcript=heard)
 
 
 _KEYWORD_ROUTES = [
@@ -161,9 +162,11 @@ You are the command router for a robot arm on a crowded floor. Other people
 are talking. Ignore background conversation, a second speaker, questions,
 quotes, negations, and anything not addressed to the robot: those are
 "unknown". Map a clear instruction to exactly one command and answer ONLY
-with a JSON object {"command": "<name>", "object": "<object or empty string>"}.
+with a JSON object {"command": "<name>", "object": "<object or empty string>", "heard": "<words>"}.
 "object" is the thing to act on for pick_place (one or two plain words,
 e.g. "ball", "water bottle"); for every other command use "".
+"heard" is the words the person said to the robot, and nothing else.
+Use "" for "heard" when you cannot make out the words.
 
 Commands:
 - "gesture_mimic": the user wants the arm to copy / mirror / follow their own
