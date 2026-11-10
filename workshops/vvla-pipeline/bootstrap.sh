@@ -36,6 +36,16 @@
 #        - Whisper-base ONNX encoder/decoder
 #        - Whisper tokenizer + feature extractor (openai/whisper-base.en)
 #        - Llama-3.2-3B-Instruct GGUF Q4_K_M        (hf download)
+#        - Gemma 4 E4B-IT GGUF + audio projector, and Silero VAD v6.2.3
+#          Paste these from the repository root instead of re-running bootstrap:
+#            mkdir -p models/gemma-4-E4B-it
+#            hf download ggml-org/gemma-4-E4B-it-GGUF \
+#              gemma-4-E4B-it-Q4_0.gguf mmproj-gemma-4-E4B-it-Q8_0.gguf \
+#              --local-dir models/gemma-4-E4B-it
+#            curl --fail --location --show-error \
+#              -o models/silero_vad.onnx \
+#              https://github.com/snakers4/silero-vad/raw/v6.2.3/src/silero_vad/data/silero_vad.onnx
+#            echo '1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3  models/silero_vad.onnx' | sha256sum -c
 #      YOLO ONNX export is manual (Ultralytics is AGPL-3.0). See the README:
 #        python scripts/export_yolo26s_pose.py
 #        python scripts/export_yolo26s_detect.py
@@ -73,6 +83,11 @@ TORCHAUDIO_SPEC='torchaudio==2.11.0+rocm7.13.0'
 LLAMA_GGUF_REPO="bartowski/Llama-3.2-3B-Instruct-GGUF"
 LLAMA_GGUF_FILE="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
 LLAMA_OUT_DIR="${MODELS_DIR}/llama-3.2-3b"
+GEMMA_GGUF_REPO="ggml-org/gemma-4-E4B-it-GGUF"
+GEMMA_OUT_DIR="${MODELS_DIR}/gemma-4-E4B-it"
+SILERO_URL="https://github.com/snakers4/silero-vad/raw/v6.2.3/src/silero_vad/data/silero_vad.onnx"
+SILERO_SHA256="1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
+SILERO_OUT="${MODELS_DIR}/silero_vad.onnx"
 # Not packaged for Jazzy, so section 4e builds it from this tag (BSD-3), with
 # the patches in patches/topic_based_ros2_control/.
 TOPIC_BRIDGE_REPO="https://github.com/PickNikRobotics/topic_based_ros2_control.git"
@@ -678,6 +693,36 @@ PY
   else
     hf download "$LLAMA_GGUF_REPO" "$LLAMA_GGUF_FILE" --local-dir "$LLAMA_OUT_DIR" \
       || warn "GGUF download failed. Llama 3.2 is a gated/licensed model - log in with 'hf auth login' (accept the Llama 3.2 license on huggingface.co) or place ${LLAMA_GGUF_FILE} in ${LLAMA_OUT_DIR} manually."
+  fi
+
+  # Paste from the repository root:
+  #   mkdir -p models/gemma-4-E4B-it
+  #   hf download ggml-org/gemma-4-E4B-it-GGUF \
+  #     gemma-4-E4B-it-Q4_0.gguf mmproj-gemma-4-E4B-it-Q8_0.gguf \
+  #     --local-dir models/gemma-4-E4B-it
+  log "Downloading Gemma 4 E4B-IT GGUF and audio projector"
+  mkdir -p "$GEMMA_OUT_DIR"
+  if [[ -f "${GEMMA_OUT_DIR}/gemma-4-E4B-it-Q4_0.gguf" && -f "${GEMMA_OUT_DIR}/mmproj-gemma-4-E4B-it-Q8_0.gguf" ]]; then
+    echo "Already present: ${GEMMA_OUT_DIR}"
+  else
+    hf download "$GEMMA_GGUF_REPO" \
+      gemma-4-E4B-it-Q4_0.gguf mmproj-gemma-4-E4B-it-Q8_0.gguf \
+      --local-dir "$GEMMA_OUT_DIR" \
+      || warn "Gemma 4 download failed. Paste the hf download command at the top of this script from the repository root."
+  fi
+
+  # Paste from the repository root:
+  #   curl --fail --location --show-error \
+  #     -o models/silero_vad.onnx \
+  #     https://github.com/snakers4/silero-vad/raw/v6.2.3/src/silero_vad/data/silero_vad.onnx
+  #   echo '1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3  models/silero_vad.onnx' | sha256sum -c
+  log "Downloading Silero VAD (v6.2.3)"
+  if [[ -f "$SILERO_OUT" ]] && echo "${SILERO_SHA256}  ${SILERO_OUT}" | sha256sum -c --status; then
+    echo "Already present: ${SILERO_OUT}"
+  else
+    curl --fail --location --show-error -o "$SILERO_OUT" "$SILERO_URL" \
+      && echo "${SILERO_SHA256}  ${SILERO_OUT}" | sha256sum -c --status \
+      || warn "Silero VAD download failed or its checksum did not match ${SILERO_SHA256}."
   fi
 else
   log "Skipping model download/export (--skip-models)"
