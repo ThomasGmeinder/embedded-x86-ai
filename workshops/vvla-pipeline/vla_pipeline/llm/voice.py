@@ -132,8 +132,8 @@ class VoiceSession:
                     if on_busy is not None:
                         on_busy(False)
                 if not commands.accept(cmd.intent.value, started, ended, time.monotonic()):
-                    if on_drop is not None and cmd.intent.value == "unknown":
-                        on_drop("no command")
+                    # An early window often has no command yet. The next hop
+                    # can still carry the phrase, so this is not a failed listen.
                     continue
                 on_text(json.dumps({
                     "command": cmd.intent.value,
