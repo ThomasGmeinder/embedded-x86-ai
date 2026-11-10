@@ -1,0 +1,21 @@
+diff --git a/moveit_ros/planning/planning_pipeline/src/planning_pipeline.cpp b/moveit_ros/planning/planning_pipeline/src/planning_pipeline.cpp
+index 34f3037..8ef7e5f 100644
+--- a/moveit_ros/planning/planning_pipeline/src/planning_pipeline.cpp
++++ b/moveit_ros/planning/planning_pipeline/src/planning_pipeline.cpp
+@@ -358,15 +358,9 @@ bool PlanningPipeline::generatePlan(const planning_scene::PlanningSceneConstPtr&
+     return false;
+   }
+ 
+-  // Make sure that planner id is set in the response
++  // OMPL leaves the response id empty. The request already names the planner.
+   if (res.planner_id.empty())
+-  {
+-    RCLCPP_WARN(logger_,
+-                "The planner plugin did not fill out the 'planner_id' field of the MotionPlanResponse. Setting "
+-                "it to the planner ID name of the MotionPlanRequest assuming that the planner plugin does warn "
+-                "you if it does not use the requested planner.");
+     res.planner_id = req.planner_id;
+-  }
+ 
+   // Set planning pipeline to inactive
+   active_ = false;

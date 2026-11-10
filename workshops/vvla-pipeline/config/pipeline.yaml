@@ -92,7 +92,8 @@ mediapipe:
                               #   down and the wrist→knuckle angle takes over
 
 # NEW: two-camera architecture. Each camera can be served by its own ROS 2
-# node (vla_pipeline.vision.camera_node) or opened directly by the process.
+# ``v4l2_camera`` when use_ros2 is set and the twin is not running, or opened
+# directly by the process.
 cameras:
   mount:                      # externally mounted, faces the human (pose / mimic)
     device: /dev/video0
@@ -101,7 +102,7 @@ cameras:
     fps: 30
     rotate: 0
     source: device            # device (V4L2) | sim (digital-twin render)
-    use_ros2: true            # subscribe to the camera node's topic
+    use_ros2: true            # subscribe to the image topic
     topic: /cameras/mount/image_raw
     stale_after_s: 1.0
   arm:                        # mounted on the end effector (jaws / objects)
@@ -114,9 +115,9 @@ cameras:
     use_ros2: true
     topic: /cameras/arm/image_raw
     stale_after_s: 1.0
-    # Calibration for locating objects (pick_place), printed by
-    # scripts/calibrate_arm_camera.py. null: the twin uses its wrist_cam model;
-    # a real arm (robot.backend: real) refuses to pick until both are set.
+    # null: the twin uses its wrist_cam model. A real arm (robot.backend: real)
+    # refuses to pick until both are set. lerobot-calibrate, camera_calibration,
+    # and easy_handeye2 are not installed.
     intrinsics: null          # {fx, fy, cx, cy, dist: [k1, k2, p1, p2, k3], width, height}
     extrinsics: null          # camera on the gripper: {pos: [x, y, z] m, rpy: [roll, pitch, yaw] deg}
 
@@ -127,9 +128,6 @@ robot:
   robot_id: my_awesome_follower_arm
   enable_motors: true
   control_fps: 60.0
-  max_relative_target: null    # per-tick joint delta clamp (deg), safety
-  command_topic: /so101/joint_command
-  state_topic: /so101/joint_state
 
 intent_node:                  # vla_pipeline.llm.intent_node: transcripts in, intents out
   transcript_topic: /vla/transcript
@@ -215,71 +213,19 @@ mimic:                       # direct camera-frame → joint mapping (utils/gest
 fetch_block:
   block_pose:  {shoulder_pan: 35.0, shoulder_lift: -45.0, elbow_flex: 60.0, wrist_flex: 40.0, wrist_roll: 0.0, gripper: 35.0}
   lift_pose:   {shoulder_pan: 35.0, shoulder_lift: -80.0, elbow_flex: 85.0, wrist_flex: 50.0, wrist_roll: 0.0, gripper: 5.0}
-  handoff_reach: 55.0
-  release_timeout_s: 6.0
-pick_place:                 # NEW: voice-grounded "pick up the <object>"
-  # Joint pose from which the arm camera surveys the workspace: the arm stays
-  # 10 cm above the table, over a standing bottle, while the base turns.
-  scan_pose:   {shoulder_pan: 0.0, shoulder_lift: -55.0, elbow_flex: 40.0, wrist_flex: 65.0, wrist_roll: 0.0, gripper: 70.0}
-  # The sweep turns from the ready pose (pan 0) one way, then the other, and
-  # stops at the first view that gives a grasp. tests/sim/pick_coverage.py
-  # chose the views: each default object lies fully inside a high view, its
-  # box clear of the image border by EDGE_MARGIN_PX plus YOLO's measured
-  # overreach; with the near views they cover 552 of the 576 table spots any
-  # view covers. Pans past 86 deg move under the grasp limits, inside the
-  # arm's +-110 deg. Tune for the real camera/FOV.
-  scan_pans: [-10.0, -40.0, -60.0, -100.0, 10.0, 30.0, 60.0, 90.0]
-  # Fallback, looking down at the table near the base (13-26 cm out).
-  scan_near_pose: {shoulder_pan: 0.0, shoulder_lift: -50.0, elbow_flex: 30.0, wrist_flex: 90.0, wrist_roll: 0.0, gripper: 70.0}
-  scan_near_pans: [50.0, 10.0, -30.0, -70.0, -100.0]
-  # The scan's frames keep a list of the objects on the table: one footprint
-  # per detection (objects_min_score: weaker detections count too), except
-  # the jaws themselves inside scan_jaw_polygon, the outline of the open jaws
-  # in the frame as image fractions (x, y).
-  scan_jaw_polygon: [[1.0, 1.0], [0.89, 1.0], [0.645, 0.72], [0.615, 0.665], [0.615, 0.59], [0.75, 0.59], [1.0, 0.69]]
-  objects_min_score: 0.25
-  # "place it" / "set it down": the nearest point to the drop position (where
-  # the pickup holds the object out), within place_search_m, where the object
-  # keeps place_clearance_m from every known object, off the arm's way from
-  # its parked pose into the first scan view, and where the arm's model
-  # clears every known object through the whole put-down.
-  place_search_m: 0.18
-  # From the base: where a pickup reaches each kind of object again (the
-  # bottle lands about 1 cm farther out than its set-down point).
-  place_near_m: 0.18
-  place_far_m: {sphere: 0.33, flat: 0.32, bottle: 0.29}
-  place_clearance_m: 0.025
+pick_place:                 # voice-grounded "pick up the <object>"
   set_down_clearance_m: 0.01  # the object is let go this far above where it rested
   # The object is located on the table from its box (the camera ray meets the
   # table plane) and reached with IK; no fix or no solve means out of reach.
   table_z: -0.005           # table surface height in the arm's base frame (m)
   pregrasp_above_m: 0.06    # jaws open this far above the grasp, then descend in joint space
-  max_grasp_height_m: 0.03  # grasp tall objects no higher than this above the table
-  fixed_jaw_gap_m: 0.005    # after the descent, the hand moves sideways until the fixed finger is this far from a lying object
   wrist_align_classes: [toothbrush]
   wrist_align_pregrasp_above_m: 0.10  # pre-grasp height above a thin object
-  wrist_align_grasp_width_m: 0.024     # toothbrush handle width across the jaws
-  wrist_align_center_offset_m: 0.018   # shift from silhouette midpoint toward the narrow handle end
   wrist_axis_min_elongation: 1.6
-  min_box_area_frac: 0.002  # detections smaller than this are noise
-  ambiguous_ratio: 1.25     # top-2 score ratio below this = "which one?"
-  retries: 1                # re-attempts after a failed grip
 dance:
   bpm: 100
   duration_s: 20.0
-grip:
-  close_step_deg: 1.5
-  stall_eps_deg: 0.4
-  stall_ticks: 5
-  hold_past_contact: 6.0    # after contact the goal trails this far below the jaw (< max_relative_target)
-  reseat_s: 0.6             # ...for this long at Torque_Limit 500 while both fingers seat
-  hold_torque_limit: 240    # Torque_Limit once the object hangs from the fingers: under LeRobot's 25 % Overload_Torque
-  stall_grace_s: 0.6        # NEW: keep stall-sampling after full close (thin objects)
-  load_threshold: 120.0     # NEW: effort/current contact level (raw Feetech units)
-  load_ticks: 3             # NEW: consecutive over-threshold reads = contact
-  jaw_roi: [0.30, 0.45, 0.70, 0.95]   # NEW: arm-camera ROI covering the jaws (fractions)
-  jaw_diff_threshold: 0.06            # NEW: ROI difference that counts as "object present"
-wave:                       # NEW
+wave:
   cycles: 3
 # home / stop need no tunables
 
@@ -298,8 +244,7 @@ sim:
     elbow_flex:    {sign: 1, offset_deg: 0.0}
     wrist_flex:    {sign: 1, offset_deg: 0.0456}
     wrist_roll:    {sign: 1, offset_deg: 2.6979}
-  gripper_map: {open_cal: 95.0, closed_rad: 0.030001, open_rad: 1.780001}
-  current_model: {idle_a: 0.006, moving_a: 0.15, rated_nm: 0.49, rated_a: 0.65, stall_a: 2.5, stall_torque_nm: 1.91, ma_per_unit: 6.5, noise_units: 3, lpf_hz: 20}  # 7.4 V STS3215
+  gripper_map: {open_cal: 95.0, closed_rad: 0.030001, open_rad: 1.7}
   cameras:
     arm:  {camera: wrist_cam, width: 640, height: 480, fps: 30}
     mount: {camera: mount_cam, width: 640, height: 480, fps: 30}

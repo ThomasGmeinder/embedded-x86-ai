@@ -1,0 +1,10 @@
+# The occupancy monitor errors when sensors is missing or empty, and when a
+# named sensor has no plugin. A plugin name that starts with "~" is skipped.
+# The resolution is the value it substitutes when the key is absent. The frame
+# is the URDF root link.
+octomap_resolution: 0.1
+octomap_frame: world
+sensors:
+  - disabled
+disabled:
+  sensor_plugin: "~"

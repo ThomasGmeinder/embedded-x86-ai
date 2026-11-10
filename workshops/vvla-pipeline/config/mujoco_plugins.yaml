@@ -8,6 +8,7 @@
         type: "mujoco_ros2_control_plugins/CameraPlugin"
         camera_publish_rate: 30.0
         wrist_cam:
+          frame_name: wrist_cam_optical_frame
           image_topic: /cameras/arm/image_raw
           info_topic: /cameras/arm/camera_info
           depth_topic: /cameras/arm/depth

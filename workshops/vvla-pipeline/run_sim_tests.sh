@@ -26,33 +26,62 @@ say "run_sim_tests.sh${*:+ $*}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
-PY="${REPO_ROOT}/.venv/bin/python"
-[[ -x "$PY" ]] || die "no venv at ${REPO_ROOT}/.venv - run ./bootstrap.sh first"
-
-say "Sourcing scripts/ryzen_ai_env.sh"
 # shellcheck disable=SC1091
-VIRTUAL_ENV="${REPO_ROOT}/.venv" source "${REPO_ROOT}/scripts/ryzen_ai_env.sh" \
-  || die "ryzen_ai_env.sh failed"
-
-ROS_SETUP="${ROS_SETUP:-/opt/ros/jazzy/setup.bash}"
-[[ -f "$ROS_SETUP" ]] || die "ROS 2 is required and is not at $ROS_SETUP - run ./bootstrap.sh"
-say "Sourcing ROS 2 ($ROS_SETUP)"
-set +u +e
-# shellcheck disable=SC1090
-source "$ROS_SETUP" || die "ROS 2 setup failed"
-ROS_WS_SETUP="${REPO_ROOT}/ros_ws/install/setup.bash"
-[[ -f "$ROS_WS_SETUP" ]] || die "no ros_ws overlay at $ROS_WS_SETUP - run ./bootstrap.sh"
-say "Sourcing the ros_ws overlay ($ROS_WS_SETUP)"
-# shellcheck disable=SC1090
-source "$ROS_WS_SETUP" || die "ros_ws setup failed"
-set -e -u
-
-export VVLA_TEST_STRICT=1
+source "${REPO_ROOT}/scripts/test_env.sh"
 RC=0
+LAST_TWIN_DOMAIN=""
+
+# A MoveIt process that just exited can leave its DDS participant on that
+# domain until the lease ends. The next twin then never sees /joint_states
+# inside the bring-up bound. Pick a free domain, and not the one just used.
+# so101_sim.domain_lock.owner is the lock the twin holds; this does not wait.
+pick_twin_domain() {
+  "$PY" - "$LAST_TWIN_DOMAIN" <<'PY'
+import sys
+from so101_sim.domain_lock import owner
+avoid = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else None
+for domain in range(90, 110):
+    if avoid is not None and domain in (avoid - 1, avoid, avoid + 1):
+        continue
+    if owner(domain) is None and owner(domain + 1) is None:
+        print(domain)
+        break
+else:
+    sys.exit("no free ROS domain for a twin")
+PY
+}
 say "NPU load order"
 "$PY" -m pytest tests/npu || RC=$?
 say "Stacks on the twin"
-"$PY" -m pytest tests/sim -m "sim and not docs" "$@" || RC=$?
+# A second MoveItPy in one process segfaults when its context is destroyed.
+# The two twin modules each construct one, so each gets its own process.
+"$PY" -m pytest --rootdir "$REPO_ROOT" tests/sim -m "sim and not docs" \
+  --ignore=tests/sim/test_twin_infra.py --ignore=tests/sim/test_twin_ros.py "$@" || RC=$?
+say "MoveIt twin, one MoveItPy per process"
+# The shared fixtures keep one MoveItPy. Tests that construct their own need
+# a free domain, so they are deselected here and run below. Collecting them
+# together exits at once (tests/sim/conftest.py). Each process gets its own
+# ROS domain so it does not meet the DDS participant the previous one left.
+run_on_fresh_domain() {
+  local domain
+  domain="$(pick_twin_domain)" || die "no free ROS domain for a twin"
+  say "ROS domain ${domain}"
+  LAST_TWIN_DOMAIN="$domain"
+  TWIN_TEST_DOMAIN_ID="$domain" "$@" || RC=$?
+}
+run_on_fresh_domain "$PY" -m pytest --rootdir "$REPO_ROOT" tests/sim/test_twin_infra.py -m "sim and not docs" \
+  --deselect tests/sim/test_twin_infra.py::test_the_twin_domain_is_private \
+  --deselect tests/sim/test_twin_infra.py::test_the_node_dies_with_its_kernel \
+  --deselect tests/sim/test_twin_infra.py::test_reset_service_restores_the_scene_and_parks_the_arm \
+  "$@"
+for node in \
+  tests/sim/test_twin_infra.py::test_the_twin_domain_is_private \
+  tests/sim/test_twin_infra.py::test_the_node_dies_with_its_kernel \
+  tests/sim/test_twin_infra.py::test_reset_service_restores_the_scene_and_parks_the_arm
+do
+  run_on_fresh_domain "$PY" -m pytest --rootdir "$REPO_ROOT" "$node" -m "sim and not docs" "$@"
+done
+run_on_fresh_domain "$PY" -m pytest --rootdir "$REPO_ROOT" tests/sim/test_twin_ros.py -m "sim and not docs" "$@"
 say "MoveIt 2 on the twin"
-"$PY" -m pytest tests/moveit || RC=$?
+"$PY" -m pytest --rootdir "$REPO_ROOT" tests/moveit || RC=$?
 exit "$RC"

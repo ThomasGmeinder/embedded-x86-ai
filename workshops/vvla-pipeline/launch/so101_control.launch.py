@@ -9,23 +9,23 @@
 
 ``hardware_type:=mujoco|real|mock_components`` runs ros2_so_arm's controllers
 bringup (``so_arm101_description``) on the MuJoCo twin, the Feetech bus or mock
-hardware, and MoveIt's ``move_group`` (``so_arm101_moveit_config``). The twin
+hardware, MoveIt's ``move_group`` (``so_arm101_moveit_config``), and MoveIt
+Servo. Servo runs as a user service: this desktop session inherited rtkit's
+200 ms realtime budget, which a child cannot raise, and Servo uses realtime
+scheduling while it loads the arm model. The user service manager still has
+an unlimited budget. The twin
 loads the scene in the config's ``sim:`` section with its ``home`` keyframe,
 and ``config/mujoco_plugins.yaml`` publishes its cameras and props.
 
-``hardware_type:=topic`` is ros2_control over the arm server's topics:
-robot_state_publisher publishes the description, ``ros2_control_node`` runs
-the controllers at ``robot.control_fps``, and ``topic_based_ros2_control``
-talks to the arm server (or the twin) on ``/so101/hardware/joint_commands`` and
-``/so101/hardware/joint_states``, in radians; the controller manager finds it
-in ``ros_ws/`` (bootstrap.sh builds it). Run it with the venv's Python, after
-sourcing ROS and ``ros_ws/install/setup.bash``:
+Run it with the venv's Python, after sourcing ROS and ``ros_ws/install/setup.bash``:
 
     .venv/bin/python $(which ros2) launch launch/so101_control.launch.py
-    ... launch/so101_control.launch.py gripper:=action
-    ... launch/so101_control.launch.py hardware_type:=mujoco
+    ... launch/so101_control.launch.py hardware_type:=real
+    ... launch/so101_control.launch.py hardware_type:=mock_components
 """
 
+import os
+import shlex
 from pathlib import Path
 
 from launch import LaunchDescription
@@ -37,11 +37,89 @@ from launch_ros.actions import Node
 from vla_pipeline.utils.config import DEFAULT_CONFIG
 
 PLUGINS_FILE = Path(__file__).resolve().parents[1] / "config" / "mujoco_plugins.yaml"
-HARDWARE_TYPES = ("topic", "mujoco", "real", "mock_components")
+HARDWARE_TYPES = ("mujoco", "real", "mock_components")
+# scripts/servo_user_service.sh starts Servo. A user service does not inherit
+# this process's environment; the script forwards the ROS domain and the
+# library path, and it stops the unit when launch signals it.
+_SERVO_SERVICE = Path(__file__).resolve().parents[1] / "scripts" / "servo_user_service.sh"
+
+
+def _ensure_servo_package() -> None:
+    """Use an unpacked MoveIt Servo prefix when the apt package is not on the path.
+
+    ``ros-jazzy-moveit-servo`` is the package ``bootstrap.sh`` installs. This
+    machine's copy is the unpacked deb until that install is done.
+    ``MOVEIT_SERVO_PREFIX`` names a different unpack.
+    """
+    prefixes = [item for item in os.environ.get("AMENT_PREFIX_PATH", "").split(os.pathsep) if item]
+    if any((Path(item) / "share" / "moveit_servo").is_dir() for item in prefixes):
+        return
+    fallback = Path(os.environ.get(
+        "MOVEIT_SERVO_PREFIX",
+        Path.home() / ".local/opt/ros-jazzy-moveit-servo-2.12.4",
+    ))
+    if not (fallback / "share" / "moveit_servo").is_dir():
+        return
+    os.environ["AMENT_PREFIX_PATH"] = os.pathsep.join([str(fallback), *prefixes])
+    lib = str(fallback / "lib")
+    current = os.environ.get("LD_LIBRARY_PATH", "")
+    os.environ["LD_LIBRARY_PATH"] = lib if not current else os.pathsep.join([lib, current])
+
+
+def _user_service_prefix() -> str:
+    """Start the following command as a user service, then wait until it exits."""
+    return shlex.quote(str(_SERVO_SERVICE))
+
+
+def _servo(mujoco: bool):
+    """MoveIt Servo, publishing to the trajectory controller within joint_limits.yaml.
+
+    The shipped panda config is the parameter file. This overrides the group,
+    the output topic and the publish period, and it is not the primary planning
+    scene: ``move_group`` is. The process is a user service so its realtime
+    budget is the user service manager's, not this session's.
+    """
+    from launch_param_builder import ParameterBuilder
+    from so_arm_utils.launch_utils import MoveItConfigs
+
+    from vla_pipeline.robot.moveit_arm import PLANNING_GROUP, SERVO_NODE, SERVO_PERIOD_S
+
+    _ensure_servo_package()
+    configs = MoveItConfigs("so_arm101")
+    manager = configs.trajectory_execution["moveit_simple_controller_manager"]
+    arm_controller = next(
+        name for name in manager["controller_names"] if manager[name]["type"] == "FollowJointTrajectory"
+    )
+    servo = (
+        ParameterBuilder("moveit_servo")
+        .yaml("config/panda_simulated_config.yaml")
+        .parameter("move_group_name", PLANNING_GROUP)
+        .parameter("command_out_topic", f"/{arm_controller}/joint_trajectory")
+        .parameter("is_primary_planning_scene_monitor", False)
+        .parameter("publish_period", SERVO_PERIOD_S)
+        .to_dict()
+    )
+    return Node(
+        package="moveit_servo",
+        executable="servo_node",
+        name=SERVO_NODE,
+        prefix=_user_service_prefix(),
+        parameters=[
+            {"moveit_servo": servo},
+            {"update_period": SERVO_PERIOD_S},
+            {"planning_group_name": PLANNING_GROUP},
+            configs.robot_description,
+            configs.robot_description_semantic,
+            configs.robot_description_kinematics,
+            configs.joint_limits,
+            {"use_sim_time": mujoco},
+        ],
+        output="screen",
+    )
 
 
 def _bringup(cfg: dict, hardware_type: str) -> list:
-    """ros2_so_arm's controllers bringup and move_group."""
+    """ros2_so_arm's controllers bringup, move_group and MoveIt Servo."""
     from ament_index_python.packages import get_package_share_path
 
     from so101_sim.config import load_sim_config, scene_path
@@ -50,7 +128,7 @@ def _bringup(cfg: dict, hardware_type: str) -> list:
     mujoco = hardware_type == "mujoco"
     description = get_package_share_path("so_arm101_description")
     moveit = get_package_share_path("so_arm101_moveit_config")
-    return [
+    nodes = [
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(description / "launch" / "controllers_bringup.launch.py")),
             launch_arguments={
@@ -66,73 +144,38 @@ def _bringup(cfg: dict, hardware_type: str) -> list:
             PythonLaunchDescriptionSource(str(moveit / "launch" / "move_group.launch.py")),
             launch_arguments={"use_sim_time": str(mujoco)}.items(),
         ),
+        _servo(mujoco),
     ]
+    if mujoco:
+        # The wrist camera lives in the MuJoCo model, on the gripper. This is that
+        # camera's optical frame (x right, y down, z forward) in gripper_link:
+        # so101.xml wrist_cam, pos 0 0.055 -0.045, xyaxes "0 -0.8419 0.5396 1 0 0".
+        nodes.append(Node(
+            package="tf2_ros",
+            executable="static_transform_publisher",
+            arguments=[
+                "--x", "0", "--y", "0.055", "--z", "-0.045",
+                "--qx", "0.678586", "--qy", "-0.678586", "--qz", "0.198799", "--qw", "0.198799",
+                "--frame-id", "gripper_link",
+                "--child-frame-id", "wrist_cam_optical_frame",
+            ],
+            parameters=[{"use_sim_time": True}],
+        ))
+    return nodes
 
 
 def _nodes(context):
     import yaml
 
-    from vla_pipeline.robot.arm_interface import JOINT_LIMITS
-
-    from so101_sim.control import (
-        ARM_CONTROLLER,
-        GRIPPER_CONTROLLERS,
-        HARDWARE_COMMANDS,
-        HARDWARE_STATES,
-        SERVER_START_S,
-        STREAM_CONTROLLER,
-        bridge_prefix_path,
-    )
-    from so101_sim.description import CONTROLLERS_FILE, robot_description
-
     config = LaunchConfiguration("config").perform(context)
-    gripper = LaunchConfiguration("gripper").perform(context)
     hardware_type = LaunchConfiguration("hardware_type").perform(context)
     with open(config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
-    if hardware_type != "topic":
-        return _bringup(cfg, hardware_type)
-    urdf = robot_description(
-        cfg, JOINT_LIMITS, joint_commands_topic=HARDWARE_COMMANDS, joint_states_topic=HARDWARE_STATES,
-        initial_state_timeout=SERVER_START_S,
-    )
-    controllers = str(CONTROLLERS_FILE)
-    spawn = ["--controller-manager", "/controller_manager", "--param-file", controllers]
-    inactive = [STREAM_CONTROLLER, *(name for key, name in GRIPPER_CONTROLLERS.items() if key != gripper)]
-    return [
-        Node(
-            package="robot_state_publisher",
-            executable="robot_state_publisher",
-            parameters=[{"robot_description": urdf}],
-            output="screen",
-        ),
-        Node(
-            package="controller_manager",
-            executable="ros2_control_node",
-            parameters=[controllers, {"update_rate": int(round(float(cfg["robot"]["control_fps"])))}],
-            remappings=[("~/robot_description", "/robot_description")],
-            additional_env={"AMENT_PREFIX_PATH": bridge_prefix_path()},
-            output="screen",
-        ),
-        Node(
-            package="controller_manager",
-            executable="spawner",
-            arguments=["joint_state_broadcaster", ARM_CONTROLLER, GRIPPER_CONTROLLERS[gripper], *spawn],
-            output="screen",
-        ),
-        Node(
-            package="controller_manager",
-            executable="spawner",
-            arguments=[*inactive, "--inactive", *spawn],
-            output="screen",
-        ),
-    ]
+    return _bringup(cfg, hardware_type)
 
 
 def generate_launch_description() -> LaunchDescription:
-    """robot_state_publisher, the controller manager, its controllers and, on ros2_so_arm, move_group."""
-    from so101_sim.control import GRIPPER_CONTROLLERS
-
+    """ros2_so_arm's controllers, MoveIt's move_group and MoveIt Servo."""
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -142,15 +185,9 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "hardware_type",
-                default_value="topic",
+                default_value="mujoco",
                 choices=HARDWARE_TYPES,
-                description="topic: ros2_control over the arm server's topics; mujoco|real|mock_components: ros2_so_arm and move_group",
-            ),
-            DeclareLaunchArgument(
-                "gripper",
-                default_value="forward",
-                choices=sorted(GRIPPER_CONTROLLERS),
-                description="the active gripper controller; the other is loaded inactive, as is the streaming arm one",
+                description="mujoco: the digital twin; real: the Feetech bus; mock_components: a dry run",
             ),
             OpaqueFunction(function=_nodes),
         ]

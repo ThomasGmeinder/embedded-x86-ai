@@ -5,15 +5,13 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""ROS 2 launch: both camera nodes, the SO-101 server node and its controllers.
+"""ROS 2 launch: the cameras, and the SO-101 under ros2_control.
 
-The repo is run from source (uv venv), not installed as an ament package, so
-nodes are launched as ``python -m`` processes - same modules you run by hand
-for component tests. Per-camera parameters (device, resolution, rotation,
-topic) come from ``config/pipeline.yaml`` via each node's ``--config``. The
-arm server (or the digital twin, which hosts it) runs under ros2_control:
-``launch/so101_control.launch.py`` is included, and the server's topics are
-remapped onto the hardware side's ``/so101/hardware/*``.
+A real webcam is ``v4l2_camera``, with the device and topic from
+``config/pipeline.yaml``. The arm is ``launch/so101_control.launch.py``:
+``hardware_type:=real`` on the Feetech bus, ``mock_components`` for
+``dry_run:=true``, and ``mujoco`` for ``digital_twin:=true`` (the twin's
+camera plugins publish both image topics, so the webcam nodes stay off).
 
     ros2 launch launch/strix_vla.launch.py
     ros2 launch launch/strix_vla.launch.py dry_run:=true     # no motors
@@ -29,58 +27,66 @@ of this launch: it wants a TTY + preview windows. Start it in its own
 terminal once the nodes are up.
 """
 
-import sys
-
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, OpaqueFunction
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 
-from vla_pipeline.utils.config import DEFAULT_CONFIG, REPO_ROOT
-PY = sys.executable  # the venv's python (launch must run inside .venv)
+from vla_pipeline.utils.config import DEFAULT_CONFIG
 
 
 def _arm(context):
-    """The bus owner - the twin or the arm server - on the hardware topics, and its controllers."""
+    """ros2_so_arm's bringup and move_group: MuJoCo, mock hardware, or the Feetech bus."""
     if LaunchConfiguration("arm").perform(context) != "true":
         return []
-    from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, LAUNCH_FILE
-    from vla_pipeline.utils.config import load_config
+    from so101_sim.control import LAUNCH_FILE
 
     config = LaunchConfiguration("config").perform(context)
-    dry_run = LaunchConfiguration("dry_run").perform(context) == "true"
     twin = LaunchConfiguration("digital_twin").perform(context) == "true"
-    robot = load_config(config)["robot"]
-    remaps = [
-        "--ros-args",
-        "-r", f"{robot['command_topic']}:={HARDWARE_COMMANDS}",
-        "-r", f"{robot['state_topic']}:={HARDWARE_STATES}",
-    ]
-    if twin:
-        # The twin hosts the arm server and renders the arm camera (they share the physics).
-        cmd = [PY, "-m", "so101_sim.node", "--config", config, "--sim-cameras", "arm"]
-        name = "so101_sim"
-    else:
-        cmd = [PY, "-m", "vla_pipeline.robot.robot_node", "--server", *(["--dry-run"] if dry_run else []),
-               "--config", config]
-        name = "so101_server_dry" if dry_run else "so101_server"
+    dry_run = LaunchConfiguration("dry_run").perform(context) == "true"
+    hardware = "mujoco" if twin else "mock_components" if dry_run else "real"
     return [
-        ExecuteProcess(cmd=[*cmd, *remaps], cwd=str(REPO_ROOT), output="screen", name=name),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(LAUNCH_FILE)),
-            launch_arguments={"config": config}.items(),
+            launch_arguments={"config": config, "hardware_type": hardware}.items(),
         ),
     ]
 
 
-def generate_launch_description() -> LaunchDescription:
-    """Build the LaunchDescription for the two camera nodes, the SO-101 server node and its controllers."""
-    config = LaunchConfiguration("config")
-    sim = LaunchConfiguration("digital_twin")
-    cameras = LaunchConfiguration("cameras")
-    arm_camera = PythonExpression(["'", cameras, "' == 'true' and '", sim, "' != 'true'"])
+def _cameras(context):
+    """``v4l2_camera`` for each real webcam. The twin's plugins publish those topics."""
+    if LaunchConfiguration("cameras").perform(context) != "true":
+        return []
+    if LaunchConfiguration("digital_twin").perform(context) == "true":
+        return []
+    import yaml
 
+    from launch_ros.actions import Node
+
+    config = LaunchConfiguration("config").perform(context)
+    with open(config, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    nodes = []
+    for role in ("mount", "arm"):
+        cam = ((cfg.get("cameras") or {}).get(role) or {})
+        if not cam.get("use_ros2", False) or cam.get("source", "device") != "device":
+            continue
+        nodes.append(Node(
+            package="v4l2_camera",
+            executable="v4l2_camera_node",
+            name=f"camera_{role}",
+            parameters=[{
+                "video_device": str(cam.get("device", "/dev/video0")),
+                "image_size": [int(cam.get("width", 640)), int(cam.get("height", 480))],
+            }],
+            remappings=[("image_raw", cam.get("topic", f"/cameras/{role}/image_raw"))],
+            output="screen",
+        ))
+    return nodes
+
+
+def generate_launch_description() -> LaunchDescription:
+    """The webcam nodes and the arm bringup."""
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -91,56 +97,24 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 "dry_run",
                 default_value="false",
-                description="run the arm server without motors",
+                description="mock hardware, no motors",
             ),
             DeclareLaunchArgument(
                 "digital_twin",
                 default_value="false",
-                description="MuJoCo digital twin replaces the arm server + arm camera",
+                description="MuJoCo digital twin: controllers, move_group, and the camera plugins",
             ),
             DeclareLaunchArgument(
                 "arm",
                 default_value="true",
-                description="run the bus owner and its controllers (robot.use_ros2)",
+                description="start the arm bringup (robot.use_ros2)",
             ),
             DeclareLaunchArgument(
                 "cameras",
                 default_value="true",
                 description="run the camera nodes (cameras.<role>.use_ros2)",
             ),
-            # Mount camera (faces the human) - /cameras/mount/image_raw
-            ExecuteProcess(
-                cmd=[
-                    PY,
-                    "-m",
-                    "vla_pipeline.vision.camera_node",
-                    "--role",
-                    "mount",
-                    "--config",
-                    config,
-                ],
-                cwd=str(REPO_ROOT),
-                output="screen",
-                name="camera_mount",
-                condition=IfCondition(cameras),
-            ),
-            # Arm camera (end effector) - /cameras/arm/image_raw
-            ExecuteProcess(
-                cmd=[
-                    PY,
-                    "-m",
-                    "vla_pipeline.vision.camera_node",
-                    "--role",
-                    "arm",
-                    "--config",
-                    config,
-                ],
-                cwd=str(REPO_ROOT),
-                output="screen",
-                name="camera_arm",
-                condition=IfCondition(arm_camera),
-            ),
-            # SO-101 bus owner (the twin with digital_twin:=true) and ros2_control
+            OpaqueFunction(function=_cameras),
             OpaqueFunction(function=_arm),
         ]
     )

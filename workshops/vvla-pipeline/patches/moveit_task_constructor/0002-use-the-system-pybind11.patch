@@ -1,0 +1,41 @@
+diff --git a/core/python/CMakeLists.txt b/core/python/CMakeLists.txt
+index 4507e4d..5915ac9 100644
+--- a/core/python/CMakeLists.txt
++++ b/core/python/CMakeLists.txt
+@@ -1,5 +1,3 @@
+-# We rely on pybind11's smart_holder branch imported pybind11 via git submodule
+-
+ find_package(ament_cmake_python REQUIRED)
+ find_package(Python3 COMPONENTS Interpreter Development)
+ # pybind11 must use the ROS python version
+@@ -8,22 +6,14 @@ set(PYBIND11_PYTHON_VERSION ${PYTHON_VERSION})
+ # Use minimum-size optimization for pybind11 bindings
+ add_compile_options("-Os")
+ 
+-# configure pybind11 install for use by downstream packages in install space
+-set(PYBIND11_INSTALL ON CACHE INTERNAL "Install pybind11")
+-set(CMAKE_INSTALL_INCLUDEDIR include/moveit/python)
+-set(PYBIND11_CMAKECONFIG_INSTALL_DIR share/${PROJECT_NAME}/cmake
+-    CACHE INTERNAL "install path for pybind11 cmake files")
+-
+-# source pybind11 folder, which exposes its targets and installs them
+-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/pybind11/CMakeLists.txt")
+-	message("Missing content of submodule pybind11: Use 'git clone --recurse-submodule' in future.\n"
+-	        "Checking out content automatically")
+-	execute_process(COMMAND git submodule init WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+-	execute_process(COMMAND git submodule update WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+-endif()
+-add_subdirectory(pybind11)
+-
+-# Process only after building custom pybind11 to avoid conflicts with system pybind11
++# The same pybind11 as apt moveit_py and py_binding_tools. The bundled
++# submodule is a second copy, and the two copies do not share C++ types:
++# MoveItPy.get_robot_model() then raises "Unregistered type : moveit::core::RobotModel".
++# The apt package installs this pybind11 (smart_holder) under its own prefix.
++# The vendor pybind11 has no smart_holder.h and does not share types with it.
++find_package(pybind11 REQUIRED
++	PATHS "/opt/ros/jazzy/share/moveit_task_constructor_core/cmake"
++	NO_DEFAULT_PATH)
+ find_package(py_binding_tools REQUIRED)
+ 
+ # C++ wrapper code

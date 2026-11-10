@@ -12,5 +12,3 @@ plan_request_params:
   planning_time: 1.0
   planning_pipeline: ompl
   planner_id: RRTConnect
-  max_velocity_scaling_factor: 1.0
-  max_acceleration_scaling_factor: 1.0

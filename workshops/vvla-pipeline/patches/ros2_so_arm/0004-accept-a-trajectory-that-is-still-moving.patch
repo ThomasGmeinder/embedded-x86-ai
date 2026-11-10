@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tgmeinde <tgmeinde@amd.com>
+Date: Fri, 30 Oct 2026 14:10:00 +0100
+Subject: [PATCH] so_arm101: accept a trajectory that is still moving
+
+MoveIt Servo streams a joint trajectory whose last point still carries the
+joint speed. The trajectory controller drops any such message, so the arm
+only follows the occasional point whose end speed is zero and then runs past
+the joint speed limit. Servo is the stream this controller has to accept.
+
+---
+
+diff --git a/so_arm101_description/control/ros2_controllers.yaml b/so_arm101_description/control/ros2_controllers.yaml
+index 57de2a4..b7c4e1a 100644
+--- a/so_arm101_description/control/ros2_controllers.yaml
++++ b/so_arm101_description/control/ros2_controllers.yaml
+@@ -35,6 +35,10 @@ joint_trajectory_controller:
+       - <robot_namespace>elbow_flex_joint
+       - <robot_namespace>wrist_flex_joint
+       - <robot_namespace>wrist_roll_joint
++    # Servo streams a trajectory whose last point still carries the joint speed.
++    # The controller drops that trajectory unless this is set, and the arm then
++    # only moves on the few points whose end speed is zero.
++    allow_nonzero_velocity_at_trajectory_end: true
+     # A goal tolerance of 0 disables the check, so a move that is still short
+     # is reported as success. 0.01 rad is the start tolerance MoveIt already
+     # uses. goal_time 0 waits until the arm is there.

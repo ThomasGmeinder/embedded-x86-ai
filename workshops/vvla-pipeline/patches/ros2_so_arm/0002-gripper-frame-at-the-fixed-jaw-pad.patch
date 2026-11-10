@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tgmeinde <tgmeinde@amd.com>
+Date: Tue, 27 Oct 2026 17:45:00 +0100
+Subject: [PATCH] so_arm101: put the gripper frame on the fixed-jaw pad
+
+gripper_frame_link is the MoveIt arm group's tip. Upstream's fixed joint
+sits 12.3 mm off the MuJoCo fixed-jaw pad (1.9 mm along the closing
+direction and 12.1 mm along the finger), and that offset is the same at
+every joint pose. pick_ik then solves for a point that is not the pinch.
+The origin is the pad in the gripper link: x=-0.0098 m, z=-0.086 m.
+Orientation is unchanged.
+
+---
+ so_arm101_description/urdf/so_arm101_macro.xacro | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/so_arm101_description/urdf/so_arm101_macro.xacro b/so_arm101_description/urdf/so_arm101_macro.xacro
+--- a/so_arm101_description/urdf/so_arm101_macro.xacro
++++ b/so_arm101_description/urdf/so_arm101_macro.xacro
+@@ -658,9 +658,9 @@
+       </actuator>
+     </transmission>
+ 
+-    <!-- Fixed joint for gripper frame -->
++    <!-- Planning tip at the fixed-jaw pad. Upstream's origin is 12.3 mm off that pad. -->
+     <joint name="${prefix}gripper_frame_joint" type="fixed">
+-      <origin xyz="-0.0079 -0.000218121 -0.0981274" rpy="0 3.14159 0" />
++      <origin xyz="-0.0098 0 -0.086" rpy="0 3.14159 0" />
+       <parent link="${prefix}gripper_link" />
+       <child link="${prefix}gripper_frame_link" />
+       <axis xyz="0 0 0" />
+--
+2.43.0

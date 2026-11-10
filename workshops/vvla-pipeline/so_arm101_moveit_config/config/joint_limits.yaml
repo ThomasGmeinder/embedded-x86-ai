@@ -1,41 +1,55 @@
 # joint_limits.yaml allows the dynamics properties specified in the URDF to be overwritten or augmented as needed
 
-# The limits below are the STS3215 envelope in config/servo_profiles.json (the
-# worst pose, the heaviest prop in the jaws), so full speed stays inside the
-# servos' torque budget.
+# The limits below are the STS3215 envelope (the worst pose, the heaviest prop
+# in the jaws). default_velocity_scaling_factor
+# and default_acceleration_scaling_factor are the global speed: every plan
+# uses them unless that plan passes its own scale. 1.0 is the full envelope.
 default_velocity_scaling_factor: 1.0
 default_acceleration_scaling_factor: 1.0
 
-# Specific joint properties can be changed with the keys [max_position, min_position, max_velocity, max_acceleration]
-# Joint limits can be turned off with [has_velocity_limits, has_acceleration_limits]
+# Specific joint properties can be changed with the keys [max_position, min_position, max_velocity, max_acceleration, max_jerk]
+# Joint limits can be turned off with [has_velocity_limits, has_acceleration_limits, has_jerk_limits]
+# max_jerk is Ruckig's own default (1000), so the smoother is bounded by the value it already uses.
 joint_limits:
   shoulder_pan_joint:
     has_velocity_limits: true
     max_velocity: 2.14152
     has_acceleration_limits: true
     max_acceleration: 7.05637
+    has_jerk_limits: true
+    max_jerk: 1000.0
   shoulder_lift_joint:
     has_velocity_limits: true
     max_velocity: 0.30543
     has_acceleration_limits: true
     max_acceleration: 7.97615
+    has_jerk_limits: true
+    max_jerk: 1000.0
   elbow_flex_joint:
     has_velocity_limits: true
     max_velocity: 1.12399
     has_acceleration_limits: true
     max_acceleration: 11.81239
+    has_jerk_limits: true
+    max_jerk: 1000.0
   wrist_flex_joint:
     has_velocity_limits: true
     max_velocity: 1.84307
     has_acceleration_limits: true
     max_acceleration: 16.10764
+    has_jerk_limits: true
+    max_jerk: 1000.0
   wrist_roll_joint:
     has_velocity_limits: true
     max_velocity: 2.13105
     has_acceleration_limits: true
     max_acceleration: 17.02743
+    has_jerk_limits: true
+    max_jerk: 1000.0
   gripper_joint:
     has_velocity_limits: true
     max_velocity: 2.13628
     has_acceleration_limits: true
     max_acceleration: 17.03441
+    has_jerk_limits: true
+    max_jerk: 1000.0

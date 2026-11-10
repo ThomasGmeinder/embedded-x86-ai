@@ -33,12 +33,11 @@
 #          onnxruntime (llama.cpp + torch only)
 #        - this repo itself, editable (pyproject.toml: vla_pipeline, vvla_workshop)
 #   4. Builds llama.cpp with HIP/ROCm for the DETECTED arch into third_party/
-#      4e. Builds into the colcon workspace ros_ws/: topic_based_ros2_control
-#          (the ros2_control hardware side that talks to the arm servers over
-#          topics), ros2_so_arm (the SO-101 description and controllers
-#          bringup, pinned, with patches/ros2_so_arm/), moveit_ros_planning
-#          (MoveIt's source at the installed version, with
-#          patches/moveit_ros_planning/) and
+#      4e. Builds into the colcon workspace ros_ws/: ros2_so_arm (the SO-101
+#          description and controllers bringup, pinned, with
+#          patches/ros2_so_arm/), moveit_ros_planning (MoveIt's source at the
+#          installed version, with patches/moveit_ros_planning/), the MoveIt
+#          Task Constructor (pinned, with patches/moveit_task_constructor/) and
 #          so_arm101_moveit_config
 #      4f. Registers the "vvla-workshop" Jupyter kernel with the NPU runtime,
 #          ROS 2 and ros_ws/ in its kernel.json (VS Code and Jupyter alike)
@@ -83,10 +82,6 @@ TORCHAUDIO_SPEC='torchaudio==2.11.0+rocm7.13.0'
 LLAMA_GGUF_REPO="bartowski/Llama-3.2-3B-Instruct-GGUF"
 LLAMA_GGUF_FILE="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
 LLAMA_OUT_DIR="${MODELS_DIR}/llama-3.2-3b"
-# Not packaged for Jazzy, so section 4e builds it from this tag (BSD-3), with
-# the patches in patches/topic_based_ros2_control/.
-TOPIC_BRIDGE_REPO="https://github.com/PickNikRobotics/topic_based_ros2_control.git"
-TOPIC_BRIDGE_REF="0.3.0"
 # ros2_so_arm (BSD-3): the SO-101 description, its controllers bringup and
 # so_arm_utils, built by section 4e with the commit in patches/ros2_so_arm/.
 SO_ARM_REPO="https://github.com/ros-physical-ai/ros2_so_arm.git"
@@ -95,6 +90,10 @@ SO_ARM_REF="e166df9d51f43b24da9b99047c6c51c306bda74f"
 # installed MoveIt version with patches/moveit_ros_planning/: with the binary,
 # every MoveItPy process segfaults on exit (moveit/moveit2#3721).
 MOVEIT_REPO="https://github.com/moveit/moveit2.git"
+# MoveIt Task Constructor at the apt version's tag, built with patches/moveit_task_constructor/:
+# ComputeIK keeps pick_ik's approximate solutions, and the Python module uses the system pybind11.
+MTC_REPO="https://github.com/moveit/moveit_task_constructor.git"
+MTC_REF="7c670ff7941ae95503607834aace0fd878dfc1c3"  # ros2-0.1.8
 # Installed Ryzen AI directory (wheels plus venv/). Keep it outside this
 # repository. Set before running, e.g.:
 #   export RYZEN_AI_WHEELS=$HOME/ryzen_ai-1.7.1
@@ -406,7 +405,7 @@ fi
 if [[ "$SKIP_APT" -eq 0 && -f /opt/ros/jazzy/setup.bash ]]; then
   log "Installing ros2_control, the controllers, xacro, the ROS build tools and MoveIt 2 (sudo)"
   sudo apt install -y ros-jazzy-ros2-control ros-jazzy-ros2-controllers ros-jazzy-xacro ros-dev-tools \
-    ros-jazzy-moveit ros-jazzy-moveit-py ros-jazzy-moveit-setup-assistant \
+    ros-jazzy-moveit ros-jazzy-moveit-servo ros-jazzy-moveit-py ros-jazzy-moveit-setup-assistant \
     ros-jazzy-moveit-task-constructor-core ros-jazzy-moveit-task-constructor-capabilities ros-jazzy-pick-ik \
     ros-jazzy-mujoco-ros2-control ros-jazzy-mujoco-ros2-control-plugins \
     ros-jazzy-feetech-ros2-driver ros-jazzy-v4l2-camera \
@@ -645,21 +644,12 @@ uv pip install 'opencv-contrib-python>=4.10' 'numpy<2' \
   || warn "GUI OpenCV install failed - cv2.imshow windows (yolo/mediapipe demos) may not open."
 
 # -----------------------------------------------------------------------------
-# 4e. ROS packages into ros_ws/: topic_based_ros2_control, ros2_so_arm and
-#     this repo's so_arm101_moveit_config
+# 4e. ROS packages into ros_ws/: ros2_so_arm, moveit_ros_planning, the MoveIt
+#     Task Constructor and this repo's so_arm101_moveit_config
 # -----------------------------------------------------------------------------
 # The venv stays out of this build: ament's CMake runs package.xml through
 # catkin_pkg, which only the system Python that ROS is built for has.
-log "Building topic_based_ros2_control ${TOPIC_BRIDGE_REF}, ros2_so_arm ${SO_ARM_REF:0:7}, moveit_ros_planning and so_arm101_moveit_config into ros_ws/"
-if [[ ! -d "${ROS_WS}/src/topic_based_ros2_control/.git" ]]; then
-  git clone "$TOPIC_BRIDGE_REPO" "${ROS_WS}/src/topic_based_ros2_control"
-fi
-git -C "${ROS_WS}/src/topic_based_ros2_control" fetch --tags --quiet
-git -C "${ROS_WS}/src/topic_based_ros2_control" checkout --quiet --force "$TOPIC_BRIDGE_REF"
-for patch in "${REPO_ROOT}"/patches/topic_based_ros2_control/*.patch; do
-  git -C "${ROS_WS}/src/topic_based_ros2_control" apply "$patch" \
-    || die "Could not apply $(basename "$patch") to topic_based_ros2_control ${TOPIC_BRIDGE_REF}."
-done
+log "Building ros2_so_arm ${SO_ARM_REF:0:7}, moveit_ros_planning, the Task Constructor and so_arm101_moveit_config into ros_ws/"
 if [[ ! -d "${ROS_WS}/src/ros2_so_arm/.git" ]]; then
   git clone "$SO_ARM_REPO" "${ROS_WS}/src/ros2_so_arm"
 fi
@@ -681,6 +671,16 @@ for patch in "${REPO_ROOT}"/patches/moveit_ros_planning/*.patch; do
   git -C "${ROS_WS}/src/moveit2" apply "$patch" \
     || die "Could not apply $(basename "$patch") to moveit_ros_planning ${MOVEIT_VERSION}."
 done
+if [[ ! -d "${ROS_WS}/src/moveit_task_constructor/.git" ]]; then
+  git clone --quiet --filter=blob:none --sparse "$MTC_REPO" "${ROS_WS}/src/moveit_task_constructor"
+fi
+git -C "${ROS_WS}/src/moveit_task_constructor" sparse-checkout set core
+git -C "${ROS_WS}/src/moveit_task_constructor" fetch --quiet origin
+git -C "${ROS_WS}/src/moveit_task_constructor" checkout --quiet --force --detach "$MTC_REF"
+for patch in "${REPO_ROOT}"/patches/moveit_task_constructor/*.patch; do
+  git -C "${ROS_WS}/src/moveit_task_constructor" apply "$patch" \
+    || die "Could not apply $(basename "$patch") to moveit_task_constructor ${MTC_REF:0:7}."
+done
 (
   deactivate
   set +u
@@ -689,7 +689,7 @@ done
   set -u
   cd "$ROS_WS"
   colcon build --base-paths src "${REPO_ROOT}/so_arm101_moveit_config" \
-    --packages-up-to topic_based_ros2_control so_arm101_moveit_config moveit_ros_planning \
+    --packages-up-to so_arm101_moveit_config moveit_ros_planning moveit_task_constructor_core \
     --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DPython3_EXECUTABLE=/usr/bin/python3
 ) || die "ros_ws build failed - see ${ROS_WS}/log/latest_build."
 
@@ -880,15 +880,13 @@ cat <<EOF
      python -m vla_pipeline.llm.llama_intent --selftest
      python -m vla_pipeline.vision.yolo_pose_npu
 
-     # terminal 1: publisher
-     python -m vla_pipeline.vision.camera_node --role arm
+     # terminal 1: the webcam publisher
+     python $(which ros2) launch launch/strix_vla.launch.py
      # terminal 2: now the subscriber gets frames
      python -m vla_pipeline.vision.yolo_detect_npu --find cup --role arm
 
      python -m vla_pipeline.vision.mediapipe_hands
-     python -m vla_pipeline.robot.arm_interface --dry-run
      python \$(which ros2) launch launch/strix_vla.launch.py dry_run:=true   # + robot_node --client-test
-     python -m vla_pipeline.robot.test_ros2_arm_motion
      python -m vla_pipeline.behaviors.gesture_mimic --dry-run
      python -m vla_pipeline.behaviors.dance --dry-run
 

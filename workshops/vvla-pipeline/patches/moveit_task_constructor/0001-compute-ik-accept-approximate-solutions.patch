@@ -1,0 +1,18 @@
+diff --git a/core/src/stages/compute_ik.cpp b/core/src/stages/compute_ik.cpp
+index 5a66d83..7f6c665 100644
+--- a/core/src/stages/compute_ik.cpp
++++ b/core/src/stages/compute_ik.cpp
+@@ -417,7 +417,12 @@ void ComputeIK::compute() {
+ 
+ 		size_t previous = ik_solutions.size();
+ 		auto iteration_timeout = std::min(remaining_time, jmg->getDefaultIKTimeout());
+-		bool succeeded = sandbox_state.setFromIK(jmg, target_pose, link->getName(), iteration_timeout, is_valid);
++		// A 5-DoF arm cannot meet a full orientation. pick_ik's approximate
++		// thresholds apply only when this flag is set; the default is false.
++		kinematics::KinematicsQueryOptions options;
++		options.return_approximate_solution = true;
++		bool succeeded =
++		    sandbox_state.setFromIK(jmg, target_pose, link->getName(), iteration_timeout, is_valid, options);
+ 
+ 		auto now = std::chrono::steady_clock::now();
+ 		remaining_time -= std::chrono::duration<double>(now - start_time).count();

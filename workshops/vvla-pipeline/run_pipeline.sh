@@ -16,16 +16,17 @@
 #                                         #   shown in the twin console window
 #   ./run_pipeline.sh --headless          # no preview windows
 #
-# Starts launch/strix_vla.launch.py in the background - the SO-101 server node
-# (or the digital twin) under ros2_control when robot.use_ros2: true in
-# config/pipeline.yaml, the camera nodes when a camera's use_ros2 is true - then
-# runs the orchestrator. Its arm client waits for the controllers to come up.
+# Starts launch/strix_vla.launch.py in the background when robot.use_ros2 or a
+# camera's use_ros2 is set: the arm bringup (MuJoCo twin, mock hardware, or the
+# Feetech bus) and the webcam nodes. Then it runs the orchestrator, whose
+# MoveIt arm waits for the controllers.
 set -eo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
 
-# ROS 2 underlay (optional - only needed for the ROS 2 transport)
+# ROS 2 underlay, then the ros_ws overlay (so_arm101, the twin plugins, MoveIt).
 [[ -f /opt/ros/jazzy/setup.bash ]] && source /opt/ros/jazzy/setup.bash
+[[ -f "${REPO_ROOT}/ros_ws/install/setup.bash" ]] && source "${REPO_ROOT}/ros_ws/install/setup.bash"
 
 [[ -f .venv/bin/activate ]] || { echo "No .venv - run ./bootstrap.sh first." >&2; exit 1; }
 source .venv/bin/activate
@@ -66,11 +67,13 @@ CAMERA_ROS2="${USE_ROS2##* }"
 
 LAUNCH_PID=""
 cleanup() {
-  # The launch runs in a session of its own: SIGINT to its process group reaches
-  # every node, so the arm server parks and each node exits. The launch itself,
-  # started as a background job with SIGINT ignored, ends when they have.
+  # The launch is a background job, so it and the servo wrapper inherit SIGINT
+  # ignored. Bash will not install the wrapper's stop trap for a signal it
+  # inherited ignored, and a non-interactive wait does not return on SIGINT.
+  # SIGTERM is the signal the wrapper traps: it stops the servo user unit, and
+  # the launch process, which does not ignore SIGTERM, exits.
   if [[ -n "$LAUNCH_PID" ]] && kill -0 "$LAUNCH_PID" 2>/dev/null; then
-    kill -INT -- "-$LAUNCH_PID" 2>/dev/null || true
+    kill -TERM -- "-$LAUNCH_PID" 2>/dev/null || true
     wait "$LAUNCH_PID" 2>/dev/null || true
   fi
 }
@@ -83,36 +86,9 @@ for a in "$@"; do
   [[ "$a" == "--digital-twin" ]] && SIM="--digital-twin"
 done
 
-# ---------------------------------------------------------------------------
-# One-time interactive calibration. The server node runs backgrounded (no TTY),
-# so a missing calibration file can't be created there - LeRobot's interactive
-# calibrate() would hit EOF on input(). Detect it here and calibrate in the
-# FOREGROUND (this terminal) before starting any background processes.
-# ---------------------------------------------------------------------------
-if [[ -z "$DRY" && -z "$SIM" ]]; then
-  NEED_CAL="$(python - <<'PY'
-from vla_pipeline.utils.config import load_config
-from vla_pipeline.robot.arm_interface import calibration_exists
-r = load_config()["robot"]
-need = r.get("enable_motors", True) and not calibration_exists(r["robot_id"])
-print("yes" if need else "no")
-PY
-)"
-  if [[ "$NEED_CAL" == "yes" ]]; then
-    echo "=================================================================="
-    echo " No calibration found for this arm - starting calibration."
-    echo " Move the arm as prompted and press ENTER. This happens once."
-    echo "=================================================================="
-    python -m vla_pipeline.robot.arm_interface --calibrate || {
-      echo "Calibration failed or was cancelled - aborting launch." >&2
-      exit 1
-    }
-  fi
-fi
-
 if [[ "$ROBOT_ROS2" == "true" || "$CAMERA_ROS2" == "true" ]]; then
   command -v ros2 >/dev/null || { echo "ROS 2 not found - install ROS 2 Jazzy (/opt/ros/jazzy)." >&2; exit 1; }
-  # The twin hosts the arm server AND the arm camera (they share the physics).
+  # The twin's camera plugins publish both image topics, so the webcam nodes stay off.
   TWIN=false
   [[ -n "$SIM" && -z "$DRY" && "$ROBOT_ROS2" == "true" ]] && TWIN=true
   DRY_ARM=false

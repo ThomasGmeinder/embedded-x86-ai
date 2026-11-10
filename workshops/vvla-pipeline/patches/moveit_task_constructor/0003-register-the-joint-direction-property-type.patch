@@ -1,0 +1,14 @@
+diff --git a/core/src/stages/move_relative.cpp b/core/src/stages/move_relative.cpp
+index 60e89a0..a8c5f8f 100644
+--- a/core/src/stages/move_relative.cpp
++++ b/core/src/stages/move_relative.cpp
+@@ -62,6 +62,9 @@ MoveRelative::MoveRelative(const std::string& name, const solvers::PlannerInterf
+ 	// register actual types
+ 	PropertySerializer<geometry_msgs::msg::TwistStamped>();
+ 	PropertySerializer<geometry_msgs::msg::Vector3Stamped>();
++	// A joint delta is not a ROS message. Without this, serializing the
++	// direction warns "Unregistered property type" for the std::map.
++	PropertySerializer<std::map<std::string, double>>();
+ 	p.declare<double>("min_distance", -1.0, "minimum distance to move");
+ 	p.declare<double>("max_distance", 0.0, "maximum distance to move");
+ 
