@@ -38,6 +38,7 @@ import onnxruntime as ort
 from transformers import WhisperFeatureExtractor, WhisperTokenizer
 
 from vla_pipeline.utils.config import load_config, resolve
+from vla_pipeline.utils.npu_session import run_session
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +148,7 @@ class WhisperONNX:
     def encode(self, input_features):
         """Run encoder ONNX model."""
         input_name = self.encoder.get_inputs()[0].name
-        return self.encoder.run(None, {input_name: input_features})[0]
+        return run_session(self.encoder, None, {input_name: input_features})[0]
 
     def decode(self, encoder_out):
         """Greedy decode with fixed-length input_ids."""
@@ -170,8 +171,8 @@ class WhisperONNX:
             )
             decoder_input[0, : len(tokens)] = tokens
 
-            outputs = self.decoder.run(
-                None, {input_ids_name: decoder_input, encoder_out_name: encoder_out}
+            outputs = run_session(
+                self.decoder, None, {input_ids_name: decoder_input, encoder_out_name: encoder_out}
             )
             logits = outputs[0]
             next_token = int(np.argmax(logits[0, len(tokens) - 1]))

@@ -38,7 +38,7 @@ import cv2
 import numpy as np
 
 from vla_pipeline.utils.config import load_config
-from vla_pipeline.utils.npu_session import active_provider, build_npu_session, size_npu
+from vla_pipeline.utils.npu_session import active_provider, build_npu_session, run_session, size_npu
 
 logger = logging.getLogger(__name__)
 
@@ -304,7 +304,7 @@ class PoseEstimator:
         """
         conf = self.conf_threshold if conf is None else conf
         nchw, info = letterbox(frame_bgr, self.imgsz)
-        outputs = self.session.run(None, {self.input_name: nchw})
+        outputs = run_session(self.session, None, {self.input_name: nchw})
         return decode_pose(outputs, info, frame_bgr.shape, conf)
 
     def primary_person(self, frame_bgr: np.ndarray) -> tuple[np.ndarray, float] | None:
