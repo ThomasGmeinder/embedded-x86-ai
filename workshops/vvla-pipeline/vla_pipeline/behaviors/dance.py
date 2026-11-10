@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Dance behavior: beat-synchronized keyframe choreography over the ArmClient.
+"""Dance behavior: beat-synchronized keyframe choreography over the arm.
 
 A small set of named moves, each a list of joint keyframes, played at the
 configured BPM. Works over ROS 2 or direct serial - and with ``--dry-run``
@@ -25,8 +25,9 @@ import logging
 import random
 import time
 
+from vla_pipeline.behaviors.simple import _go_to, _rest
 from vla_pipeline.dispatch import PipelineContext
-from vla_pipeline.robot.arm_interface import DryRunArm, make_arm
+from vla_pipeline.robot.arm_interface import make_arm
 from vla_pipeline.utils.config import load_config
 
 logger = logging.getLogger(__name__)
@@ -109,7 +110,7 @@ def run_dance(ctx, cmd=None, duration_s: float | None = None, seed: int | None =
             for keyframe in DANCE_MOVES[move] * 4:
                 if time.time() >= deadline or ctx.stop_check():
                     break
-                ctx.arm.go_to(keyframe, duration_s=beat * 0.9, fps=30.0, stop_check=ctx.stop_check)
+                _go_to(ctx, keyframe, beat * 0.9)
     except KeyboardInterrupt:
         pass
     finally:
@@ -117,7 +118,7 @@ def run_dance(ctx, cmd=None, duration_s: float | None = None, seed: int | None =
             logger.info("Dance stopped - holding position.")
         else:
             logger.info("Dance over - bowing out to rest pose.")
-            ctx.arm.go_to_rest(stop_check=ctx.stop_check)
+            _rest(ctx)
 
 
 # =============================================================================
@@ -139,7 +140,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    arm = DryRunArm() if args.dry_run else make_arm(cfg)
+    arm = make_arm(cfg)
     try:
         run_dance(PipelineContext(cfg=cfg, arm=arm), duration_s=args.duration)
         print("\ndance PASSED")

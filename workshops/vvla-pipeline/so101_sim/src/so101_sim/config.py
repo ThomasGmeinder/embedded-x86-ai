@@ -54,25 +54,11 @@ DEFAULTS: dict = {
         "closed_cal": 38.0,  # the jaws' physical closed point: both stacks' GRIPPER_CLOSED_FLOOR
         "open_cal": 95.0,
         "closed_rad": 0.030001,
-        "open_rad": 1.780001,
+        "open_rad": 1.7,  # the SRDF open state
         "counts_span": 2271,  # raw encoder span of the 0-100 gripper range
     },
-    "current_model": {
-        # 7.4 V STS3215 datasheet; current is interpolated through
-        # (0, rated_nm, stall_torque_nm) -> (idle or moving, rated_a, stall_a).
-        "idle_a": 0.006,  # stopped, no load
-        "moving_a": 0.15,  # running, no load
-        "rated_nm": 0.49,  # rated torque, 5 kg·cm
-        "rated_a": 0.65,
-        "stall_a": 2.5,
-        "stall_torque_nm": 1.91,  # 19.5 kg·cm, matches the actuator forcerange
-        "ma_per_unit": 6.5,  # Present_Current LSB
-        "noise_units": 3.0,  # 1-sigma readback noise
-        "lpf_hz": 20.0,
-        "seed": 0,
-    },
     "quantize_readback": True,  # encoder resolution on Present_Position
-    # The SO-101's rest pose: both stacks' REST_POSE, which they pass as SimWorld's rest_pose.
+    # The SO-101's rest pose, in calibrated degrees. The SRDF home state is this pose in radians.
     "rest_pose": {
         "shoulder_pan": 0.0,
         "shoulder_lift": -96.5,

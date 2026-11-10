@@ -5,26 +5,10 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""MuJoCo digital twin of the SO-101 arm used by the VVLA pipeline + workshop.
+"""The SO-101 MuJoCo scene.
 
-The twin is driven exactly like the real rig: the arm speaks the LeRobot
-``SO101Follower`` / Feetech-bus API (calibrated degrees, 0-100 gripper,
-``Goal_Position`` / ``Goal_Velocity`` / ``Acceleration`` writes,
-``Present_Position`` / ``Present_Current`` / ``Present_Load`` reads), the
-wrist camera is a MuJoCo camera on the gripper, and the gripper current
-comes from the simulated actuator torque.
-
-Typical use::
-
-    from so101_sim import shared_world, SimArm, SimCamera
-    world = shared_world()            # one physics world per process
-    arm = SimArm(world)               # LeRobot-style arm on that world
-    cam = SimCamera(world, "arm")     # 640x480 BGR wrist camera
-    arm.send_joints({"gripper": 90})
-    ok, frame = cam.read()
-
-Importing this package does not import MuJoCo; the GL backend is chosen
-on first use (see :mod:`so101_sim.gl`).
+The running twin is ``mujoco_ros2_control`` from the bringup, which loads
+``models/scene_vvla.xml``. This package holds that scene and the joint-name tables.
 """
 
 from __future__ import annotations
@@ -32,21 +16,11 @@ from __future__ import annotations
 __version__ = "0.1.0"
 
 __all__ = [
-    "SimWorld",
-    "SimArm",
-    "SimBus",
-    "SimFollower",
-    "SimCamera",
-    "RenderService",
-    "SimRecorder",
-    "SegDetector",
-    "Kinematics",
-    "shared_world",
-    "close_shared_world",
     "load_sim_config",
     "MOTOR_NAMES",
     "MJCF_JOINTS",
     "MOTOR_SHORT",
+    "PROP_BODIES",
 ]
 
 MOTOR_NAMES = (
@@ -59,6 +33,8 @@ MOTOR_NAMES = (
 )
 # The MJCF joint and actuator each motor drives: ros2_so_arm's joint names.
 MJCF_JOINTS = {m: f"{m}_joint" for m in MOTOR_NAMES}
+# Free-joint bodies in models/scene_vvla.xml. The bringup tests check each one is published.
+PROP_BODIES = ("sports_ball", "bottle", "book", "toothbrush")
 # Labels for HUDs and log lines.
 MOTOR_SHORT = {
     "shoulder_pan": "pan",
@@ -70,17 +46,6 @@ MOTOR_SHORT = {
 }
 
 _LAZY = {
-    "SimWorld": "so101_sim.world",
-    "shared_world": "so101_sim.world",
-    "close_shared_world": "so101_sim.world",
-    "SimArm": "so101_sim.arm",
-    "SimBus": "so101_sim.arm",
-    "SimFollower": "so101_sim.arm",
-    "SimCamera": "so101_sim.camera",
-    "RenderService": "so101_sim.render",
-    "SimRecorder": "so101_sim.record",
-    "SegDetector": "so101_sim.detect",
-    "Kinematics": "so101_sim.kinematics",
     "load_sim_config": "so101_sim.config",
 }
 

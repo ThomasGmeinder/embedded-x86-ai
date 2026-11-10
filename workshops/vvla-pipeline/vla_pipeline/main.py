@@ -58,10 +58,10 @@ def build_context(cfg: dict, args) -> PipelineContext:
     Each vision component is optional: a failure to construct it is logged and
     left as None so the pipeline still runs with degraded capabilities.
     """
-    from vla_pipeline.robot.arm_interface import DryRunArm, make_arm
+    from vla_pipeline.robot.arm_interface import make_arm
     from vla_pipeline.utils.gesture_map import mapper_from_config
 
-    arm = DryRunArm(verbose=False) if args.dry_run else make_arm(cfg)
+    arm = make_arm(cfg)
     ctx = PipelineContext(cfg=cfg, arm=arm, headless=args.headless, mapper=mapper_from_config(cfg),
                           registry=build_registry())
 
@@ -102,6 +102,11 @@ def build_context(cfg: dict, args) -> PipelineContext:
 
 def main() -> None:
     """Parse CLI args, build the pipeline context, and run the listen/dispatch loop until interrupted."""
+    # Ctrl-C must kill this process even during an NPU run. The notebook kernel
+    # keeps the default, which defers that signal until the run returns.
+    from vla_pipeline.utils import npu_session
+
+    npu_session.defer_sigint = False
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
@@ -229,10 +234,6 @@ def main() -> None:
                 pass
         try:
             ctx.arm.close()
-            if args.digital_twin:
-                from so101_sim import close_shared_world
-
-                close_shared_world()
         finally:
             llm.close()
 

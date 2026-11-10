@@ -42,8 +42,6 @@ import numpy as np
 
 from so101_sim import MOTOR_SHORT
 
-from vla_pipeline.robot.arm_interface import GRIPPER_TORQUE_LIMIT
-
 logger = logging.getLogger(__name__)
 
 WINDOW = "SO-101 twin console"
@@ -72,8 +70,9 @@ class FanoutCamera:
     will try its device again (``retry_at()``, wall-clock seconds).
     """
 
-    def __init__(self, inner, timeout_s: float = 1.0):
+    def __init__(self, inner, timeout_s: float = 1.0, *, own: bool = True):
         self.inner = inner
+        self._own = own
         self.role = getattr(inner, "role", "?")
         self._timeout = timeout_s
         self._cond = threading.Condition()
@@ -155,12 +154,13 @@ class FanoutCamera:
         return self.latest() is not None
 
     def close(self) -> None:
-        """Close the camera, which wakes the reader blocked on it, then join the reader."""
+        """Stop the reader. A camera this fan-out owns is closed, which wakes a blocked read."""
         self._running = False
         self._closed.set()
-        close = getattr(self.inner, "close", None) or getattr(self.inner, "release", None)
-        if close:
-            close()
+        if self._own:
+            close = getattr(self.inner, "close", None) or getattr(self.inner, "release", None)
+            if close:
+                close()
         self._thread.join(timeout=1.0)
 
     def __getattr__(self, name):
@@ -202,21 +202,21 @@ class ModelTap:
 
 
 def _view_source(cfg: dict):
-    """The twin's free 3D camera: the ROS topic from so101_sim.node, or an in-process render."""
+    """The twin's mount camera on ``cameras.mount.topic``."""
     if (cfg.get("robot") or {}).get("backend") != "sim":
         return None
     try:
         if (cfg.get("robot") or {}).get("use_ros2"):
-            from so101_sim.node import VIEW_TOPIC
-
             from vla_pipeline.vision.camera import Ros2Camera
 
-            return Ros2Camera("view", VIEW_TOPIC, stale_after_s=1.0)
-        from so101_sim import SimCamera
-
-        from vla_pipeline.robot.sim_arm import sim_world
-
-        return SimCamera(sim_world(cfg), "view")
+            topic = ((cfg.get("cameras") or {}).get("mount") or {}).get(
+                "topic", "/cameras/mount/image_raw"
+            )
+            camera = Ros2Camera("view", topic, stale_after_s=1.0)
+            camera.topic = topic
+            return camera
+        logger.warning("[console] no 3D view: the twin view is the mount camera topic")
+        return None
     except Exception as e:
         logger.warning("[console] no 3D view: %s", e)
         return None
@@ -285,8 +285,6 @@ class TwinConsole:
         self.hint = hint
         self._restore = restore
         cfg = ctx.cfg
-        self.load_threshold = float((cfg.get("grip") or {}).get("load_threshold", 120.0))
-
         if ctx.mount_camera is not None:
             ctx.mount_camera = FanoutCamera(ctx.mount_camera)
         if ctx.arm_camera is not None:
@@ -326,14 +324,7 @@ class TwinConsole:
         """Park the twin and restore its props. True when this process can."""
         if self._restore is not None:
             return bool(self._restore())
-        arm = self.ctx.arm
-        world = getattr(arm, "world", None)
-        if world is not None:
-            from so101_sim.world import restore_twin
-
-            restore_twin(arm, world)
-            return True
-        restore = getattr(arm, "reset_sim", None)
+        restore = getattr(self.ctx.arm, "reset", None)
         return bool(restore and restore())
 
     def reset_scene(self) -> None:
@@ -358,6 +349,9 @@ class TwinConsole:
                 ctx.say("Reset is only available on the digital twin.")
                 return
             ctx.say(RESET_LINE)
+        except Exception as exc:
+            logger.exception("reset")
+            ctx.say(f"Reset failed: {exc}")
         finally:
             if dispatcher is not None:
                 dispatcher.discard()
@@ -437,7 +431,8 @@ class TwinConsole:
         if self.view is not None:
             ok, frame = self.view.read()
             frame = frame if ok else None
-        label = "waiting for /sim/view" if self.view is not None else "no 3D view"
+        topic = getattr(self.view, "topic", None) if self.view is not None else None
+        label = f"waiting for {topic}" if topic else ("waiting for the twin" if self.view is not None else "no 3D view")
         img = _fit(frame, VIEW_W, VIEW_H, label).copy()
         _title(img, "digital twin")
         return img
@@ -489,24 +484,10 @@ class TwinConsole:
     def _arm_hud(self, p, y) -> None:
         arm = self.ctx.arm
         try:
-            load = arm.get_gripper_load()
-        except Exception:
-            load = None
-        try:
             joints = arm.get_joints()
         except Exception:
             joints = None
         cv2.line(p, (12, y - 16), (PANEL_W - 12, y - 16), DIM, 1)
-        full = 2.0 * self.load_threshold
-        # load_threshold is the close's level at GRIPPER_TORQUE_LIMIT; a hold runs lower
-        level = self.load_threshold * getattr(arm, "gripper_torque_limit", GRIPPER_TORQUE_LIMIT) / GRIPPER_TORQUE_LIMIT
-        if load is None:
-            cv2.putText(p, "gripper current: n/a", (12, y), FONT, 0.45, GRAY, 1, cv2.LINE_AA)
-        else:
-            grasp = load >= level
-            text = f"gripper current {load:5.0f} / {level:.0f}"
-            cv2.putText(p, text, (12, y), FONT, 0.45, GREEN if grasp else WHITE, 1, cv2.LINE_AA)
-            _bar(p, 12, y + 8, PANEL_W - 24, 8, load / full, GREEN if grasp else GRAY, mark=level / full)
         if joints:
             parts = [f"{MOTOR_SHORT.get(n, n)} {v:+.0f}" for n, v in joints.items()]
             for i in range(0, len(parts), 3):

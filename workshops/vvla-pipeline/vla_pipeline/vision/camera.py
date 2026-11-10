@@ -14,10 +14,10 @@ Roles
 - ``arm``   - mounted on the SO-101 end effector. Feeds object detection in
   the jaws/workspace and pick-and-place visual servoing.
 
-Like :class:`vla_pipeline.robot.arm_interface.ArmClient`, behaviors never own
+Behaviors never own
 a ``cv2.VideoCapture`` - they take a :class:`CameraClient` so the same code
-runs against direct V4L2 devices (``cameras.<role>.use_ros2: false``) or the
-ROS 2 camera nodes (:mod:`vla_pipeline.vision.camera_node`).
+runs against direct V4L2 devices (``cameras.<role>.use_ros2: false``) or a
+ROS 2 image topic published by ``v4l2_camera`` or the twin's camera plugin.
 
 Graceful failure: ``read()`` returns ``(False, None)`` instead of raising, so
 behaviors can degrade (fetch/pick already handle a missing camera) while the
@@ -157,6 +157,21 @@ def from_image_msg(msg) -> np.ndarray | None:
     return frame.copy()
 
 
+def to_image_msg(frame_bgr, stamp=None, frame_id: str = ""):
+    """Pack a BGR ndarray into a ``sensor_msgs/Image`` (encoding ``bgr8``)."""
+    from sensor_msgs.msg import Image
+
+    msg = Image()
+    if stamp is not None:
+        msg.header.stamp = stamp
+    msg.header.frame_id = frame_id
+    msg.height, msg.width = frame_bgr.shape[:2]
+    msg.encoding = "bgr8"
+    msg.step = msg.width * 3
+    msg.data = frame_bgr.tobytes()
+    return msg
+
+
 class Ros2Camera(CameraClient):
     """Latest-frame subscriber on a camera node's image topic.
 
@@ -183,27 +198,29 @@ class Ros2Camera(CameraClient):
 
         Init rclpy if needed; make a node named ``camera_client_<role>``;
         subscribe to ``topic`` (``sensor_msgs/Image``) with best-effort /
-        keep-last / depth-1 QoS routing into ``self._on_image``; then spin a
-        ``SingleThreadedExecutor`` on a daemon thread so messages keep
-        arriving while the caller's thread does vision work.
+        keep-last / depth-1 QoS routing into ``self._on_image``. The node
+        spins on :class:`~vla_pipeline.robot.ros2_control_arm.Spinner`, which
+        is the thread ``close`` can stop.
         """
         import rclpy
-        from rclpy.executors import SingleThreadedExecutor
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
         from sensor_msgs.msg import Image
 
+        from vla_pipeline.robot.ros2_control_arm import Spinner
+
         if not rclpy.ok():
             rclpy.init()
-        self._node = rclpy.create_node(f"camera_client_{self.role}")
+        # Spinner is the thread that stops: executor.shutdown() does not end a
+        # thread blocked in spin(), and close() used to destroy the node under it.
+        self._spin = Spinner(f"camera_client_{self.role}")
+        self._node = self._spin.node
+        self._executor = None
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
         self._node.create_subscription(Image, topic, self._on_image, qos)
-        self._executor = SingleThreadedExecutor()
-        self._executor.add_node(self._node)
-        threading.Thread(target=self._executor.spin, daemon=True).start()
 
     def _on_image(self, msg) -> None:
         """Decode an incoming Image message into the cached latest frame."""
@@ -241,43 +258,12 @@ class Ros2Camera(CameraClient):
         with self._cond:
             self._closed = True
             self._cond.notify_all()
-        if self._executor is not None:
-            self._executor.shutdown()
-        if self._node is not None:
-            self._node.destroy_node()
-
-
-class SimCameraClient(CameraClient):
-    """A camera rendered by the in-process MuJoCo digital twin (``source: sim``).
-
-    Shares the process-wide twin with ``SimArmClient`` so the wrist camera
-    moves with the simulated arm. Over ROS 2 (``use_ros2: true``) the twin's
-    node publishes the same frames on the normal topic instead.
-    """
-
-    def __init__(self, cfg: dict, role: str):
-        from so101_sim import SimCamera
-
-        from vla_pipeline.robot.sim_arm import sim_world
-
-        self.role = role
-        self._cam = SimCamera(sim_world(cfg), role, blocking=True)
-
-    def read(self) -> tuple[bool, np.ndarray | None]:
-        """Next rendered frame (paced at the camera fps, like a V4L2 read)."""
-        return self._cam.read()
-
-    def read_after(self, settled_at: float) -> tuple[bool, np.ndarray | None]:
-        """Frame rendered after the arm finished moving at ``settled_at``."""
-        return self._cam.read_after(settled_at)
-
-    def ok(self) -> bool:
-        """Return True once the renderer has produced a frame."""
-        return self._cam.ok()
-
-    def close(self) -> None:
-        """Release this view of the twin's renderer."""
-        self._cam.release()
+        spin = getattr(self, "_spin", None)
+        if spin is not None:
+            spin.close()
+            self._spin = None
+            self._node = None
+            self._executor = None
 
 
 def make_camera(cfg: dict, role: str) -> CameraClient:
@@ -288,7 +274,7 @@ def make_camera(cfg: dict, role: str) -> CameraClient:
     if c.get("use_ros2", False):
         return Ros2Camera(role, c["topic"], stale_after_s=c.get("stale_after_s", 1.0))
     if c.get("source", "device") == "sim":
-        return SimCameraClient(cfg, role)
+        raise RuntimeError(f"cameras.{role} source sim is the ROS image topic; set use_ros2: true")
     return DirectCamera(
         role,
         c.get("device", 0),

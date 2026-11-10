@@ -100,7 +100,8 @@ def llama_server_command(cfg: dict):
     if gfx:
         env.setdefault("HSA_OVERRIDE_GFX_VERSION", str(gfx))
     # Optional compute-unit fence (e.g. "0:0-31" leaves 8 of 40 CUs to the
-    # graphics queue). Off by default: measure with so101_sim.bench first.
+    # graphics queue). Off by default: it has to be measured against the twin's
+    # renderer before it is turned on.
     if l.get("cu_mask"):
         env["HSA_CU_MASK"] = str(l["cu_mask"])
     return cmd, env

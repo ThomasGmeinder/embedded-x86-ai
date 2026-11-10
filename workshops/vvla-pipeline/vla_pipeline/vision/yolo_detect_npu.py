@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -38,10 +39,19 @@ import cv2
 import numpy as np
 
 from vla_pipeline.utils.config import load_config
-from vla_pipeline.utils.npu_session import active_provider, build_npu_session, size_npu
+from vla_pipeline.utils.npu_session import active_provider, build_npu_session, run_session, size_npu
 from vla_pipeline.vision.yolo_pose_npu import LetterboxInfo, head_rows, letterbox, nms_keep, unmap_boxes, xywh_to_xyxy
 
 logger = logging.getLogger(__name__)
+
+# A detection has no measured size. These are the class priors, in metres, for the
+# objects this arm is asked to pick: the collision sizes in the twin's scene.
+CLASS_SIZE = {
+    "sports ball": (0.04, 0.04, 0.04),
+    "bottle": (0.04, 0.04, 0.085),
+    "book": (0.06, 0.09, 0.012),
+    "toothbrush": (0.024, 0.12, 0.02),
+}
 
 COCO_NAMES = [
     "person",
@@ -259,7 +269,7 @@ class ObjectDetector:
         """Run detection on one frame and return all detections above the confidence threshold."""
         conf = self.conf_threshold if conf is None else conf
         nchw, info = letterbox(frame_bgr, self.imgsz)
-        return decode_detections(self.session.run(None, {self.input_name: nchw}), info, frame_bgr.shape, conf)
+        return decode_detections(run_session(self.session, None, {self.input_name: nchw}), info, frame_bgr.shape, conf)
 
     def find(
         self, frame_bgr: np.ndarray, spoken_name: str, conf: float | None = None
@@ -284,6 +294,148 @@ class ObjectDetector:
 # =============================================================================
 # Standalone component test (live overlay)
 # =============================================================================
+
+
+def table_point(pixel, camera_info, optical_in_base, table_z: float):
+    """Where one pixel's ray meets the plane ``z = table_z``, or ``None``.
+
+    ``pixel`` is ``(u, v)``. ``optical_in_base`` is ``(rotation, translation)``
+    of the camera's optical frame (x right, y down, z forward) in the arm's
+    base frame. The ray comes from ``image_geometry`` and the camera info.
+    """
+    from image_geometry import PinholeCameraModel
+
+    model = PinholeCameraModel()
+    model.from_camera_info(camera_info)
+    centre = (float(pixel[0]), float(pixel[1]))
+    ray = np.asarray(model.project_pixel_to_3d_ray(centre), float)
+    rotation, origin = optical_in_base
+    direction = np.asarray(rotation, float) @ ray
+    origin = np.asarray(origin, float)
+    if abs(direction[2]) < 1e-9:
+        return None
+    scale = (float(table_z) - origin[2]) / direction[2]
+    if scale <= 0.0:
+        return None
+    return origin + direction * scale
+
+
+def object_axis(frame, box, min_elongation):
+    """The long axis of the object inside ``box``, as two full-frame pixels, or ``None``.
+
+    The box is axis-aligned, so its width and height cannot tell a 30° brush
+    from a −30° one. An Otsu threshold separates the object from the crop, the
+    class that touches fewer border pixels is the object, and ``minAreaRect``
+    fits that outline. A round object (long side under ``min_elongation`` times
+    the short side) has no axis.
+    """
+    height, width = frame.shape[:2]
+    x0 = max(0, int(round(float(box[0]))))
+    y0 = max(0, int(round(float(box[1]))))
+    x1 = min(width, int(round(float(box[2]))))
+    y1 = min(height, int(round(float(box[3]))))
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return None
+    crop = frame[y0:y1, x0:x1]
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+    _level, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    def _border(binary) -> int:
+        return int(np.count_nonzero(binary[0, :]) + np.count_nonzero(binary[-1, :])
+                   + np.count_nonzero(binary[:, 0]) + np.count_nonzero(binary[:, -1]))
+
+    if _border(mask) > _border(cv2.bitwise_not(mask)):
+        mask = cv2.bitwise_not(mask)
+    contours, _hier = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    contour = max(contours, key=cv2.contourArea)
+    (cx, cy), (rect_w, rect_h), angle = cv2.minAreaRect(contour)
+    long_side, short_side = max(rect_w, rect_h), min(rect_w, rect_h)
+    if short_side <= 0.0 or long_side / short_side < float(min_elongation):
+        return None
+    theta = math.radians(angle)
+    if rect_h > rect_w:
+        theta += math.pi / 2
+    half = 0.5 * long_side
+    dx, dy = half * math.cos(theta), half * math.sin(theta)
+    return (x0 + cx - dx, y0 + cy - dy), (x0 + cx + dx, y0 + cy + dy)
+
+
+def locate_detection(box, camera_info, optical_in_base, table_z, class_name: str,
+                     frame=None, min_elongation=None):
+    """Where a wrist-camera detection sits: the box centre's ray at the class centre.
+
+    ``image_geometry`` casts the ray from this frame's camera info. The class
+    size puts the centre half a height above the table, and the ray meets that
+    plane. Meeting the table and then lifting that point leaves the centre
+    past the object: 12.3 mm for the ball and 44.4 mm for the bottle. Returns
+    the locate dict, or ``None``.
+
+    The yaw puts the box's X along the detection box's vertical, from its
+    top edge's middle to its bottom edge's middle, on that plane. The wrist
+    camera's image vertical is the jaws' closing axis, so the jaws close
+    between those edges. A class whose footprint is longer one way
+    (``CLASS_SIZE`` X differs from Y) takes the yaw of its outline's long
+    axis instead, when :func:`object_axis` finds one. A round object's
+    outline in this oblique view is its side, which has no footprint axis.
+    """
+    if class_name not in CLASS_SIZE:
+        return None
+    size = CLASS_SIZE[class_name]
+    centre_z = float(table_z) + 0.5 * float(size[2])
+    centre_x = 0.5 * (float(box[0]) + float(box[2]))
+    centre_px = (centre_x, 0.5 * (float(box[1]) + float(box[3])))
+    hit = table_point(centre_px, camera_info, optical_in_base, centre_z)
+    if hit is None:
+        return None
+    top = table_point((centre_x, float(box[1])), camera_info, optical_in_base, centre_z)
+    bottom = table_point((centre_x, float(box[3])), camera_info, optical_in_base, centre_z)
+    if top is None or bottom is None:
+        return None
+    yaw = math.atan2(float(bottom[1] - top[1]), float(bottom[0] - top[0]))
+    if size[0] != size[1] and frame is not None and min_elongation is not None:
+        ends = object_axis(frame, box, min_elongation)
+        if ends is not None:
+            start = table_point(ends[0], camera_info, optical_in_base, centre_z)
+            end = table_point(ends[1], camera_info, optical_in_base, centre_z)
+            if start is not None and end is not None:
+                # CLASS_SIZE puts a long object's length on its Y axis.
+                yaw = math.atan2(float(end[1] - start[1]), float(end[0] - start[0])) - math.pi / 2
+    return {
+        "xyz": np.array(hit, float),
+        "width": float(min(size[0], size[1])),
+        "height": float(size[2]),
+        "shape": class_name,
+        "yaw": yaw,
+    }
+
+
+def collision_object(name: str, centre, size, frame: str = "base_link", yaw: float = 0.0):
+    """A box at ``centre`` for the planning scene. ``size`` is ``(x, y, z)`` metres.
+
+    ``yaw`` is the rotation about the vertical, so the box's Y axis follows a
+    long object. Zero leaves the box aligned with ``frame``.
+    """
+    from geometry_msgs.msg import Pose
+    from moveit_msgs.msg import CollisionObject
+    from shape_msgs.msg import SolidPrimitive
+
+    primitive = SolidPrimitive()
+    primitive.type = SolidPrimitive.BOX
+    primitive.dimensions = [float(v) for v in size]
+    pose = Pose()
+    pose.position.x, pose.position.y, pose.position.z = (float(v) for v in centre)
+    half = 0.5 * float(yaw)
+    pose.orientation.z = math.sin(half)
+    pose.orientation.w = math.cos(half)
+    obj = CollisionObject()
+    obj.id = name
+    obj.header.frame_id = frame
+    obj.operation = CollisionObject.ADD
+    obj.primitives.append(primitive)
+    obj.primitive_poses.append(pose)
+    return obj
 
 
 def main() -> None:

@@ -24,7 +24,7 @@ import argparse
 import logging
 
 from vla_pipeline.dispatch import PipelineContext
-from vla_pipeline.robot.arm_interface import DryRunArm, make_arm
+from vla_pipeline.robot.arm_interface import make_arm, radians_from_calibrated
 from vla_pipeline.utils.config import load_config
 
 logger = logging.getLogger(__name__)
@@ -45,24 +45,46 @@ WAVE_RIGHT = {"shoulder_pan": 25.0}
 
 
 
+def _go_to(ctx, pose: dict, duration_s: float | None = None, velocity_scale: float | None = None) -> str | None:
+    """Move to ``pose``.
+
+    The speed is the global scale in ``joint_limits.yaml`` unless
+    ``velocity_scale`` overrides that one move. ``duration_s`` plays the pose
+    as one timed keyframe instead.
+    """
+    kwargs = {"stop_event": ctx.stop_event}
+    if duration_s is not None:
+        kwargs["duration_s"] = duration_s
+    if velocity_scale is not None:
+        kwargs["velocity_scale"] = velocity_scale
+    how = ctx.arm.go_to(radians_from_calibrated(ctx.cfg, pose), **kwargs)
+    logger.info("go_to %s", how)
+    return how
+
+
+def _rest(ctx) -> None:
+    ctx.arm.go_to_rest()
+
+
 def run_wave(ctx, cmd=None) -> None:
     """Raise the arm and wave ``wave.cycles`` times."""
     cycles = int((ctx.cfg.get("wave") or {}).get("cycles", 3))
     logger.info("[wave] waving %d times", cycles)
-    ctx.arm.go_to(WAVE_UP, duration_s=2.0, stop_check=ctx.stop_check)
+    # These times override the servo envelope: the raise is 2 s, each sweep 0.4 s.
+    _go_to(ctx, WAVE_UP, 2.0)
     for _ in range(cycles):
         if ctx.stop_check():
             break
-        ctx.arm.go_to(WAVE_LEFT, duration_s=0.4, stop_check=ctx.stop_check)
-        ctx.arm.go_to(WAVE_RIGHT, duration_s=0.4, stop_check=ctx.stop_check)
-    ctx.arm.go_to_rest()
+        _go_to(ctx, WAVE_LEFT, 0.4)
+        _go_to(ctx, WAVE_RIGHT, 0.4)
+    _rest(ctx)
 
 
 def run_home(ctx, cmd=None) -> None:
     """Return to the rest pose. A locked grip stays locked: "release" opens
     it, and gesture-mimic hands the gripper to the pinch."""
     logger.info("[home] returning to rest pose")
-    ctx.arm.go_to_rest(stop_check=ctx.stop_check)
+    _rest(ctx)
 
 
 def main() -> None:
@@ -77,7 +99,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    arm = DryRunArm() if args.dry_run else make_arm(cfg)
+    arm = make_arm(cfg)
     try:
         {"wave": run_wave, "home": run_home}[args.behavior](PipelineContext(cfg=cfg, arm=arm))
         print(f"\n{args.behavior} PASSED")

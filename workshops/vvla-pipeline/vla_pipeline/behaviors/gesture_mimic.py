@@ -62,7 +62,7 @@ import cv2
 import numpy as np
 
 from vla_pipeline.dispatch import PipelineContext
-from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR, DryRunArm, make_arm
+from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR, make_arm
 from vla_pipeline.utils.config import load_config
 from vla_pipeline.utils.gesture_map import mapper_from_config
 from vla_pipeline.vision.mediapipe_hands import HandTracker
@@ -85,6 +85,11 @@ class MimicSignals:
     kpts: object = None
     obs: object = None  # HandObservation (or None)
     raw: object = None  # raw MediaPipe results, for the hand overlay
+
+
+def park_after_mimic(ctx) -> None:
+    """Park at rest after mimic, without consulting the stop event."""
+    ctx.arm.go_to_rest()
 
 
 def mimic_tick(ctx, frame) -> MimicSignals:
@@ -128,7 +133,13 @@ def mimic_tick(ctx, frame) -> MimicSignals:
             roll_fallback=obs.roll if obs else None,
             pinch=obs.pinch if obs else None,
         )
-        ctx.arm.send_joints(joints)
+        from vla_pipeline.robot.arm_interface import radians_from_calibrated
+
+        command = radians_from_calibrated(ctx.cfg, joints)
+        ctx.arm.send_joints(command)
+        jaw = command.get(ctx.arm.gripper_joint)
+        if jaw is not None:
+            ctx.arm.send_gripper(jaw)
 
     return MimicSignals(joints=joints, wrist_xy=wrist_xy, elbow_xy=elbow_xy, boxes=boxes,
                         scores=scores, kpts=kpts, obs=obs, raw=raw)
@@ -295,10 +306,10 @@ def run_mimic(ctx, cmd=None, tick=mimic_tick) -> MimicSignals | bool:
             except cv2.error:
                 pass
         logger.info("Mimic stopped after %d frames - parking the arm.", frames)
-        # Park home as ONE goal, deliberately without stop_check: on a voice
+        # Park home as one goal, deliberately without stop_check: on a voice
         # "stop" the stop event is already set, and honoring it would abort
         # this park and leave the arm wherever it was.
-        ctx.arm.go_to_rest(duration_s=1.5)
+        park_after_mimic(ctx)
     return last
 
 
@@ -434,7 +445,7 @@ def main() -> None:
         return
 
     pose = PoseEstimator(cfg, device=args.device)
-    arm = DryRunArm(verbose=False) if args.dry_run else make_arm(cfg)
+    arm = make_arm(cfg)
     ctx = PipelineContext(cfg=cfg, arm=arm, pose=pose, hands=hands, mount_camera=camera,
                           mapper=mapper_from_config(cfg))
     try:

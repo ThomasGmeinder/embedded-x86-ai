@@ -93,8 +93,11 @@
       <freejoint name="toothbrush_j"/>
       <geom name="toothbrush_collision" type="box" size="0.012 0.06 0.01" rgba="0 0 0 0"
         mass="0.008" condim="6" friction="2.0 0.03 0.003" solref="0.01 1"/>
+      <!-- The mesh's handle runs 9.31 deg (0.16252 rad, its footprint's principal
+           axis by area) across its own X. This turn lays the handle the camera
+           sees along the box Y the jaws close on. -->
       <geom name="toothbrush_visual" type="mesh" mesh="toothbrush_mesh" material="toothbrush_mat"
-        euler="0 0 1.5708" contype="0" conaffinity="0" group="2" mass="0"/>
+        euler="0 0 1.40828" contype="0" conaffinity="0" group="2" mass="0"/>
     </body>
   </worldbody>
 
