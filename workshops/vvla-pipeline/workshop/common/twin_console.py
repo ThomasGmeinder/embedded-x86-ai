@@ -11,7 +11,7 @@ The same layout as the pipeline's ``run_pipeline.sh --digital-twin`` window
 (1200 x 1100)::
 
     +-----------------+-----------------+-----------------+
-    | mount: YOLO pose| mount: MediaPipe| arm: YOLO detect|   400 x 300 each
+    | mount: YOLOv26s-pose | mount: MediaPipe | arm: YOLOv26s-detect |   400 x 300 each
     +-----------------+-----------------+-----------------+
     |                                   | voice / intent  |
     |        3D view of the twin        | behavior log    |   800 x 800 + 400 x 800
@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 TILE_W, TILE_H = 400, 300
 VIEW_W, VIEW_H = 800, 800  # tall enough for the raised arm (wave)
-LOG_LINES = (VIEW_H - 230) // 20  # what fits between the header and the arm HUD
+LOG_LINES = (VIEW_H - 250) // 20  # what fits under the voice lines and above the arm HUD
 PANEL_W = 400
 IDLE_AFTER_S = 0.5  # a model untouched this long is run by the console itself
 FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -399,14 +399,19 @@ class TwinConsole:
             ok, frame = self.view.read()
             frame = frame if ok else None
         img = _fit(frame, VIEW_W, VIEW_H, "no 3D view").copy()
-        _title(img, "digital twin")
+        _title(img, "digital twin simulated in MuJoCo")
         return img
 
     def _panel(self) -> np.ndarray:
         p = np.full((VIEW_H, PANEL_W, 3), 28, np.uint8)
         now = time.monotonic()
-        y = 28
-        cv2.putText(p, "VOICE", (12, y), FONT, 0.55, WHITE, 1, cv2.LINE_AA)
+        y = 22
+        for line in (
+            "Voice: gemma4-e4b-it transcription",
+            "and intent-to-command translation",
+        ):
+            cv2.putText(p, line, (12, y), FONT, 0.45, WHITE, 1, cv2.LINE_AA)
+            y += 18
         with self._lock:
             level, speaking, level_t = self._level, self._speaking, self._level_t
             log = list(self._log)
@@ -420,11 +425,11 @@ class TwinConsole:
             state, color = "transcribing...", YELLOW
         else:
             state, color = "listening", GRAY
-        cv2.putText(p, state, (90, y), FONT, 0.5, color, 1, cv2.LINE_AA)
+        cv2.putText(p, state, (12, y), FONT, 0.5, color, 1, cv2.LINE_AA)
         if self.voice == "mic":
             db = 20.0 * np.log10(max(level, 1e-6))
-            _bar(p, 12, y + 12, PANEL_W - 24, 10, (db + 60.0) / 50.0, GREEN if speaking else DIM)
-        y += 52
+            _bar(p, 12, y + 8, PANEL_W - 24, 10, (db + 60.0) / 50.0, GREEN if speaking else DIM)
+        y += 36
 
         if now - self._stop_flash < 1.0:
             cv2.rectangle(p, (0, y - 18), (PANEL_W, y + 8), RED, -1)
@@ -474,7 +479,7 @@ class TwinConsole:
 
     def _webcam_tiles(self, frame) -> list[np.ndarray]:
         pose, hands = self._pose_tile(frame).copy(), self._hands_tile(frame).copy()
-        _title(pose, f"mount: YOLO pose [{provider_name(self._pose, 'off')}]")
+        _title(pose, f"mount: YOLOv26s-pose [{provider_name(self._pose, 'off')}]")
         _title(hands, f"mount: MediaPipe hands [{'CPU' if self._hands else 'off'}]")
         return [pose, hands]
 
@@ -488,7 +493,7 @@ class TwinConsole:
         mount_frame = self.mount.latest() if self.mount is not None else None
         armcam = self.armcam.latest() if self.armcam is not None else None
         detect = self._detect_tile(armcam).copy()
-        _title(detect, f"arm: YOLO detect [{provider_name(self._detector, 'off')}]")
+        _title(detect, f"arm: YOLOv26s-detect [{provider_name(self._detector, 'off')}]")
         tiles = [*self._webcam_tiles(mount_frame), detect]
         return np.vstack([np.hstack(tiles), np.hstack([self._view_tile(), self._panel()])])
 
