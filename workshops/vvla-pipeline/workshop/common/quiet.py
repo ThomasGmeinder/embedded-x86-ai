@@ -41,6 +41,16 @@ def hush_benign_warnings() -> None:
         ort.set_default_logger_severity(3)
     except ImportError:
         pass
+    # ROS / MoveIt INFO is written to stderr, which Jupyter shows in red.
+    # Warnings and errors still come through. Must run before MoveItPy starts.
+    try:
+        import rclpy.logging
+        from rclpy.impl.logging_severity import LoggingSeverity
+
+        rclpy.logging.initialize()
+        rclpy.logging.set_logger_level("", LoggingSeverity.WARN)
+    except ImportError:
+        pass
 
 
 @contextlib.contextmanager

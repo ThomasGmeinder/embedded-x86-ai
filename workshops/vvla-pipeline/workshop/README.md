@@ -11,17 +11,19 @@ creates `.venv`, the model files in `../models`, and the YOLO NPU compile
 cache in `../cache`. The two YOLO models load from that cache. Whisper
 runs on the CPU.
 
+The digital twin is the MuJoCo bringup in `launch/so101_control.launch.py`: upstream ros2_so_arm controllers, `mujoco_ros2_control`, and `move_group`. `robot.use_ros2` starts that bringup. The arm client is `MoveItArm` (MoveItPy, a Task Constructor pick and place, the gripper action). TODOs 2.7 and 2.8 are MoveItPy `go_to_named` and `go_to_joints`. Servo calibration is `lerobot-calibrate`, which `bootstrap.sh` installs. `camera_calibration` and `easy_handeye2` are not installed, and this repo does not run calibration. The ROS driver does not read the LeRobot JSON.
+
 ## What's in the box
 
 ```
 notebooks/               phase 1 - read & run these first (each is self-contained)
   01_ai_models/          NPU session factory - MediaPipe on CPU - Llama on iGPU
-  02_ros2/               camera node and client - SO-101 server and client - Llama intent node
+  02_ros2/               camera subscriber - MoveIt arm - Llama intent node
   03_integration/        registry dispatch - the mimic composition - the live UI -
                          the digital twin (MuJoCo arm, cameras, grasp; live console over ROS 2)
 common/                  PROVIDED helpers, installed as the vvla_workshop package
                          (fixtures, self-tests and their reporting, the twin over ROS 2)
-project/                 phase 2 - 13 TODO stubs you implement (vvla_workshop.project)
+project/                 phase 2 - 16 TODO stubs you implement (vvla_workshop.project)
   models/  ros/  integration/
 launch_monitor.sh        always-on-top resource HUD: CPU% · GPU% · NPU inf/s | Idle
 MONITOR.md               how to open/close that HUD (from a shell or a notebook)

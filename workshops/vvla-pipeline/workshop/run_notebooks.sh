@@ -99,6 +99,11 @@ say "Sourcing ROS 2 ($ROS_SETUP)"
 set +u +e
 # shellcheck disable=SC1090
 source "$ROS_SETUP" || warn "ROS 2 source returned nonzero - continuing"
+ROS_WS_SETUP="${REPO_ROOT}/ros_ws/install/setup.bash"
+[[ -f "$ROS_WS_SETUP" ]] || die "no ros_ws overlay at $ROS_WS_SETUP - run ./bootstrap.sh from the repo root"
+say "Sourcing the ros_ws overlay ($ROS_WS_SETUP)"
+# shellcheck disable=SC1090
+source "$ROS_WS_SETUP" || die "ros_ws setup failed"
 set -e -u
 
 # --- 2. llama-server on the iGPU (component 1's brain, torn down on exit) ----

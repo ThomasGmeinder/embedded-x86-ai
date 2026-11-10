@@ -7,8 +7,9 @@
 
 """Component 2 - ROS 2 nodes and topics.
 
-Your TODOs live in ``camera_client.py`` (frames) and ``intent_node.py`` (the
-Llama intent node). Check them with:
+Your TODOs live in ``camera_client.py`` (frames), ``moveit_arm.py`` (named
+states, joint goals, the gripper action) and ``intent_node.py`` (the Llama
+intent node). Check them with:
 
     python -m vvla_workshop.selftest_ros     # over ROS 2 (source /opt/ros/jazzy/setup.bash first)
 """

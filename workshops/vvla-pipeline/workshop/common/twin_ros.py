@@ -8,20 +8,11 @@
 """The digital twin behind ROS 2, for one notebook kernel (PROVIDED).
 
 Section 5 of ``notebooks/03_integration/02_digital_twin.ipynb`` drives the
-twin the way the pipeline drives the real arm: a
-:class:`~vla_pipeline.robot.robot_node.Ros2ArmClient` on ros2_control's
-controllers, and a server node that owns the (simulated) bus.
-:class:`TwinSession` starts that server - ``python -m so101_sim.node
---notebook-twin``, its topics remapped onto the hardware side's - and the
-controllers (``launch/so101_control.launch.py``) as children of this kernel,
-on a ROS domain of their own with discovery kept to this machine. The real
-arm's nodes, other notebooks' demo nodes and the pipeline live on the
-default domain and never see them.
-
-The twin node adds what a console needs on top of the real topics (see
-:mod:`so101_sim.node`): arm-camera frames stamped with the time their scene
-was captured, the props (their TF frames, and on ``/diagnostics`` whether both
-fingers hold them) and ``/sim/reset_scene``.
+twin the way the pipeline does. :class:`TwinSession` starts
+``launch/so101_control.launch.py hardware_type:=mujoco`` on a ROS domain of
+its own. :class:`~vla_pipeline.robot.moveit_arm.MoveItArm` is constructed
+before this process initializes rclpy: doing that first makes ``MoveItPy``
+not return. Props are ``/free_joint_states``.
 """
 
 from __future__ import annotations
@@ -38,10 +29,7 @@ import threading
 import time
 from pathlib import Path
 
-from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
-from so101_sim.node import DIAGNOSTICS_TOPIC, GRIPPER_STATUS, PROPS_STATUS, VIEW_TOPIC, WORLD_FRAME, sensor_qos
-from vla_pipeline.robot.arm_interface import MotionTimeout
-from vla_pipeline.robot.robot_node import Ros2ArmClient
+from so101_sim.control import LAUNCH_FILE, sensor_qos
 from vla_pipeline.robot.ros2_control_arm import Spinner
 from vla_pipeline.utils.config import DEFAULT_CONFIG
 from vla_pipeline.vision.camera import from_image_msg
@@ -53,6 +41,7 @@ DEFAULT_DOMAIN_ID = 87  # override with TWIN_ROS_DOMAIN_ID
 # off, so FASTDDS_BUILTIN_TRANSPORTS from scripts/ryzen_ai_env.sh still applies.
 _LOCALHOST_PROFILE = Path(__file__).with_name("twin_localhost.xml")
 _domain_node = None  # kept so the DDS participant outlives the call
+_domain_context = None  # the private context that holds _domain_node, when used
 
 
 def twin_domain_id() -> int:
@@ -60,7 +49,7 @@ def twin_domain_id() -> int:
     return int(os.environ.get("TWIN_ROS_DOMAIN_ID", DEFAULT_DOMAIN_ID))
 
 
-def use_private_domain(domain_id: int) -> None:
+def use_private_domain(domain_id: int, *, private_context: bool = False) -> None:
     """Put this process's ROS 2 on ``domain_id``, discovery on this machine only.
 
     ROS reads the domain when ``rclpy.init()`` runs, so this must run before
@@ -79,11 +68,15 @@ def use_private_domain(domain_id: int) -> None:
     discovery range used to hide the order, because it builds its own UDP
     transport afterwards. The pipeline's arm and camera clients start DDS
     before the models for the same reason.
+
+    ``private_context`` holds that node on its own context and leaves the
+    default context uninitialized. ``MoveItPy`` has to be the first init of
+    the default context, so a kernel that will construct it passes True.
     """
-    global _domain_node
+    global _domain_context, _domain_node
     import rclpy
 
-    if rclpy.ok():
+    if not private_context and rclpy.ok():
         current = rclpy.get_default_context().get_domain_id()
         if current != domain_id:
             raise RuntimeError(
@@ -95,6 +88,12 @@ def use_private_domain(domain_id: int) -> None:
         if os.environ.get("ROS_AUTOMATIC_DISCOVERY_RANGE") == "LOCALHOST":
             del os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"]
         os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = str(_LOCALHOST_PROFILE)
+        if private_context:
+            if _domain_node is None:
+                _domain_context = rclpy.Context()
+                rclpy.init(context=_domain_context)
+                _domain_node = rclpy.create_node("twin_domain", context=_domain_context)
+            return
         rclpy.init()
     if _domain_node is None:
         _domain_node = rclpy.create_node("twin_domain")
@@ -157,6 +156,20 @@ class TwinCamera:
                 return False, None, after
             return True, self._frame, self._stamp
 
+    def frame_arrived_after(self, wall: float, timeout: float):
+        """``(ok, frame, captured)`` for the first image that arrives after ``wall``.
+
+        ``wall`` is ``time.time()`` from before the wait. The capture stamp can
+        sit behind the latest joint stamp; arrival is what shows the stream
+        is still publishing.
+        """
+        with self._cond:
+            self._cond.wait_for(lambda: self._closed or self._arrived > wall, timeout)
+            if self._closed or self._frame is None or self._arrived <= wall:
+                return False, None, self._stamp
+            self.last_stamp = self._stamp
+            return True, self._frame, self._stamp
+
     def close(self) -> None:
         with self._cond:
             self._closed = True
@@ -167,76 +180,42 @@ class TwinCamera:
 
 
 class TwinScene:
-    """The twin's props as it publishes them (``so101_sim.node.PropPublisher``):
-    each prop's ``xyz`` and ``quat`` (w, x, y, z) from its TF frame, ``grasped``
-    and ``settled`` and the ``gripper`` (``torque_limit``, ``overload_torque``,
-    ``tripped``) from ``/diagnostics``. A scene is one stamp: the diagnostics
-    and the props' frames of one tick."""
+    """Props from ``/free_joint_states``: ``xyz``, ``quat`` (w, x, y, z).
 
-    _KEEP = 20  # stamps of prop frames kept while their diagnostics are on the way
+    The plugin does not report contact, so ``grasped`` is false. ``settled``
+    is every body slower than 2 cm/s.
+    """
 
     def __init__(self):
-        from diagnostic_msgs.msg import DiagnosticArray
-        from tf2_msgs.msg import TFMessage
+        from mujoco_ros2_control_msgs.msg import FreeJointStateArray
 
         self._cond = threading.Condition()
         self._latest: dict | None = None
-        self._frames: dict[float, dict] = {}  # stamp -> {prop: (xyz, quat)}
-        self._status: dict[float, dict] = {}  # stamp -> {status name: {key: value}}
         self._spin = Spinner("twin_scene")
-        self._spin.node.create_subscription(TFMessage, "/tf", self._on_tf, 100)
-        self._spin.node.create_subscription(DiagnosticArray, DIAGNOSTICS_TOPIC, self._on_diagnostics, 10)
+        self._spin.node.create_subscription(FreeJointStateArray, "/free_joint_states", self._on_props, 10)
 
-    @staticmethod
-    def _stamp(header) -> float:
-        return header.stamp.sec + 1e-9 * header.stamp.nanosec
-
-    def _on_tf(self, msg) -> None:
+    def _on_props(self, msg) -> None:
+        stamp = msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec
+        bodies = {}
+        settled = True
+        for joint in msg.free_joints:
+            pose, linear = joint.pose.pose, joint.twist.twist.linear
+            speed = (linear.x ** 2 + linear.y ** 2 + linear.z ** 2) ** 0.5
+            settled = settled and speed < 0.02
+            rotation = pose.orientation
+            bodies[joint.name] = {
+                "xyz": [pose.position.x, pose.position.y, pose.position.z],
+                "quat": [rotation.w, rotation.x, rotation.y, rotation.z],
+                "grasped": False,
+            }
         with self._cond:
-            for tf in msg.transforms:
-                if tf.header.frame_id != WORLD_FRAME:
-                    continue
-                t, r = tf.transform.translation, tf.transform.rotation
-                frames = self._frames.setdefault(self._stamp(tf.header), {})
-                frames[tf.child_frame_id] = ([t.x, t.y, t.z], [r.w, r.x, r.y, r.z])
-            while len(self._frames) > self._KEEP:
-                del self._frames[min(self._frames)]
-            self._complete()
-
-    def _on_diagnostics(self, msg) -> None:
-        status = {s.name: {kv.key: kv.value for kv in s.values} for s in msg.status}
-        if PROPS_STATUS not in status:
-            return
-        with self._cond:
-            self._status[self._stamp(msg.header)] = status
-            self._complete()
-
-    def _complete(self) -> None:
-        """Every stamp whose diagnostics and prop frames have all arrived becomes the latest scene."""
-        for stamp in sorted(self._status):
-            props, gripper = self._status[stamp][PROPS_STATUS], self._status[stamp].get(GRIPPER_STATUS, {})
-            names = [key[: -len(".grasped")] for key in props if key.endswith(".grasped")]
-            frames = self._frames.get(stamp, {})
-            if not all(name in frames for name in names):
-                continue
             self._latest = {
                 "stamp": stamp,
-                "bodies": {
-                    name: {"xyz": frames[name][0], "quat": frames[name][1], "grasped": props[f"{name}.grasped"] == "true"}
-                    for name in names
-                },
-                "settled": props["settled"] == "true",
-                "gripper": {
-                    "torque_limit": int(gripper["torque_limit"]),
-                    "overload_torque": int(gripper["overload_torque"]),
-                    "tripped": gripper["tripped"] == "true",
-                },
+                "bodies": bodies,
+                "settled": settled,
+                "gripper": {"torque_limit": 0, "overload_torque": 0, "tripped": False},
             }
             self._cond.notify_all()
-        if self._latest is not None:
-            for kept in (self._frames, self._status):
-                for stamp in [s for s in kept if s <= self._latest["stamp"]]:
-                    del kept[stamp]
 
     def latest(
         self, after: float | None = None, timeout: float | None = 2.0, settled: bool = False,
@@ -277,14 +256,11 @@ def _tail(path: Path, lines: int = 25) -> str:
 
 
 class TwinSession:
-    """One ``so101_sim.node --notebook-twin`` and its controllers, owned by
-    this process, and their clients.
+    """The MuJoCo MoveIt bringup and its clients, owned by this process.
 
-    ``arm`` (:class:`~vla_pipeline.robot.robot_node.Ros2ArmClient`), ``armcam`` and ``view``
-    (:class:`TwinCamera`) and ``scene`` (:class:`TwinScene`) are ready when
-    the constructor returns. :meth:`close` stops the controllers and the
-    node; the node also dies with this process, so a crashed kernel leaves
-    no twin behind.
+    ``MoveItPy`` is created before this process calls ``rclpy.init``. A
+    default context that already exists makes that constructor not return.
+    The launch dies with this process, so a crashed kernel leaves no twin.
     """
 
     def __init__(
@@ -298,45 +274,46 @@ class TwinSession:
     ):
         self.domain_id = twin_domain_id() if domain_id is None else int(domain_id)
         self.config_path = Path(config_path or DEFAULT_CONFIG)
-        r = cfg["robot"]
         self._arm_topic = (cfg.get("cameras") or {}).get("arm", {}).get(
             "topic", "/cameras/arm/image_raw"
         )
+        self._mount_topic = (cfg.get("cameras") or {}).get("mount", {}).get(
+            "topic", "/cameras/mount/image_raw"
+        )
         self.arm = self.armcam = self.view = self.scene = None
-        self._proc = self._controllers = None
+        self._proc = None
         self._closed = False
-        self._scene_file = None
+        self._scene = scene
+        self._domain_lock = None
 
-        use_private_domain(self.domain_id)
+        # Environment only. rclpy.init before MoveItPy makes that constructor not return.
+        os.environ["ROS_DOMAIN_ID"] = str(self.domain_id)
+        if os.environ.get("ROS_AUTOMATIC_DISCOVERY_RANGE") == "LOCALHOST":
+            del os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"]
+        os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = str(_LOCALHOST_PROFILE)
         self._refuse_if_owned()
-        self._probe = Spinner("twin_session")
+        from so101_sim.domain_lock import acquire
 
+        self._domain_lock = acquire(self.domain_id)
+
+        import shutil
+
+        ros2 = shutil.which("ros2")
+        if ros2 is None:
+            raise RuntimeError("ros2 is not on PATH: source /opt/ros/jazzy/setup.bash first")
         cmd = [
-            sys.executable, "-m", "so101_sim.node",
-            "--config", str(self.config_path), "--sim-cameras", "arm", "--notebook-twin",
+            sys.executable, "-m", "so101_sim.parent_death", sys.executable, ros2, "launch",
+            str(LAUNCH_FILE), f"config:={self.config_path}", "hardware_type:=mujoco",
         ]
-        if scene is not None:
-            fd, name = tempfile.mkstemp(prefix="twin_scene_", suffix=".json")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(scene, f)
-            self._scene_file = Path(name)
-            cmd += ["--scene", name]
-        cmd += ["--ros-args", "-r", f"{r['command_topic']}:={HARDWARE_COMMANDS}",
-                "-r", f"{r['state_topic']}:={HARDWARE_STATES}"]
         fd, log_name = tempfile.mkstemp(prefix="twin_node_", suffix=".log")
         self.log_path = Path(log_name)
+        self.controllers_log_path = self.log_path
         with os.fdopen(fd, "w") as log:
-            # Its own session: Jupyter's stop button sends SIGINT to the kernel's
-            # whole process group. The node still exits with this process.
             self._proc = subprocess.Popen(
                 cmd, stdout=log, stderr=subprocess.STDOUT,
-                env={**os.environ, "PYTHONUNBUFFERED": "1"},  # the log is current when a test copies it
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
                 start_new_session=True,
             )
-        fd, log_name = tempfile.mkstemp(prefix="twin_controllers_", suffix=".log")
-        self.controllers_log_path = Path(log_name)
-        with os.fdopen(fd, "w") as log:
-            self._controllers = start_controllers(self.config_path, log=log)
         atexit.register(self.close)
         try:
             self._wait_ready(ready_timeout_s, cfg)
@@ -350,7 +327,8 @@ class TwinSession:
 
     @property
     def controllers_pid(self) -> int | None:
-        return None if self._controllers is None else self._controllers.pid
+        """The bringup is one process, so this is the launch pid."""
+        return self.pid
 
     def _refuse_if_owned(self) -> None:
         """The twin node holds its domain's lock (``so101_sim.domain_lock``) while it runs."""
@@ -380,24 +358,17 @@ class TwinSession:
                 f"the twin node sent no {what} within {timeout_s:.0f} s:\n{_tail(self.log_path)}"
             )
 
-        up = threading.Event()  # the first joint state, or the node's exit
-        threading.Thread(target=lambda: (self._proc.wait(), up.set()), daemon=True, name="twin-exit").start()
-        first = self._probe.node.create_subscription(JointState, HARDWARE_STATES, lambda _m: up.set(), sensor_qos())
+        self._wait_bringup(timeout_s, not_ready, remaining)
         try:
-            up.wait(timeout_s)
-        finally:
-            self._probe.node.destroy_subscription(first)
-        if self._exited() is not None or not up.is_set():
-            raise not_ready("joint state")
-        try:
-            self.arm = Ros2ArmClient(cfg, state_timeout_s=remaining())
-        except MotionTimeout as e:
-            raise TimeoutError(
-                f"{e}; the controllers' launch {'exited' if self._controllers.poll() is not None else 'runs'}:\n"
-                f"{_tail(self.controllers_log_path)}"
-            ) from None
+            from vla_pipeline.robot.moveit_arm import MoveItArm
+
+            self.arm = MoveItArm(cfg, sim=True)
+        except RuntimeError as e:
+            raise TimeoutError(f"{e}\n{_tail(self.log_path)}") from None
+        if self._scene is not None:
+            self._place(self._scene)
         self.armcam = TwinCamera("arm", self._arm_topic)
-        self.view = TwinCamera("view", VIEW_TOPIC)
+        self.view = TwinCamera("view", self._mount_topic)
         self.scene = TwinScene()
         if not self.armcam.next_frame(0.0, remaining())[0]:
             raise not_ready("arm camera frame")
@@ -405,10 +376,72 @@ class TwinSession:
             "twin up on ROS domain %d (pid %d, log %s)", self.domain_id, self.pid, self.log_path
         )
 
+    def _wait_bringup(self, timeout_s: float, not_ready, remaining) -> None:
+        """Joint states, then the trajectory action, on a private context.
+
+        The default context stays uninitialized so ``MoveItPy`` can take it.
+        """
+        import rclpy
+        from control_msgs.action import FollowJointTrajectory
+        from rclpy.action import ActionClient
+        from rclpy.executors import SingleThreadedExecutor
+        from sensor_msgs.msg import JointState
+
+        context = rclpy.Context()
+        rclpy.init(context=context)
+        node = rclpy.create_node("twin_bringup_wait", context=context)
+        seen = threading.Event()
+        node.create_subscription(JointState, "/joint_states", lambda _m: seen.set(), sensor_qos())
+        executor = SingleThreadedExecutor(context=context)
+        executor.add_node(node)
+        spin = threading.Thread(target=executor.spin, daemon=True, name="twin-bringup-wait")
+        spin.start()
+        try:
+            if not seen.wait(timeout_s) or self._exited() is not None:
+                raise not_ready("joint state")
+            trajectory = ActionClient(
+                node, FollowJointTrajectory, "/joint_trajectory_controller/follow_joint_trajectory",
+            )
+            try:
+                if not trajectory.wait_for_server(timeout_sec=remaining()) or self._exited() is not None:
+                    raise not_ready("trajectory action")
+            finally:
+                trajectory.destroy()
+        finally:
+            executor.shutdown()
+            spin.join(timeout=2.0)
+            node.destroy_node()
+            rclpy.shutdown(context=context)
+
+    def _place(self, scene: dict) -> None:
+        """Put each free body where ``scene`` recorded it (x, y, z, then w x y z)."""
+        from geometry_msgs.msg import Pose
+        from mujoco_ros2_control_msgs.msg import FreeJointState
+        from mujoco_ros2_control_msgs.srv import SetFreeJointState
+
+        from vla_pipeline.robot.moveit_arm import _call
+
+        request = SetFreeJointState.Request()
+        for name, qpos in (scene.get("bodies") or {}).items():
+            joint = FreeJointState()
+            joint.name = name
+            joint.pose.pose = Pose()
+            joint.pose.pose.position.x, joint.pose.pose.position.y, joint.pose.pose.position.z = qpos[:3]
+            joint.pose.pose.orientation.w = qpos[3]
+            joint.pose.pose.orientation.x, joint.pose.pose.orientation.y, joint.pose.pose.orientation.z = qpos[4:7]
+            request.free_joints.append(joint)
+        if not request.free_joints:
+            return
+        reply = _call(
+            self.arm.node, SetFreeJointState, "/mujoco_ros2_control_node/set_free_joint_state", request, 15.0,
+        )
+        if not reply.success:
+            raise RuntimeError(f"set_free_joint_state: {reply.message}")
+
     def reset_scene(self) -> bool:
-        """Park the arm with the jaws open and put the props back (in the twin):
-        :meth:`~vla_pipeline.robot.ros2_control_arm.ControllerArm.reset_twin`."""
-        return self.arm.reset_twin()
+        """The ``home`` keyframe: the arm parked and every prop back on the scene."""
+        self.arm.reset()
+        return True
 
     def close(self) -> None:
         """Stop the clients and the twin node. Safe to call more than once."""
@@ -423,23 +456,20 @@ class TwinSession:
                 part.close()
             except Exception as e:
                 logger.debug("twin client close: %s", e)
-        if self._controllers is not None:
-            try:
-                stop_controllers(self._controllers)
-            except RuntimeError as e:
-                logger.warning("%s", e)
-            if self._controllers.returncode == 0:
-                self.controllers_log_path.unlink(missing_ok=True)  # kept when they failed
         proc = self._proc
         if proc is not None and proc.poll() is None:
-            proc.send_signal(signal.SIGINT)
+            # parent_death ignores SIGINT and, on SIGTERM, signals its process group.
+            proc.send_signal(signal.SIGTERM)
             try:
                 proc.wait(timeout=10.0)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 proc.wait(timeout=5.0)
-        if self._scene_file is not None:
-            self._scene_file.unlink(missing_ok=True)
         if proc is not None and proc.returncode == 0:
-            self.log_path.unlink(missing_ok=True)  # kept when the node failed
-        self._probe.close()
+            self.log_path.unlink(missing_ok=True)
+        if self._domain_lock is not None:
+            self._domain_lock.close()
+            self._domain_lock = None

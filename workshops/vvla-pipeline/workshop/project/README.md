@@ -18,7 +18,7 @@ name and parameters of a finished pipeline function, its answer key
 
        python -m vvla_workshop.selftest_models
 
-3. **Implement component 2** (`ros/camera_client.py`, `ros/intent_node.py`):
+3. **Implement component 2** (`ros/camera_client.py`, `ros/moveit_arm.py`, `ros/intent_node.py`):
 
        python -m vvla_workshop.selftest_ros        # over ROS 2 (required); no hardware needed
 

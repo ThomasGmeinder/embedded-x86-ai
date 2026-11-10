@@ -28,7 +28,7 @@ from vla_pipeline.utils.config import load_config
 from vvla_workshop.feedback import ARTIFACTS, Reporter, implementation, reference_flag
 
 DISCOVERY_S = 5.0  # budget for two endpoints in one process to match
-REPLY_S = 3.0  # budget for one message through a node
+NODE_REPLY_S = 3.0  # budget for one message through a node
 
 
 def _matched(event: threading.Event):
@@ -40,15 +40,38 @@ def check_camera(rep: Reporter, cfg: dict, reference: bool) -> None:
     """TODO 2.3 - your camera client receives the camera node's frames."""
     import cv2
 
+    from rclpy.node import Node
+    from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+    from sensor_msgs.msg import Image
+
     from vla_pipeline.robot.ros2_control_arm import Spinner
-    from vla_pipeline.vision.camera_node import CameraNode
+    from vla_pipeline.vision.camera import to_image_msg
     from vvla_workshop.fixtures import SyntheticCamera
 
     Ros2Camera = implementation("2.3", reference).Ros2Camera
     spec = dict(cfg["cameras"]["mount"])
     topic = spec["topic"]
+
+    class _Frames(Node):
+        def __init__(self):
+            super().__init__("selftest_camera_frames")
+            qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
+            )
+            self._pub = self.create_publisher(Image, topic, qos)
+            self._source = SyntheticCamera()
+            self.create_timer(1.0 / float(spec.get("fps", 15.0)), self._tick)
+
+        def _tick(self):
+            ok, frame = self._source.read()
+            if ok:
+                self._pub.publish(to_image_msg(
+                    frame, self.get_clock().now().to_msg(), "camera_mount"))
+
     host = Spinner("selftest_camera_host")
-    node = CameraNode("mount", spec, frame_source=SyntheticCamera())
+    node = _Frames()
     host.add_node(node)
     client = None
     try:
@@ -64,7 +87,7 @@ def check_camera(rep: Reporter, cfg: dict, reference: bool) -> None:
 
         def roundtrip():
             """Verify a frame published by the node arrives correctly decoded at the client."""
-            ok, frame, _arrived = client.next_frame(0.0, DISCOVERY_S + REPLY_S)
+            ok, frame, _arrived = client.next_frame(0.0, DISCOVERY_S + NODE_REPLY_S)
             assert ok, (
                 f"nothing arrived on {topic} - check the topic name and QoS on both ends "
                 "(ros2 topic list / ros2 topic info -v)")
@@ -140,8 +163,8 @@ def check_intent(rep: Reporter, cfg: dict, reference: bool) -> None:
             before = len(received)
         pub.publish(String(data=text))
         with arrived:
-            assert arrived.wait_for(lambda: len(received) > before, REPLY_S), (
-                f"no intent on {intent_topic} within {REPLY_S:.0f} s of {text!r} - is the transcript "
+            assert arrived.wait_for(lambda: len(received) > before, NODE_REPLY_S), (
+                f"no intent on {intent_topic} within {NODE_REPLY_S:.0f} s of {text!r} - is the transcript "
                 "subscription wired to _on_transcript, and the result published?")
             return received[before]
 
@@ -210,7 +233,7 @@ def run(reference: bool = False) -> int:
     check_intent(rep, cfg, reference)
     code = rep.summary()
     print("\nOn-hardware next steps (each in its own terminal):")
-    print("  python -m vla_pipeline.vision.camera_node --role mount")
+    print("  python $(which ros2) launch launch/strix_vla.launch.py")
     print("  python -m vla_pipeline.llm.intent_node --mock")
     print("  ros2 topic hz /cameras/mount/image_raw && ros2 topic echo /vla/intent")
     return code

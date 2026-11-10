@@ -65,13 +65,40 @@ class _TwoPeoplePose:
 
 
 def _make_ctx(cfg, *, registry=None):
-    """A fully synthetic context: scripted pose/hands, dry-run arm."""
+    """A fully synthetic context: scripted pose and hands, joints recorded in memory."""
     from vla_pipeline.dispatch import PipelineContext
-    from vla_pipeline.robot.arm_interface import DryRunArm
+    from vla_pipeline.robot.arm_interface import REST_POSE, clamp_joints
     from vla_pipeline.utils.gesture_map import mapper_from_config
     from vvla_workshop.fixtures import ScriptedHands, ScriptedPose, SyntheticCamera
 
-    return PipelineContext(cfg=cfg, arm=DryRunArm(), pose=ScriptedPose(), hands=ScriptedHands(),
+    class _OfflineArm:
+        """Records joint commands. The self-test freezes ``time.sleep`` and
+        compares degree poses, so it does not start the MoveIt bringup."""
+
+        def __init__(self):
+            self._joints = dict(REST_POSE)
+            self.gripper_joint = "gripper_joint"
+
+        def send_joints(self, joints):
+            self._joints.update(clamp_joints(joints))
+
+        def send_gripper(self, position):
+            self.send_joints({self.gripper_joint: float(position)})
+
+        def get_joints(self):
+            return dict(self._joints)
+
+        def go_to(self, target, duration_s=2.0, stop_event=None, **_kwargs):
+            if stop_event is not None and stop_event.is_set():
+                return "stopped"
+            self.send_joints(target)
+            return "arrived"
+
+        def go_to_rest(self):
+            self.send_joints(REST_POSE)
+            return "arrived"
+
+    return PipelineContext(cfg=cfg, arm=_OfflineArm(), pose=ScriptedPose(), hands=ScriptedHands(),
                            mount_camera=SyntheticCamera(), mapper=mapper_from_config(cfg), registry=registry,
                            headless=True)
 
@@ -248,8 +275,13 @@ def check_mimic(rep: Reporter, cfg: dict, reference: bool) -> None:
         for m in MOTOR_NAMES:
             assert m in sig.joints, f"commanded joints missing '{m}'"
         commanded = ctx.arm.get_joints()
-        assert abs(commanded["shoulder_pan"] - sig.joints["shoulder_pan"]) < 1e-6, (
-            "the joints you returned were not the joints you sent to the arm - call ctx.arm.send_joints(joints)")
+        from vla_pipeline.robot.arm_interface import radians_from_calibrated
+
+        expected = radians_from_calibrated(ctx.cfg, sig.joints)
+        for name, value in expected.items():
+            assert abs(commanded[name] - value) < 1e-6, (
+                "the joints you returned were not the joints you sent to the arm - "
+                "convert them with radians_from_calibrated and call ctx.arm.send_joints")
         import cv2
 
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
@@ -343,7 +375,7 @@ def run(reference: bool = False) -> int:
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     cfg = load_config()
     rep = Reporter("Component 3 - integration: composing models into behavior" + (" (reference)" if reference else ""))
-    print("  backends: synthetic camera + scripted pose/hands + dry-run arm (no NPU / ROS 2 / llama-server needed)")
+    print("  backends: synthetic camera + scripted pose/hands + recorded joints (no NPU / ROS 2 / llama-server needed)")
     check_registry(rep, cfg, reference)
     check_dispatch(rep, cfg, reference)
     check_mimic(rep, cfg, reference)
