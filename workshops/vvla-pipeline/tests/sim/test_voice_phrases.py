@@ -83,6 +83,22 @@ def test_silence_does_not_emit_a_window():
     assert windows.feed(frame, False) is None
 
 
+def test_reset_button_is_the_orange_control_at_the_bottom():
+    from vla_pipeline.console import RESET_BUTTON, TILE_H, TILE_W, VIEW_H, hits_reset_button, pointer_hits_reset
+
+    x, y, w, h = RESET_BUTTON
+    assert hits_reset_button(x, y)
+    assert hits_reset_button(x + w - 1, y + h - 1)
+    assert not hits_reset_button(x - 1, y)
+    assert not hits_reset_button(x, y + h)
+    image = (TILE_W * 3, TILE_H + VIEW_H)
+    # Pointer already in image pixels.
+    assert pointer_hits_reset(x + 4, y + 4, image, (0, 0, *image))
+    # Pointer in a half-size window whose origin is not the image origin.
+    assert pointer_hits_reset((x + 4) // 2, (y + 4) // 2, image, (80, 120, image[0] // 2, image[1] // 2))
+    assert not pointer_hits_reset(10, 10, image, (80, 120, image[0] // 2, image[1] // 2))
+
+
 def test_repeated_command_inside_the_cooldown_is_dropped():
     gate = CommandFilter(cooldown_s=5)
     assert gate.accept("pick_place", 0.0, 1.0, now=1.0)

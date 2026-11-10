@@ -422,6 +422,10 @@ def main() -> None:
     shutdown = threading.Event()
     if console is not None:
         console.attach(dispatcher)
+        # The twin process keeps the last physics state until something resets
+        # it. The notebook's reset button does that before the console is used.
+        if args.digital_twin:
+            console.reset_scene()
 
     # ---------------- listener thread (always hot) ----------------
     if not args.text_commands:

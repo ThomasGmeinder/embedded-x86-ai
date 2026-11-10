@@ -49,11 +49,39 @@ TILE_W, TILE_H = 400, 300
 VIEW_W, VIEW_H = 800, 800  # tall enough for the raised arm (wave)
 LOG_LINES = (VIEW_H - 230) // 20  # what fits between the header and the arm HUD
 PANEL_W = 400
+# The reset button, in the composed image. The notebook's reset button calls
+# the same TwinConsole.reset_scene the ``r`` key calls.
+RESET_BUTTON = (VIEW_W + 12, TILE_H + VIEW_H - 44, 110, 30)
 IDLE_AFTER_S = 0.5  # a model untouched this long is run by the console itself
 FPS = 15.0
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 WHITE, GRAY, DIM = (235, 235, 235), (150, 150, 150), (90, 90, 90)
 GREEN, YELLOW, RED, CYAN = (80, 200, 80), (60, 200, 230), (60, 60, 230), (220, 200, 80)
+ORANGE = (40, 140, 240)
+
+
+def hits_reset_button(x: int, y: int) -> bool:
+    """True when an image-space click lands on the reset button."""
+    bx, by, bw, bh = RESET_BUTTON
+    return bx <= x < bx + bw and by <= y < by + bh
+
+
+def pointer_hits_reset(x: int, y: int, image_wh: tuple[int, int], window_rect: tuple[int, int, int, int]) -> bool:
+    """True when a window click lands on the reset button.
+
+    OpenCV reports the pointer either in image pixels or in the window, and
+    ``getWindowImageRect`` may be screen coordinates. Accept the mapping that
+    lands on the button.
+    """
+    if hits_reset_button(x, y):
+        return True
+    iw, ih = image_wh
+    _rx, _ry, rw, rh = window_rect
+    if rw <= 0 or rh <= 0 or iw <= 0 or ih <= 0:
+        return False
+    scaled = (int(x * iw / rw), int(y * ih / rh))
+    shifted = (int((x - _rx) * iw / rw), int((y - _ry) * ih / rh))
+    return hits_reset_button(*scaled) or hits_reset_button(*shifted)
 
 
 class FanoutCamera:
@@ -464,8 +492,13 @@ class TwinConsole:
             cv2.putText(p, text, (12, y), FONT, 0.45, color, 1, cv2.LINE_AA)
             y += 20
 
-        self._arm_hud(p, VIEW_H - 92)
-        cv2.putText(p, "space: stop    r: reset    q: quit", (12, VIEW_H - 12), FONT, 0.45, DIM, 1, cv2.LINE_AA)
+        self._arm_hud(p, VIEW_H - 110)
+        bx, by, bw, bh = RESET_BUTTON
+        # RESET_BUTTON is in the composed image; this panel is its right half.
+        local = (bx - VIEW_W, by - TILE_H, bw, bh)
+        cv2.rectangle(p, (local[0], local[1]), (local[0] + bw, local[1] + bh), ORANGE, -1)
+        cv2.putText(p, "reset", (local[0] + 24, local[1] + 21), FONT, 0.55, (20, 20, 20), 1, cv2.LINE_AA)
+        cv2.putText(p, "space: stop    q: quit", (local[0] + bw + 12, local[1] + 21), FONT, 0.42, DIM, 1, cv2.LINE_AA)
         return p
 
     def _arm_hud(self, p, y) -> None:
@@ -514,12 +547,22 @@ class TwinConsole:
     def run(self, shutdown: threading.Event, on_stop) -> None:
         """Draw until ``shutdown`` is set or the window is closed.
 
-        Space calls ``on_stop()``. ``r`` resets the twin: park the arm and put
-        the props back.
+        Space calls ``on_stop()``. The reset button and ``r`` both call
+        :meth:`reset_scene`: park the arm and put the props back.
         """
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
         scale = min(1.0, 950 / (TILE_H + VIEW_H))  # fit a 1080p screen; drag to resize
         cv2.resizeWindow(WINDOW, int(TILE_W * 3 * scale), int((TILE_H + VIEW_H) * scale))
+        clicked = {"reset": False}
+
+        def on_mouse(event, x, y, flags, _param) -> None:
+            if event != cv2.EVENT_LBUTTONDOWN:
+                return
+            rect = cv2.getWindowImageRect(WINDOW)
+            if pointer_hits_reset(x, y, (TILE_W * 3, TILE_H + VIEW_H), rect):
+                clicked["reset"] = True
+
+        cv2.setMouseCallback(WINDOW, on_mouse)
         period = 1.0 / FPS
         try:
             while not shutdown.is_set():
@@ -533,7 +576,8 @@ class TwinConsole:
                     break
                 if key == ord(" "):
                     on_stop()
-                elif key in (ord("r"), ord("R")):
+                elif key in (ord("r"), ord("R")) or clicked["reset"]:
+                    clicked["reset"] = False
                     self.reset_scene()
                 if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
                     break
