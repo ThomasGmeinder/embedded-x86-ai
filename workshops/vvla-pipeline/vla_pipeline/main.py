@@ -355,12 +355,15 @@ def build_context(cfg: dict, args) -> PipelineContext:
     return ctx
 
 
-def main() -> None:
-    """Parse CLI args, build the pipeline context, and run the listen/dispatch loop until interrupted."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
+    """The arguments ``./run_pipeline.sh`` and this module accept.
+
+    ``run_pipeline.sh`` parses with this function before it sets anything up,
+    so an unknown argument stops there instead of starting the arm.
+    """
+    parser = argparse.ArgumentParser(
+        prog=prog, description="Strix VLA pipeline orchestrator"
     )
-    parser = argparse.ArgumentParser(description="Strix VLA pipeline orchestrator")
     parser.add_argument("--config", default=None)
     parser.add_argument(
         "--text-commands",
@@ -386,7 +389,15 @@ def main() -> None:
         action="store_true",
         help="with --digital-twin: skip the twin console window",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    """Parse CLI args, build the pipeline context, and run the listen/dispatch loop until interrupted."""
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+    )
+    args = build_parser().parse_args()
 
     cfg = load_config(args.config)
     if args.digital_twin:

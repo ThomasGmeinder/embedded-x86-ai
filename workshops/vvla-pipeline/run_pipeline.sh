@@ -31,6 +31,26 @@ cd "$REPO_ROOT"
 [[ -f /opt/ros/jazzy/setup.bash ]] && source /opt/ros/jazzy/setup.bash
 
 [[ -f .venv/bin/activate ]] || { echo "No .venv - run ./bootstrap.sh first." >&2; exit 1; }
+
+# build_parser() in vla_pipeline.main is the list of accepted arguments.
+# Check it before any setup: an unknown flag must not start calibration,
+# a model download, or the arm. --help prints and stops here too.
+status=0
+parsed=$(.venv/bin/python - "$@" <<'PY'
+import sys
+from vla_pipeline.main import build_parser
+build_parser(prog="run_pipeline.sh").parse_args(sys.argv[1:])
+print("ARGS_OK")
+PY
+) || status=$?
+if [[ "$status" -ne 0 ]]; then
+  exit "$status"
+fi
+if [[ "$parsed" != *ARGS_OK* ]]; then
+  printf '%s\n' "$parsed"
+  exit 0
+fi
+
 VENV_DIR="${REPO_ROOT}/.venv" "${REPO_ROOT}/scripts/ensure_ros2_control.sh"
 VENV_DIR="${REPO_ROOT}/.venv" "${REPO_ROOT}/scripts/ensure_voice.sh"
 source .venv/bin/activate
