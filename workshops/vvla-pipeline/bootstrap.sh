@@ -402,8 +402,20 @@ if [[ ! -f /opt/ros/jazzy/setup.bash ]]; then
 fi
 if [[ "$SKIP_APT" -eq 0 && -f /opt/ros/jazzy/setup.bash ]]; then
   log "Installing ros2_control, the controllers, xacro and the ROS build tools (sudo)"
-  sudo apt install -y ros-jazzy-ros2-control ros-jazzy-ros2-controllers ros-jazzy-xacro ros-dev-tools \
+  # control_msgs and controller_manager_msgs are what ros2_control_arm.py
+  # imports. ros-jazzy-desktop does not install them.
+  sudo apt install -y \
+    ros-jazzy-ros2-control ros-jazzy-ros2-controllers \
+    ros-jazzy-control-msgs ros-jazzy-controller-manager-msgs \
+    ros-jazzy-xacro ros-dev-tools \
     || die "ros2_control install failed - check packages.ros.org availability for ${UBUNTU_CODENAME}."
+  # rclpy's extension loads librcl*.so. Those are not on the default linker
+  # path, and LD_LIBRARY_PATH set inside Python is too late. Register the
+  # directory once so every process, including a Jupyter kernel, can load it.
+  if [[ -d /opt/ros/jazzy/lib ]]; then
+    echo "/opt/ros/jazzy/lib" | sudo tee /etc/ld.so.conf.d/ros-jazzy.conf >/dev/null
+    sudo ldconfig
+  fi
 fi
 
 # -----------------------------------------------------------------------------
@@ -418,8 +430,8 @@ fi
 log "Creating uv venv at ${VENV_DIR}"
 # Pin to the SYSTEM Python 3.12 (Ubuntu 24.04 default). Two reasons:
 #   - lerobot 0.5.2 requires Python >= 3.12 (uv's managed 3.11 fails resolution)
-#   - --system-site-packages only exposes ROS 2 Jazzy's rclpy if the venv
-#     interpreter is ABI-identical to the system python it was built against.
+#   - --system-site-packages exposes /usr/lib, not /opt/ros. Jazzy's Python
+#     packages (rclpy, control_msgs) are added by ros_jazzy.pth below.
 SYS_PY="$(command -v /usr/bin/python3.12 || command -v python3.12 || true)"
 if [[ -z "$SYS_PY" ]]; then
   die "python3.12 not found - install it first (apt install python3.12 python3.12-dev) or check your Ubuntu 24.04 setup."
@@ -442,6 +454,8 @@ if [[ ! -x "${VENV_DIR}/bin/pip" ]]; then
 fi
 # Keep colcon (if this repo lands in a ROS workspace) out of the venv.
 touch "${VENV_DIR}/COLCON_IGNORE" "${VENV_DIR}/AMENT_IGNORE"
+# Jazzy's Python tree is not on the venv path. See scripts/link_ros_python.sh.
+VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/link_ros_python.sh"
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
 

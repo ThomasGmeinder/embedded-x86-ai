@@ -110,6 +110,9 @@ set +u +e
 # shellcheck disable=SC1090
 source "$ROS_SETUP" || warn "ROS 2 source returned nonzero - continuing"
 set -e -u
+# The kernel process does not inherit this shell. The venv .pth is what makes
+# control_msgs importable inside the notebook.
+VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/link_ros_python.sh"
 
 # --- 2. Ensure pip, then install ONLY what's missing ------------------------
 "$PY" -m pip --version >/dev/null 2>&1 || {
