@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 # Everything ros2_control_arm.py needs, done by the setup scripts:
-# the apt packages (control_msgs is not in ros-jazzy-desktop), the linker
-# path for librcl*.so, the venv .pth, and the topic_based_ros2_control plugin.
+# the apt packages (control_msgs is not in ros-jazzy-desktop), a check that
+# librcl_action.so loads, the venv .pth, and the topic_based_ros2_control plugin.
 # A machine that only git-pulls never re-runs bootstrap, so the notebook and
 # pipeline launchers call this. It does nothing when those pieces are already
 # present.
@@ -40,13 +40,18 @@ if [[ ${#missing[@]} -gt 0 ]]; then
   sudo apt install -y "${missing[@]}"
 fi
 
-if [[ -d /opt/ros/jazzy/lib ]] && ! ldconfig -p 2>/dev/null | grep -q 'librcl_action\.so'; then
-  if [[ "${SKIP_APT:-0}" == "1" ]]; then
-    echo "ensure_ros2_control: librcl_action.so is not on the linker path." >&2
-    exit 1
-  fi
-  echo "/opt/ros/jazzy/lib" | sudo tee /etc/ld.so.conf.d/ros-jazzy.conf >/dev/null
-  sudo ldconfig
+# Every process this repo starts sources ROS 2 first, which puts
+# /opt/ros/jazzy/lib on LD_LIBRARY_PATH. That is what makes librcl_action.so
+# load. ldconfig's cache is a second copy of the same fact, and writing it
+# needs root, which this account does not have.
+if [[ ! -f /opt/ros/jazzy/lib/librcl_action.so ]]; then
+  echo "ensure_ros2_control: /opt/ros/jazzy/lib/librcl_action.so is missing." >&2
+  exit 1
+fi
+if ! LD_LIBRARY_PATH="/opt/ros/jazzy/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    /usr/bin/python3 -c 'import ctypes; ctypes.CDLL("librcl_action.so")'; then
+  echo "ensure_ros2_control: librcl_action.so does not load from /opt/ros/jazzy/lib." >&2
+  exit 1
 fi
 
 VENV_DIR="$VENV_DIR" "${ROOT}/scripts/link_ros_python.sh"

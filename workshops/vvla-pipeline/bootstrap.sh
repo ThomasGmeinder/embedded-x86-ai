@@ -400,10 +400,6 @@ if [[ "$SKIP_APT" -eq 0 && -f /opt/ros/jazzy/setup.bash ]]; then
     ros-jazzy-control-msgs ros-jazzy-controller-manager-msgs \
     ros-jazzy-xacro ros-dev-tools \
     || die "ros2_control install failed - check packages.ros.org availability for ${UBUNTU_CODENAME}."
-  if [[ -d /opt/ros/jazzy/lib ]] && ! ldconfig -p 2>/dev/null | grep -q 'librcl_action\.so'; then
-    echo "/opt/ros/jazzy/lib" | sudo tee /etc/ld.so.conf.d/ros-jazzy.conf >/dev/null
-    sudo ldconfig
-  fi
 fi
 
 # -----------------------------------------------------------------------------
