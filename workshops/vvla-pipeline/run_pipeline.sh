@@ -16,10 +16,13 @@
 #                                         #   shown in the twin console window
 #   ./run_pipeline.sh --headless          # no preview windows
 #
-# Starts launch/strix_vla.launch.py in the background - the SO-101 server node
-# (or the digital twin) under ros2_control when robot.use_ros2: true in
-# config/pipeline.yaml, the camera nodes when a camera's use_ros2 is true - then
-# runs the orchestrator. Its arm client waits for the controllers to come up.
+# Starts launch/strix_vla.launch.py in the background, as two independent
+# launches: the camera nodes when a camera's use_ros2 is true, and the SO-101
+# server node (or the digital twin) under ros2_control when robot.use_ros2: true
+# in config/pipeline.yaml. ros2 launch ends everything in a launch when one of
+# its parts raises (a missing xacro, an absent arm), so the cameras never share
+# a launch with the arm. Then it runs the orchestrator. Its arm client waits for
+# the controllers to come up.
 set -eo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
@@ -29,6 +32,7 @@ cd "$REPO_ROOT"
 
 [[ -f .venv/bin/activate ]] || { echo "No .venv - run ./bootstrap.sh first." >&2; exit 1; }
 VENV_DIR="${REPO_ROOT}/.venv" "${REPO_ROOT}/scripts/ensure_ros2_control.sh"
+VENV_DIR="${REPO_ROOT}/.venv" "${REPO_ROOT}/scripts/ensure_voice.sh"
 source .venv/bin/activate
 
 # Ryzen AI NPU runtime libs (LD_LIBRARY_PATH for the VitisAI EP).
@@ -65,15 +69,21 @@ PY
 ROBOT_ROS2="${USE_ROS2%% *}"
 CAMERA_ROS2="${USE_ROS2##* }"
 
-LAUNCH_PID=""
+LAUNCH_PIDS=()
 cleanup() {
-  # The launch runs in a session of its own: SIGINT to its process group reaches
+  # Each launch runs in a session of its own: SIGINT to its process group reaches
   # every node, so the arm server parks and each node exits. The launch itself,
-  # started as a background job with SIGINT ignored, ends when they have.
-  if [[ -n "$LAUNCH_PID" ]] && kill -0 "$LAUNCH_PID" 2>/dev/null; then
-    kill -INT -- "-$LAUNCH_PID" 2>/dev/null || true
-    wait "$LAUNCH_PID" 2>/dev/null || true
-  fi
+  # started as a background job with SIGINT ignored, ends when they have. Both
+  # launches get the signal first, then each is waited for.
+  local pid
+  for pid in "${LAUNCH_PIDS[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -INT -- "-$pid" 2>/dev/null || true
+    fi
+  done
+  for pid in "${LAUNCH_PIDS[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
 }
 trap cleanup EXIT
 
@@ -118,10 +128,20 @@ if [[ "$ROBOT_ROS2" == "true" || "$CAMERA_ROS2" == "true" ]]; then
   [[ -n "$SIM" && -z "$DRY" && "$ROBOT_ROS2" == "true" ]] && TWIN=true
   DRY_ARM=false
   [[ -n "$DRY" ]] && DRY_ARM=true
-  echo "Starting the ROS 2 nodes (arm: $ROBOT_ROS2, cameras: $CAMERA_ROS2, digital twin: $TWIN)..."
-  setsid python "$(command -v ros2)" launch launch/strix_vla.launch.py \
-    arm:="$ROBOT_ROS2" cameras:="$CAMERA_ROS2" digital_twin:="$TWIN" dry_run:="$DRY_ARM" &
-  LAUNCH_PID=$!
+  # start_launch ARM CAMERAS: one ros2 launch of strix_vla.launch.py, in a session of its own.
+  start_launch() {
+    setsid python "$(command -v ros2)" launch launch/strix_vla.launch.py \
+      arm:="$1" cameras:="$2" digital_twin:="$TWIN" dry_run:="$DRY_ARM" &
+    LAUNCH_PIDS+=("$!")
+  }
+  if [[ "$CAMERA_ROS2" == "true" ]]; then
+    echo "Starting the camera nodes..."
+    start_launch false true
+  fi
+  if [[ "$ROBOT_ROS2" == "true" ]]; then
+    echo "Starting the arm nodes (digital twin: $TWIN)..."
+    start_launch true false
+  fi
 fi
 
 python -m vla_pipeline.main "$@"

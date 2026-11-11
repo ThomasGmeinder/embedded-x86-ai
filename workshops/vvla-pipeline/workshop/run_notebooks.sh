@@ -113,6 +113,8 @@ set -e -u
 # Packages, the venv path, and the controller plugin. A pull does not re-run
 # bootstrap, and without the plugin /joint_states never arrives.
 VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/ensure_ros2_control.sh"
+# The digital-twin notebook's microphone needs the voice models and llama-server.
+VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/ensure_voice.sh"
 
 # --- 2. Ensure pip, then install ONLY what's missing ------------------------
 "$PY" -m pip --version >/dev/null 2>&1 || {
