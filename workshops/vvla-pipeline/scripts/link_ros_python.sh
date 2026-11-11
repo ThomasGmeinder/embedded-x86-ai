@@ -40,7 +40,7 @@ purelib="$("$PY" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
 mkdir -p "$purelib"
 printf '%s\n' "$ros_py" > "${purelib}/ros_jazzy.pth"
 
-if ! env -u PYTHONPATH "$PY" -c 'from control_msgs.action import FollowJointTrajectory'; then
+if ! env -u PYTHONPATH "$PY" -c 'import xacro; from control_msgs.action import FollowJointTrajectory'; then
   echo "link_ros_python: wrote ${purelib}/ros_jazzy.pth -> ${ros_py}" >&2
   echo "but this venv still cannot import control_msgs. Its sys.path is:" >&2
   env -u PYTHONPATH "$PY" -c 'import sys; print("\n".join(sys.path))' >&2
