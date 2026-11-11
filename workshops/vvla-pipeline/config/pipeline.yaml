@@ -28,7 +28,7 @@ gemma4-e4b-it:
   hsa_override_gfx_version: "11.5.0"  # Strix Point; "11.5.1" is Strix Halo
   vad_model: models/silero_vad.onnx
   window_s: 6
-  hop_s: 1
+  hop_s: 2                    # first clip waits 2 s so a short command fits; do not wait for silence
   min_dbfs: -35
   vad_threshold: 0.5
   min_voice_ms: 100
