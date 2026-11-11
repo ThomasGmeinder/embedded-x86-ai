@@ -143,7 +143,7 @@ print(KernelSpecManager().get_kernel_spec(sys.argv[1]).resource_dir)
 PYEOF
 )"
 KERNEL_JSON="${KERNEL_DIR}/kernel.json"
-VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/link_ros_python.sh"
+VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/ensure_ros2_control.sh"
 say "Baking runtime env into ${KERNEL_JSON}"
 
 # Capture the env in a subshell that sources the same scripts run_notebooks.sh

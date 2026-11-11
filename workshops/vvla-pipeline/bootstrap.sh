@@ -400,23 +400,6 @@ if [[ ! -f /opt/ros/jazzy/setup.bash ]]; then
       || die "ROS 2 Jazzy install failed - check packages.ros.org availability for ${UBUNTU_CODENAME}."
   fi
 fi
-if [[ "$SKIP_APT" -eq 0 && -f /opt/ros/jazzy/setup.bash ]]; then
-  log "Installing ros2_control, the controllers, xacro and the ROS build tools (sudo)"
-  # control_msgs and controller_manager_msgs are what ros2_control_arm.py
-  # imports. ros-jazzy-desktop does not install them.
-  sudo apt install -y \
-    ros-jazzy-ros2-control ros-jazzy-ros2-controllers \
-    ros-jazzy-control-msgs ros-jazzy-controller-manager-msgs \
-    ros-jazzy-xacro ros-dev-tools \
-    || die "ros2_control install failed - check packages.ros.org availability for ${UBUNTU_CODENAME}."
-  # rclpy's extension loads librcl*.so. Those are not on the default linker
-  # path, and LD_LIBRARY_PATH set inside Python is too late. Register the
-  # directory once so every process, including a Jupyter kernel, can load it.
-  if [[ -d /opt/ros/jazzy/lib ]]; then
-    echo "/opt/ros/jazzy/lib" | sudo tee /etc/ld.so.conf.d/ros-jazzy.conf >/dev/null
-    sudo ldconfig
-  fi
-fi
 
 # -----------------------------------------------------------------------------
 # 2. uv + venv (in repo root, layered over system/ROS python)
@@ -454,8 +437,8 @@ if [[ ! -x "${VENV_DIR}/bin/pip" ]]; then
 fi
 # Keep colcon (if this repo lands in a ROS workspace) out of the venv.
 touch "${VENV_DIR}/COLCON_IGNORE" "${VENV_DIR}/AMENT_IGNORE"
-# Jazzy's Python tree is not on the venv path. See scripts/link_ros_python.sh.
-VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/link_ros_python.sh"
+# Packages, linker path, venv .pth, and the topic_based_ros2_control plugin.
+SKIP_APT="$SKIP_APT" VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/ensure_ros2_control.sh"
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
 
@@ -645,31 +628,6 @@ uv pip uninstall opencv-python opencv-python-headless \
                  opencv-contrib-python opencv-contrib-python-headless || true
 uv pip install 'opencv-contrib-python>=4.10' 'numpy<2' \
   || warn "GUI OpenCV install failed - cv2.imshow windows (yolo/mediapipe demos) may not open."
-
-# -----------------------------------------------------------------------------
-# 4e. ros2_control hardware side: topic_based_ros2_control into ros_ws/
-# -----------------------------------------------------------------------------
-# The venv stays out of this build: ament's CMake runs package.xml through
-# catkin_pkg, which only the system Python that ROS is built for has.
-log "Building topic_based_ros2_control ${TOPIC_BRIDGE_REF} into ros_ws/"
-if [[ ! -d "${ROS_WS}/src/topic_based_ros2_control/.git" ]]; then
-  git clone "$TOPIC_BRIDGE_REPO" "${ROS_WS}/src/topic_based_ros2_control"
-fi
-git -C "${ROS_WS}/src/topic_based_ros2_control" fetch --tags --quiet
-git -C "${ROS_WS}/src/topic_based_ros2_control" checkout --quiet --force "$TOPIC_BRIDGE_REF"
-for patch in "${REPO_ROOT}"/patches/topic_based_ros2_control/*.patch; do
-  git -C "${ROS_WS}/src/topic_based_ros2_control" apply "$patch" \
-    || die "Could not apply $(basename "$patch") to topic_based_ros2_control ${TOPIC_BRIDGE_REF}."
-done
-(
-  deactivate
-  set +u
-  # shellcheck disable=SC1091
-  source /opt/ros/jazzy/setup.bash
-  set -u
-  cd "$ROS_WS"
-  colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DPython3_EXECUTABLE=/usr/bin/python3
-) || die "topic_based_ros2_control build failed - see ${ROS_WS}/log/latest_build."
 
 # -----------------------------------------------------------------------------
 # 5. Models

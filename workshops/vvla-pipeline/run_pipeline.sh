@@ -28,7 +28,7 @@ cd "$REPO_ROOT"
 [[ -f /opt/ros/jazzy/setup.bash ]] && source /opt/ros/jazzy/setup.bash
 
 [[ -f .venv/bin/activate ]] || { echo "No .venv - run ./bootstrap.sh first." >&2; exit 1; }
-VENV_DIR="${REPO_ROOT}/.venv" "${REPO_ROOT}/scripts/link_ros_python.sh"
+VENV_DIR="${REPO_ROOT}/.venv" "${REPO_ROOT}/scripts/ensure_ros2_control.sh"
 source .venv/bin/activate
 
 # Ryzen AI NPU runtime libs (LD_LIBRARY_PATH for the VitisAI EP).
