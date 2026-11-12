@@ -174,4 +174,4 @@ if [[ "$ROBOT_ROS2" == "true" || "$CAMERA_ROS2" == "true" ]]; then
   fi
 fi
 
-python -m vla_pipeline.main "$@"
+python -m so101_sim.bringup pipeline "$@"

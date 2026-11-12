@@ -331,8 +331,8 @@ def build_context(cfg: dict, args) -> PipelineContext:
     except Exception as e:
         logger.warning("Arm camera unavailable: %s", e)
 
-    # The arm and camera clients above have already started DDS. A Vitis AI
-    # session opened first leaves LARGE_DATA unable to discover peers.
+    # The DDS participant already exists: so101_sim.bringup created it before
+    # this process reached a Vitis AI session.
     device = args.device
     try:
         from vla_pipeline.vision.yolo_pose_npu import PoseEstimator

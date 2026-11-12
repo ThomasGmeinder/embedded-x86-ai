@@ -219,12 +219,28 @@ kernel_exists() { "$PY" -c "$_KERNEL_CHECK" "$KERNEL_NAME" 2>/dev/null; }
 if [[ "$FORCE_KERNEL" -eq 1 ]]; then
   "$PY" -m jupyter kernelspec uninstall -y "$KERNEL_NAME" >/dev/null 2>&1 || true
 fi
-if [[ "$FORCE_KERNEL" -eq 0 ]] && kernel_exists; then
-  say "Kernel '${KERNEL_NAME}' already registered"
-else
+if [[ "$FORCE_KERNEL" -eq 1 ]] || ! kernel_exists; then
   say "Registering kernel '${KERNEL_NAME}' (${KERNEL_DISPLAY})"
   "$PY" -m ipykernel install --user --name "$KERNEL_NAME" --display-name "$KERNEL_DISPLAY"
 fi
+# Both entry scripts run python -m so101_sim.bringup. This kernel does it
+# before any cell, so a Vitis session cannot start first. The installed
+# spec's env (ROS, NPU libs) stays; only the command changes.
+KERNEL_JSON="${HOME}/.local/share/jupyter/kernels/${KERNEL_NAME}/kernel.json"
+"$PY" - "$KERNEL_JSON" <<'PY'
+import json, sys
+path = sys.argv[1]
+spec = json.load(open(path))
+argv = spec["argv"]
+i = argv.index("-m")
+rest = argv[i + 2:]
+if rest[:1] == ["kernel"]:
+    rest = rest[1:]
+spec["argv"] = [*argv[: i + 1], "so101_sim.bringup", "kernel", *rest]
+with open(path, "w") as fh:
+    json.dump(spec, fh, indent=1)
+    fh.write("\n")
+PY
 
 # --- 4. Quick sanity line: what will this kernel actually see? --------------
 "$PY" - <<'PYEOF'
