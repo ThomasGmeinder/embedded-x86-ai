@@ -16,6 +16,7 @@ real ``strix_vla.launch.py`` runs unchanged.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -24,6 +25,7 @@ import sys
 import pytest
 
 from notebook_harness import PIPE_ROOT
+from so101_sim.control import BRING_UP_S
 from twin_ros_rig import TEST_DOMAIN_ID
 
 pytestmark = [pytest.mark.sim, pytest.mark.hw, pytest.mark.timeout(300)]
@@ -47,14 +49,37 @@ def broken_xacro(tmp_path):
     return tmp_path / "broken_xacro"
 
 
-def _env(broken_path=None):
+MARKER_VAR = "LAUNCH_SPLIT_TEST_MARKER"
+
+
+def _env(broken_path=None, marker=None):
     env = {**os.environ, "ROS_DOMAIN_ID": str(TEST_DOMAIN_ID), "PYTHONUNBUFFERED": "1"}
     if broken_path is not None:
         env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(broken_path), os.environ.get("PYTHONPATH")]))
+    if marker is not None:
+        env[MARKER_VAR] = marker  # every process the launch starts inherits it
     return env
 
 
-def _launch(arm: bool, cameras: bool, log_path, broken_path=None):
+def _processes_marked(marker: str) -> dict[int, str]:
+    """``{pid: command line}`` of the live processes started with ``marker`` in their environment."""
+    found = {}
+    needle = f"{MARKER_VAR}={marker}".encode()
+    for entry in os.scandir("/proc"):
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            with open(f"{entry.path}/environ", "rb") as f:
+                if needle not in f.read().split(b"\0"):
+                    continue
+            with open(f"{entry.path}/cmdline", "rb") as f:
+                found[int(entry.name)] = f.read().replace(b"\0", b" ").decode(errors="replace").strip()
+        except OSError:
+            continue  # the process ended while it was read
+    return found
+
+
+def _launch(arm: bool, cameras: bool, log_path, broken_path=None, marker=None):
     """One ``ros2 launch`` of strix_vla.launch.py, as run_pipeline.sh starts it: its own session."""
     ros2 = shutil.which("ros2")
     assert ros2, "ROS 2 is not sourced - run this through ./run_sim_tests.sh"
@@ -62,7 +87,7 @@ def _launch(arm: bool, cameras: bool, log_path, broken_path=None):
     cmd = ["setsid", sys.executable, ros2, "launch", "launch/strix_vla.launch.py",
            f"arm:={str(arm).lower()}", f"cameras:={str(cameras).lower()}", "dry_run:=true"]
     child = popen_spawn.PopenSpawn(
-        cmd, cwd=str(PIPE_ROOT), env=_env(broken_path), encoding="utf-8",
+        cmd, cwd=str(PIPE_ROOT), env=_env(broken_path, marker), encoding="utf-8",
         codec_errors="replace", timeout=None,
     )
     child.logfile_read = open(log_path, "w")
@@ -90,6 +115,67 @@ def test_an_arm_launch_with_a_missing_xacro_exits_with_an_error(tmp_path, broken
         rc = _stop(arm)
     assert rc != 0, f"the arm launch should fail, not exit {rc} (log: {log})"
     assert "simulated missing xacro" in log.read_text(), f"the failure is not in the log: {log}"
+
+
+def test_a_failing_arm_launch_leaves_no_arm_server_running(tmp_path, broken_xacro):
+    """The launch ends, and with it everything it started: a server left behind would
+    keep the serial bus, and the next start could not connect to the arm."""
+    log = tmp_path / "arm.log"
+    marker = f"{os.getpid()}-{tmp_path.name}"
+    arm = _launch(arm=True, cameras=False, log_path=log, broken_path=broken_xacro, marker=marker)
+    left = {}
+    try:
+        arm.expect(pexpect.EOF, timeout=LAUNCH_EXIT_S)
+        rc = _stop(arm)
+        left = _processes_marked(marker)
+    finally:
+        for pid in _processes_marked(marker):
+            os.kill(pid, signal.SIGKILL)  # never leave one behind, whatever the result
+    # The launch must have failed the way this test makes it fail, not for another reason.
+    assert rc != 0 and "simulated missing xacro" in log.read_text(), f"the arm launch did not fail on the missing xacro (log: {log})"
+    assert not left, f"the failed arm launch left processes running: {left} (log: {log})"
+
+
+def test_the_pipeline_launch_is_not_started_with_sigint_ignored():
+    """bash ignores SIGINT on a background job. run_pipeline.sh resets that before
+    exec, so the launch can shut its nodes down when the script is killed."""
+    line = next(
+        line.strip() for line in (PIPE_ROOT / "run_pipeline.sh").read_text().splitlines()
+        if line.strip().startswith("setsid python -c")
+    )
+    wrapper = line.removeprefix("setsid ").rstrip("\\").strip()
+    # The reporter starts after the wrapper's exec, so it sees the disposition the
+    # launch will see. bash's & is what ignores SIGINT; wait returns the reporter's status.
+    reporter = (
+        "import sys; "
+        "mask = int(open('/proc/self/status').read().split('SigIgn:\\t')[1].split()[0], 16); "
+        "sys.exit(0 if not mask & 2 else 3)"
+    )
+    proc = subprocess.run(
+        ["bash", "-c", f"{wrapper} python -c {shlex.quote(reporter)} & wait $!"],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+
+
+def test_an_arm_launch_brings_up_the_controllers_on_the_arm_server(tmp_path):
+    """The controllers start before the arm server. Their hardware side waits for the
+    server's first joint state, so the arm controller still comes up active."""
+    log = tmp_path / "arm.log"
+    marker = f"{os.getpid()}-{tmp_path.name}"
+    arm = _launch(arm=True, cameras=False, log_path=log, marker=marker)
+    try:
+        # The stack's own bring-up budget: the server's first state, then the controllers.
+        arm.expect(r"Configured and activated arm_controller", timeout=BRING_UP_S)
+        _stop(arm)
+        arm.logfile_read.flush()
+        text = log.read_text()
+    finally:
+        for pid in _processes_marked(marker):
+            os.kill(pid, signal.SIGKILL)  # never leave one behind, whatever the result
+    # SIGINT is a stop, not a crash: the server releases the bus and exits 0.
+    assert "so101_server_dry" in text and "process has finished cleanly" in text, text
+    assert "process has died" not in text, text
 
 
 def test_a_failing_arm_launch_does_not_end_the_camera_launch(tmp_path, broken_xacro):

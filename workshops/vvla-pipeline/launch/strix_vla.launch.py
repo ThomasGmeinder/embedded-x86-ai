@@ -68,12 +68,18 @@ def _arm(context):
         cmd = [PY, "-m", "vla_pipeline.robot.robot_node", "--server", *(["--dry-run"] if dry_run else []),
                "--config", config]
         name = "so101_server_dry" if dry_run else "so101_server"
+    # The controllers' launch comes first. It builds the robot description, which
+    # is what raises when xacro is missing. When an action raises, ros2 launch shuts
+    # down, but a process started in the same step may still be starting and is
+    # never told to stop. The arm server left behind would keep the serial bus.
+    # With the controllers first, a failure happens before the arm server exists.
+    # The hardware side waits SERVER_START_S for the server's first joint state.
     return [
-        ExecuteProcess(cmd=[*cmd, *remaps], cwd=str(REPO_ROOT), output="screen", name=name),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(LAUNCH_FILE)),
             launch_arguments={"config": config, "stack": "pipeline"}.items(),
         ),
+        ExecuteProcess(cmd=[*cmd, *remaps], cwd=str(REPO_ROOT), output="screen", name=name),
     ]
 
 

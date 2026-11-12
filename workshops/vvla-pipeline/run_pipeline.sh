@@ -91,10 +91,13 @@ CAMERA_ROS2="${USE_ROS2##* }"
 
 LAUNCH_PIDS=()
 cleanup() {
-  # Each launch runs in a session of its own: SIGINT to its process group reaches
-  # every node, so the arm server parks and each node exits. The launch itself,
-  # started as a background job with SIGINT ignored, ends when they have. Both
-  # launches get the signal first, then each is waited for.
+  # Each launch runs in a session of its own. SIGINT to its process group makes
+  # the launch shut its nodes down (and kill any that do not stop), so the arm
+  # server parks and the camera is released. A further Ctrl-C must not cut
+  # this short: the camera driver can be inside a call that SIGINT does not
+  # interrupt, and the launch then escalates to SIGKILL. Both launches get
+  # the signal first, then each is waited for.
+  trap '' INT
   local pid
   for pid in "${LAUNCH_PIDS[@]}"; do
     if kill -0 "$pid" 2>/dev/null; then
@@ -149,8 +152,15 @@ if [[ "$ROBOT_ROS2" == "true" || "$CAMERA_ROS2" == "true" ]]; then
   DRY_ARM=false
   [[ -n "$DRY" ]] && DRY_ARM=true
   # start_launch ARM CAMERAS: one ros2 launch of strix_vla.launch.py, in a session of its own.
+  # A background job in this script inherits SIGINT ignored. The launch would
+  # then never run its shutdown, which is what escalates from SIGINT to
+  # SIGKILL, and a node that had not installed a handler would keep the camera
+  # or the serial bus after this script exits. Python's signal module refuses
+  # to change SIGINT when the interpreter inherited it ignored, so this uses
+  # the C library, then replaces itself with the launch.
   start_launch() {
-    setsid python "$(command -v ros2)" launch launch/strix_vla.launch.py \
+    setsid python -c 'import ctypes, os, signal, sys; libc = ctypes.CDLL(None); libc.signal(signal.SIGINT, 0); libc.signal(signal.SIGQUIT, 0); os.execvp(sys.argv[1], sys.argv[1:])' \
+      python "$(command -v ros2)" launch launch/strix_vla.launch.py \
       arm:="$1" cameras:="$2" digital_twin:="$TWIN" dry_run:="$DRY_ARM" &
     LAUNCH_PIDS+=("$!")
   }
