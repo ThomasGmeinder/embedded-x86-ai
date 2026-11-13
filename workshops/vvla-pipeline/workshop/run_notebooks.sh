@@ -338,8 +338,10 @@ start_digital_twin() {
 }
 
 # --test: the notebooks, in this environment. Twin and NPU tests are ../run_sim_tests.sh.
+# The docs tests start their own twin on ROS domain 93. This shell's
+# ROS_DOMAIN_ID is often 93 too, so starting the launch here makes those
+# tests see a twin that is already running.
 if [[ "$TEST_MODE" -eq 1 ]]; then
-  start_digital_twin
   if [[ -n "$LLAMA_PID" ]]; then
     # The server logs "listening on http://..." once its model is loaded. tail
     # follows the log from where this server's lines start and ends when the

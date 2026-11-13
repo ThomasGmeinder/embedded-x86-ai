@@ -39,16 +39,54 @@ BODY_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wri
 
 
 def start_pipeline_launches(log) -> list:
-    """The two ``python -m so101_sim.stack`` commands ``run_notebooks.sh`` runs."""
+    """The two ``python -m so101_sim.stack`` commands ``run_notebooks.sh`` runs.
+
+    The child inherits this process's ROS domain. The call returns when the
+    twin node logs that it is publishing, which is after it holds the domain lock.
+    """
     from so101_sim.stack import command
 
-    procs = []
-    for arm, cameras in ((False, True), (True, False)):
-        procs.append(subprocess.Popen(
-            command(arm=arm, cameras=cameras, digital_twin=True, dry_run=False),
-            stdout=log, stderr=subprocess.STDOUT,
-        ))
-    return procs
+    join_test_domain()
+    os.environ["PYTHONUNBUFFERED"] = "1"
+    camera = subprocess.Popen(
+        command(arm=False, cameras=True, digital_twin=True, dry_run=False),
+        stdout=log, stderr=subprocess.STDOUT,
+    )
+    arm = subprocess.Popen(
+        command(arm=True, cameras=False, digital_twin=True, dry_run=False),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )
+    _wait_until_publishing(arm, log)
+    return [camera, arm]
+
+
+def _wait_until_publishing(arm_launch: subprocess.Popen, log) -> None:
+    """Block on the arm launch's stdout until the twin logs ``Ready - cmd:`` or the pipe closes."""
+    ready = False
+    assert arm_launch.stdout is not None
+    for line in arm_launch.stdout:
+        log.write(line)
+        log.flush()
+        if b"Ready - cmd:" in line:
+            ready = True
+            break
+    if not ready:
+        name = getattr(log, "name", None)
+        text = Path(name).read_text(errors="replace")[-2000:] if name else ""
+        raise RuntimeError(f"the digital twin exited before it was publishing:\n{text}")
+    threading.Thread(
+        target=_keep_log, args=(arm_launch.stdout, log), daemon=True, name="twin-arm-log",
+    ).start()
+
+
+def _keep_log(stream, log) -> None:
+    """Copy the rest of the arm launch's output into the test log."""
+    try:
+        for line in stream:
+            log.write(line)
+            log.flush()
+    except Exception:
+        return
 
 
 def stop_pipeline_launches(procs) -> None:
