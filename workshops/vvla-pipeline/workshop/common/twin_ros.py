@@ -27,7 +27,6 @@ fingers hold them) and ``/sim/reset_scene``.
 from __future__ import annotations
 
 import atexit
-import json
 import logging
 import os
 import signal
@@ -40,7 +39,8 @@ from pathlib import Path
 
 from common.ros_helpers import Spinner, from_image_msg
 from ros.arm_client import Ros2ArmClient
-from so101_sim.control import HARDWARE_COMMANDS, HARDWARE_STATES, start_controllers, stop_controllers
+from so101_sim.control import HARDWARE_STATES, stop_controllers
+from so101_sim.stack import popen_pipeline_twin_arm
 from so101_sim.node import DIAGNOSTICS_TOPIC, GRIPPER_STATUS, PROPS_STATUS, VIEW_TOPIC, WORLD_FRAME
 
 logger = logging.getLogger(__name__)
@@ -244,8 +244,7 @@ def _tail(path: Path, lines: int = 25) -> str:
 
 
 class TwinSession:
-    """One ``so101_sim.node --notebook-twin`` and its controllers, owned by
-    this process, and their clients.
+    """The pipeline's digital-twin arm launch, owned by this process, and its clients.
 
     ``arm`` (:class:`~ros.arm_client.Ros2ArmClient`), ``armcam`` and ``view``
     (:class:`TwinCamera`) and ``scene`` (:class:`TwinScene`) are ready when
@@ -265,9 +264,7 @@ class TwinSession:
     ):
         from common.config import DEFAULT_CONFIG
 
-        self.domain_id = twin_domain_id() if domain_id is None else int(domain_id)
         self.config_path = Path(config_path or DEFAULT_CONFIG)
-        r = cfg["robot"]
         self._arm_topic = (cfg.get("cameras") or {}).get("arm", {}).get(
             "topic", "/cameras/arm/image_raw"
         )
@@ -276,37 +273,27 @@ class TwinSession:
         self._closed = False
         self._scene_file = None
 
-        use_private_domain(self.domain_id)
+        # Same ROS domain as run_pipeline.sh. Do not open a second one.
+        import rclpy
+        if domain_id is not None:
+            self.domain_id = int(domain_id)
+        elif rclpy.ok():
+            self.domain_id = int(rclpy.get_default_context().get_domain_id())
+        else:
+            self.domain_id = int(os.environ.get("ROS_DOMAIN_ID", "0"))
         self._refuse_if_owned()
         self._probe = Spinner("twin_session")
 
-        cmd = [
-            sys.executable, "-m", "so101_sim.node",
-            "--config", str(self.config_path), "--stack", "workshop",
-            "--sim-cameras", "arm", "--notebook-twin",
-        ]
-        if scene is not None:
-            fd, name = tempfile.mkstemp(prefix="twin_scene_", suffix=".json")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(scene, f)
-            self._scene_file = Path(name)
-            cmd += ["--scene", name]
-        cmd += ["--ros-args", "-r", f"{r['command_topic']}:={HARDWARE_COMMANDS}",
-                "-r", f"{r['state_topic']}:={HARDWARE_STATES}"]
         fd, log_name = tempfile.mkstemp(prefix="twin_node_", suffix=".log")
         self.log_path = Path(log_name)
+        self.controllers_log_path = self.log_path
         with os.fdopen(fd, "w") as log:
-            # Its own session: Jupyter's stop button sends SIGINT to the kernel's
-            # whole process group. The node still exits with this process.
-            self._proc = subprocess.Popen(
-                cmd, stdout=log, stderr=subprocess.STDOUT,
-                env={**os.environ, "PYTHONUNBUFFERED": "1"},  # the log is current when a test copies it
-                start_new_session=True,
+            # The same command as run_pipeline.sh --digital-twin for the arm.
+            self._proc = popen_pipeline_twin_arm(
+                log=log,
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
             )
-        fd, log_name = tempfile.mkstemp(prefix="twin_controllers_", suffix=".log")
-        self.controllers_log_path = Path(log_name)
-        with os.fdopen(fd, "w") as log:
-            self._controllers = start_controllers(self.config_path, "workshop", log=log)
+        self._controllers = self._proc
         atexit.register(self.close)
         try:
             self._wait_ready(ready_timeout_s, cfg)

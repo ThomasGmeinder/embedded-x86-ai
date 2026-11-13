@@ -81,11 +81,20 @@ def start_controllers(config_path, stack: str, gripper: str = "forward", log=Non
     ros2 = shutil.which("ros2")
     if ros2 is None:
         raise RuntimeError("ros2 is not on PATH: source /opt/ros/jazzy/setup.bash first")
+    # The arm server already publishing in this process is on the rclpy context's
+    # domain. A child reads ROS_DOMAIN_ID, which can lag that context.
+    env = os.environ.copy()
+    try:
+        import rclpy
+    except ImportError:
+        rclpy = None
+    if rclpy is not None and rclpy.ok():
+        env["ROS_DOMAIN_ID"] = str(rclpy.get_default_context().get_domain_id())
     return subprocess.Popen(
         [sys.executable, "-m", "so101_sim.parent_death", sys.executable, ros2, "launch", str(LAUNCH_FILE),
          f"config:={config_path}", f"stack:={stack}", f"gripper:={gripper}"],
         cwd=str(REPO_ROOT), stdout=log, stderr=subprocess.STDOUT if log is not None else None,
-        start_new_session=True,
+        start_new_session=True, env=env,
     )
 
 

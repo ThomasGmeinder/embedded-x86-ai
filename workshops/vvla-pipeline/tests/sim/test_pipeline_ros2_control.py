@@ -62,13 +62,17 @@ def twin(pipeline_cfg):
         arm = Ros2ArmClient(cfg)
         yield world, arm
     finally:
-        if arm is not None:
-            arm.close()
-        stop_controllers(launch)
-        host.close()
-        for close in reversed(closers):
-            close()
-        lock.close()
+        try:
+            if arm is not None:
+                arm.close()
+        finally:
+            try:
+                stop_controllers(launch)
+            finally:
+                host.close()
+                for close in reversed(closers):
+                    close()
+                lock.close()
 
 
 @pytest.fixture

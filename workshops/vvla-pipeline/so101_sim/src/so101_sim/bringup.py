@@ -13,9 +13,8 @@ peers when a Vitis AI session is opened first, and ``rclpy.init`` alone does
 not create a participant. This module creates one, then runs the pipeline or
 the notebook kernel.
 
-The notebook kernel is pinned to the twin's domain (``TWIN_ROS_DOMAIN_ID``,
-else 87) with discovery kept on this machine. The pipeline keeps the domain
-its launches are already using.
+The notebook kernel and the pipeline both create the participant on the
+process's current ROS domain. Neither pins the private twin domain.
 """
 
 from __future__ import annotations
@@ -76,9 +75,7 @@ def main() -> None:
         raise SystemExit("usage: python -m so101_sim.bringup pipeline|kernel [args...]")
     mode, rest = sys.argv[1], sys.argv[2:]
     if mode == "kernel":
-        from so101_sim.bringup import twin_domain_id
-
-        start(twin_domain_id())
+        start(None)
         sys.argv = ["ipykernel_launcher", *rest]
         from ipykernel.kernelapp import IPKernelApp
 

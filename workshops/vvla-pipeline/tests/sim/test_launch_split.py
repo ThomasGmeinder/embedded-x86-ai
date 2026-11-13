@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import os
 import shlex
-import shutil
 import signal
 import subprocess
 import sys
@@ -80,12 +79,9 @@ def _processes_marked(marker: str) -> dict[int, str]:
 
 
 def _launch(arm: bool, cameras: bool, log_path, broken_path=None, marker=None):
-    """One ``ros2 launch`` of strix_vla.launch.py, as run_pipeline.sh starts it: its own session."""
-    ros2 = shutil.which("ros2")
-    assert ros2, "ROS 2 is not sourced - run this through ./run_sim_tests.sh"
-    # setsid makes the launch a process-group leader, so _stop can SIGINT all of it.
-    cmd = ["setsid", sys.executable, ros2, "launch", "launch/strix_vla.launch.py",
-           f"arm:={str(arm).lower()}", f"cameras:={str(cameras).lower()}", "dry_run:=true"]
+    """One ``so101_sim.stack`` launch, as ``run_pipeline.sh`` starts it."""
+    cmd = [sys.executable, "-m", "so101_sim.stack",
+           "--arm", str(arm).lower(), "--cameras", str(cameras).lower(), "--dry-run", "true"]
     child = popen_spawn.PopenSpawn(
         cmd, cwd=str(PIPE_ROOT), env=_env(broken_path, marker), encoding="utf-8",
         codec_errors="replace", timeout=None,
@@ -99,11 +95,15 @@ def _stop(child) -> int:
     if child.proc.poll() is None:
         os.killpg(child.pid, signal.SIGINT)
     try:
-        return child.proc.wait(timeout=STOP_S)
+        rc = child.proc.wait(timeout=STOP_S)
     except subprocess.TimeoutExpired:
         os.killpg(child.pid, signal.SIGKILL)
         child.proc.wait()
         pytest.fail(f"launch did not stop within {STOP_S:.0f} s of SIGINT (log: {child.logfile_read.name})")
+    # The process has exited. Read the rest of its output before the log is judged.
+    if not child.flag_eof:
+        child.expect(pexpect.EOF, timeout=STOP_S)
+    return rc
 
 
 def test_an_arm_launch_with_a_missing_xacro_exits_with_an_error(tmp_path, broken_xacro):
@@ -137,22 +137,21 @@ def test_a_failing_arm_launch_leaves_no_arm_server_running(tmp_path, broken_xacr
 
 
 def test_the_pipeline_launch_is_not_started_with_sigint_ignored():
-    """bash ignores SIGINT on a background job. run_pipeline.sh resets that before
-    exec, so the launch can shut its nodes down when the script is killed."""
-    line = next(
-        line.strip() for line in (PIPE_ROOT / "run_pipeline.sh").read_text().splitlines()
-        if line.strip().startswith("setsid python -c")
-    )
-    wrapper = line.removeprefix("setsid ").rstrip("\\").strip()
-    # The reporter starts after the wrapper's exec, so it sees the disposition the
-    # launch will see. bash's & is what ignores SIGINT; wait returns the reporter's status.
+    """bash ignores SIGINT on a background job. ``so101_sim.stack`` clears that
+    before exec, which is how ``run_pipeline.sh`` starts the launch."""
+    script = (PIPE_ROOT / "run_pipeline.sh").read_text()
+    assert "python -m so101_sim.stack" in script
+    # The reporter is the background job. It runs the same reset the launch runs,
+    # then reads the signal mask the launch would inherit. wait returns its status.
     reporter = (
+        "from so101_sim.stack import accept_stop_signals; "
+        "accept_stop_signals(); "
         "import sys; "
         "mask = int(open('/proc/self/status').read().split('SigIgn:\\t')[1].split()[0], 16); "
         "sys.exit(0 if not mask & 2 else 3)"
     )
     proc = subprocess.run(
-        ["bash", "-c", f"{wrapper} python -c {shlex.quote(reporter)} & wait $!"],
+        ["bash", "-c", f"{sys.executable} -c {shlex.quote(reporter)} & wait $!"],
         capture_output=True, text=True, timeout=10,
     )
     assert proc.returncode == 0, proc.stderr or proc.stdout

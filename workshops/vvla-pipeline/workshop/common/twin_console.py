@@ -11,7 +11,7 @@ The same layout as the pipeline's ``run_pipeline.sh --digital-twin`` window
 (1200 x 1100)::
 
     +-----------------+-----------------+-----------------+
-    | mount: YOLOv26s-pose | mount: MediaPipe | arm: YOLOv26s-detect |   400 x 300 each
+    | mount pose           | mount hands      | arm detect           |   400 x 300 each
     +-----------------+-----------------+-----------------+
     |                                   | voice / intent  |
     |        3D view of the twin        | behavior log    |   800 x 800 + 400 x 800
@@ -38,6 +38,7 @@ import cv2
 import numpy as np
 
 from so101_sim import MOTOR_SHORT
+from so101_sim.tiles import DETECT, HANDS, POSE, VIEW, VOICE, with_processor
 
 from common.imaging import draw_skeleton
 from common.motion import GRIPPER_TORQUE_LIMIT
@@ -399,17 +400,14 @@ class TwinConsole:
             ok, frame = self.view.read()
             frame = frame if ok else None
         img = _fit(frame, VIEW_W, VIEW_H, "no 3D view").copy()
-        _title(img, "digital twin simulated in MuJoCo")
+        _title(img, VIEW)
         return img
 
     def _panel(self) -> np.ndarray:
         p = np.full((VIEW_H, PANEL_W, 3), 28, np.uint8)
         now = time.monotonic()
         y = 22
-        for line in (
-            "Voice: gemma4-e4b-it transcription",
-            "and intent-to-command translation",
-        ):
+        for line in VOICE:
             cv2.putText(p, line, (12, y), FONT, 0.45, WHITE, 1, cv2.LINE_AA)
             y += 18
         with self._lock:
@@ -479,8 +477,8 @@ class TwinConsole:
 
     def _webcam_tiles(self, frame) -> list[np.ndarray]:
         pose, hands = self._pose_tile(frame).copy(), self._hands_tile(frame).copy()
-        _title(pose, f"mount: YOLOv26s-pose [{provider_name(self._pose, 'off')}]")
-        _title(hands, f"mount: MediaPipe hands [{'CPU' if self._hands else 'off'}]")
+        _title(pose, with_processor(POSE, provider_name(self._pose, "off")))
+        _title(hands, with_processor(HANDS, "CPU" if self._hands else "off"))
         return [pose, hands]
 
     def webcam_tiles(self) -> np.ndarray:
@@ -493,7 +491,7 @@ class TwinConsole:
         mount_frame = self.mount.latest() if self.mount is not None else None
         armcam = self.armcam.latest() if self.armcam is not None else None
         detect = self._detect_tile(armcam).copy()
-        _title(detect, f"arm: YOLOv26s-detect [{provider_name(self._detector, 'off')}]")
+        _title(detect, with_processor(DETECT, provider_name(self._detector, "off")))
         tiles = [*self._webcam_tiles(mount_frame), detect]
         return np.vstack([np.hstack(tiles), np.hstack([self._view_tile(), self._panel()])])
 

@@ -122,10 +122,12 @@ def test_default_launch_is_unchanged(workshop_cfg, probe, no_twin):
         # LIVE_MIMIC_LIMITS caps the wrist at 84.4 in the server, so the 90 deg goal ends there
         assert 81.0 <= wrist <= 84.9, f"wrist settled at {wrist:.1f}"
     finally:
-        stop_controllers(controllers)
-        _stop(proc)
-        log.close()
-        Path(log.name).unlink(missing_ok=True)
+        try:
+            stop_controllers(controllers)
+        finally:
+            _stop(proc)
+            log.close()
+            Path(log.name).unlink(missing_ok=True)
 
 
 def test_grasp_moves_keep_the_grasp_envelope(twin):
@@ -174,7 +176,7 @@ def test_the_props_are_tf_frames_with_a_typed_status(twin, probe):
     from common.ros_helpers import Spinner
     from so101_sim.node import PROPS_SETTLED_TOPIC, WORLD_FRAME
 
-    scene = twin.scene.latest(after=time.time(), settled=True, timeout=None)
+    scene = twin.scene.latest(after=time.time(), settled=True)
     spin = Spinner("tf_probe")
     try:
         buffer = Buffer()
@@ -247,7 +249,7 @@ def test_the_twin_domain_is_private(workshop_cfg, no_twin):
         try:
             joints = session.arm.get_joints()
             assert joints["shoulder_lift"] == pytest.approx(-96.5, abs=2.0), joints
-            assert session.scene.latest(after=time.time(), timeout=None) is not None
+            assert session.scene.latest(after=time.time()) is not None
             other.stdin.close()
             out = other.stdout.read()
             other.wait()
@@ -265,7 +267,7 @@ def test_a_second_twin_on_the_domain_is_refused(workshop_cfg, twin):
 
     with pytest.raises(RuntimeError, match="already runs on ROS domain"):
         TwinSession(workshop_cfg)
-    assert twin.scene.latest(after=time.time(), timeout=None) is not None, "the first twin stopped"
+    assert twin.scene.latest(after=time.time()) is not None, "the first twin stopped"
     assert twin.armcam.read()[0]
 
 
@@ -318,13 +320,13 @@ def test_reset_service_restores_the_scene_and_parks_the_arm(workshop_cfg, probe,
     home = xml_poses(workshop_cfg)
     session = TwinSession(workshop_cfg, scene=moved)
     try:
-        start = session.scene.latest(timeout=None)
+        start = session.scene.latest()
         assert start["bodies"]["sports_ball"]["xyz"][:2] == pytest.approx([0.22, -0.04], abs=0.01)
         session.arm.go_to({"shoulder_pan": 30.0, "shoulder_lift": -40.0, "elbow_flex": 40.0})
         assert session.reset_scene()
         reset_at = time.time()
         joints = probe.joints(after=reset_at)
-        scene = session.scene.latest(after=reset_at, settled=True, timeout=None)
+        scene = session.scene.latest(after=reset_at, settled=True)
         for name, qpos in home.items():
             got = scene["bodies"][name]
             assert got["xyz"] == pytest.approx(list(qpos[:3]), abs=0.01), name

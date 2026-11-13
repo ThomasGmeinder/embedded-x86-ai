@@ -61,7 +61,7 @@ def rig(workshop_cfg, eyes, probe):
 
 def _settled_scene(rig) -> dict:
     """The first scene stamped now or later with every prop at rest."""
-    return rig.twin.scene.latest(after=time.time(), settled=True, timeout=None)
+    return rig.twin.scene.latest(after=time.time(), settled=True)
 
 
 def _hold_problem(scene) -> str | None:
@@ -121,7 +121,7 @@ def grip_log():
 def test_twin_pickup(rig, grip_log, record_property, text, body, spoken):
     """Held out in front, and held with a torque limit that cannot trip the
     gripper's overload protection (the in-process tests watch the hold itself)."""
-    start = rig.twin.scene.latest(timeout=None)
+    start = rig.twin.scene.latest()
     z0 = start["bodies"][body]["xyz"][2]
 
     rig.run(text)

@@ -20,11 +20,38 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 
 
+def test_the_notebook_starts_the_pipeline_launch():
+    """The notebook and ``run_pipeline.sh --digital-twin`` start the arm with one command."""
+    from so101_sim.stack import launch_argv, pipeline_twin_arm
+
+    text = " ".join(launch_argv(**pipeline_twin_arm()))
+    assert "strix_vla.launch.py" in text
+    assert "arm:=true" in text and "cameras:=false" in text
+    assert "digital_twin:=true" in text and "dry_run:=false" in text
+    assert "notebook_twin" not in text and "scene:=" not in text
+    script = (REPO / "run_pipeline.sh").read_text()
+    twin = (REPO / "workshop/common/twin_ros.py").read_text()
+    assert "python -m so101_sim.stack --pipeline-twin-arm" in script
+    assert "popen_pipeline_twin_arm(" in twin
+    assert "use_private_domain(self.domain_id)" not in twin
+    assert "notebook_twin" not in twin
+
+
 def test_both_entry_scripts_run_the_bringup_module():
     pipeline = (REPO / "run_pipeline.sh").read_text()
     notebooks = (REPO / "workshop" / "run_notebooks.sh").read_text()
     assert "python -m so101_sim.bringup pipeline" in pipeline
+    assert "python -m so101_sim.stack" in pipeline
     assert "so101_sim.bringup" in notebooks and '"kernel"' in notebooks
+
+
+def test_the_notebook_launch_uses_the_pipeline_domain_and_stack():
+    twin = (REPO / "workshop/common/twin_ros.py").read_text()
+    bringup = (REPO / "so101_sim/src/so101_sim/bringup.py").read_text()
+    assert "use_private_domain(self.domain_id)" not in twin
+    assert "notebook_twin=" not in twin
+    assert "start(twin_domain_id())" not in bringup
+    assert "start(None)" in bringup
 
 
 def test_the_detector_cell_does_not_start_dds_itself():

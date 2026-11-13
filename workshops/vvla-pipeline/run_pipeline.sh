@@ -151,17 +151,10 @@ if [[ "$ROBOT_ROS2" == "true" || "$CAMERA_ROS2" == "true" ]]; then
   [[ -n "$SIM" && -z "$DRY" && "$ROBOT_ROS2" == "true" ]] && TWIN=true
   DRY_ARM=false
   [[ -n "$DRY" ]] && DRY_ARM=true
-  # start_launch ARM CAMERAS: one ros2 launch of strix_vla.launch.py, in a session of its own.
-  # A background job in this script inherits SIGINT ignored. The launch would
-  # then never run its shutdown, which is what escalates from SIGINT to
-  # SIGKILL, and a node that had not installed a handler would keep the camera
-  # or the serial bus after this script exits. Python's signal module refuses
-  # to change SIGINT when the interpreter inherited it ignored, so this uses
-  # the C library, then replaces itself with the launch.
+  # start_launch ARM CAMERAS: so101_sim.stack, the same launch the notebook starts.
   start_launch() {
-    setsid python -c 'import ctypes, os, signal, sys; libc = ctypes.CDLL(None); libc.signal(signal.SIGINT, 0); libc.signal(signal.SIGQUIT, 0); os.execvp(sys.argv[1], sys.argv[1:])' \
-      python "$(command -v ros2)" launch launch/strix_vla.launch.py \
-      arm:="$1" cameras:="$2" digital_twin:="$TWIN" dry_run:="$DRY_ARM" &
+    python -m so101_sim.stack --arm "$1" --cameras "$2" \
+      --digital-twin "$TWIN" --dry-run "$DRY_ARM" &
     LAUNCH_PIDS+=("$!")
   }
   if [[ "$CAMERA_ROS2" == "true" ]]; then
@@ -170,7 +163,12 @@ if [[ "$ROBOT_ROS2" == "true" || "$CAMERA_ROS2" == "true" ]]; then
   fi
   if [[ "$ROBOT_ROS2" == "true" ]]; then
     echo "Starting the arm nodes (digital twin: $TWIN)..."
-    start_launch true false
+    if [[ "$TWIN" == "true" && "$DRY_ARM" == "false" ]]; then
+      python -m so101_sim.stack --pipeline-twin-arm &
+      LAUNCH_PIDS+=("$!")
+    else
+      start_launch true false
+    fi
   fi
 fi
 

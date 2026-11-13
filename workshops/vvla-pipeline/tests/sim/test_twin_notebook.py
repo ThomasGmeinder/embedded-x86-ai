@@ -455,7 +455,7 @@ def test_console_pickup(observers, kernel, text, body, spoken):
         console.type(text)
         record = await console.record(text)
         seen["record"] = record
-        seen["reading"] = await asyncio.to_thread(scene.reading, body, after=time.time(), timeout=None)
+        seen["reading"] = await asyncio.to_thread(scene.reading, body, after=time.time())
         await until(lambda: console.said(f"Got the {spoken}"), f"'Got the {spoken}'", console.watcher)
 
     namespace = kernel.run(script)
@@ -483,7 +483,7 @@ def test_console_reset(observers, kernel, workshop_cfg):
         assert first["grasped"], first
         console.type("drop it")
         seen["drop"] = await console.record("drop it")
-        seen["dropped"] = await asyncio.to_thread(scene.reading, "toothbrush", after=time.time(), timeout=None)
+        seen["dropped"] = await asyncio.to_thread(scene.reading, "toothbrush", after=time.time())
         seen["jaw"] = (await asyncio.to_thread(probe.joints, after=time.time()))["gripper"]
         console.click("reset")
         await until(lambda: console.said(RESET_LINE), "the reset line", console.watcher)
@@ -491,7 +491,7 @@ def test_console_reset(observers, kernel, workshop_cfg):
         # back, before the console said so: the server's next report shows it parked.
         said_at = time.time()
         seen["parked"] = await asyncio.to_thread(probe.joints, after=said_at)
-        seen["scene"] = await asyncio.to_thread(scene.latest, after=said_at, timeout=None, settled=True)
+        seen["scene"] = await asyncio.to_thread(scene.latest, after=said_at, settled=True)
         again = console.watcher.mark()
         console.type("pick up the toothbrush")
         seen["again"] = await console.record("pick up the toothbrush", since=again)

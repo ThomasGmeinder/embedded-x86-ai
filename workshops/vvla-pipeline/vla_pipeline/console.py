@@ -10,7 +10,7 @@
 Layout (1200 x 1100)::
 
     +-----------------+-----------------+-----------------+
-    | mount: YOLO pose| mount: MediaPipe| arm: YOLO detect|   400 x 300 each
+    | mount pose      | mount hands     | arm detect      |   400 x 300 each
     +-----------------+-----------------+-----------------+
     |                                   | voice / intent  |
     |        3D view of the twin        | behavior log    |   800 x 800 + 400 x 800
@@ -39,6 +39,7 @@ import cv2
 import numpy as np
 
 from so101_sim import MOTOR_SHORT
+from so101_sim.tiles import DETECT, HANDS, POSE, VIEW, VOICE, with_processor
 
 from vla_pipeline.robot.arm_interface import GRIPPER_TORQUE_LIMIT
 
@@ -47,7 +48,7 @@ logger = logging.getLogger(__name__)
 WINDOW = "SO-101 twin console"
 TILE_W, TILE_H = 400, 300
 VIEW_W, VIEW_H = 800, 800  # tall enough for the raised arm (wave)
-LOG_LINES = (VIEW_H - 230) // 20  # what fits between the header and the arm HUD
+LOG_LINES = (VIEW_H - 250) // 20  # what fits under the voice lines and above the arm HUD
 PANEL_W = 400
 # The reset button, in the composed image. The notebook's reset button calls
 # the same TwinConsole.reset_scene the ``r`` key calls.
@@ -449,14 +450,16 @@ class TwinConsole:
             frame = frame if ok else None
         label = "waiting for /sim/view" if self.view is not None else "no 3D view"
         img = _fit(frame, VIEW_W, VIEW_H, label).copy()
-        _title(img, "digital twin")
+        _title(img, VIEW)
         return img
 
     def _panel(self) -> np.ndarray:
         p = np.full((VIEW_H, PANEL_W, 3), 28, np.uint8)
         now = time.monotonic()
-        y = 28
-        cv2.putText(p, "VOICE", (12, y), FONT, 0.55, WHITE, 1, cv2.LINE_AA)
+        y = 22
+        for line in VOICE:
+            cv2.putText(p, line, (12, y), FONT, 0.45, WHITE, 1, cv2.LINE_AA)
+            y += 18
         with self._lock:
             level, speaking, level_t = self._level, self._speaking, self._level_t
             asr, log = self._asr_pending, list(self._log)
@@ -470,7 +473,7 @@ class TwinConsole:
             state, color = "transcribing...", YELLOW
         else:
             state, color = "listening", GRAY
-        cv2.putText(p, state, (90, y), FONT, 0.5, color, 1, cv2.LINE_AA)
+        cv2.putText(p, state, (12, y), FONT, 0.5, color, 1, cv2.LINE_AA)
         if self.voice == "mic":
             db = 20.0 * np.log10(max(level, 1e-6))
             _bar(p, 12, y + 12, PANEL_W - 24, 10, (db + 60.0) / 50.0, GREEN if speaking else DIM)
@@ -535,9 +538,9 @@ class TwinConsole:
             self._hands_tile(mount_frame).copy(),
             self._detect_tile(armcam).copy(),
         ]
-        _title(tiles[0], f"mount: YOLO pose [{provider_name(self.pose.obj) if self.pose else 'off'}]")
-        _title(tiles[1], f"mount: MediaPipe hands [{provider_name(self.hands.obj) if self.hands else 'off'}]")
-        _title(tiles[2], f"arm: YOLO detect [{provider_name(self.detector.obj) if self.detector else 'off'}]")
+        _title(tiles[0], with_processor(POSE, provider_name(self.pose.obj) if self.pose else "off"))
+        _title(tiles[1], with_processor(HANDS, provider_name(self.hands.obj) if self.hands else "off"))
+        _title(tiles[2], with_processor(DETECT, provider_name(self.detector.obj) if self.detector else "off"))
         top = np.hstack(tiles)
         bottom = np.hstack([self._view_tile(), self._panel()])
         return np.vstack([top, bottom])
