@@ -406,11 +406,11 @@ def main() -> None:
     args, ros_args = ap.parse_known_args()
     if args.scene and not args.notebook_twin:
         ap.error("--scene needs --notebook-twin")
-    if args.notebook_twin:
-        # rclpy turns the SIGTERM into a clean shutdown.
-        from so101_sim.parent_death import die_with_parent
+    # The launch is the parent. When it exits, this process must exit too and
+    # drop the domain lock. rclpy turns this SIGTERM into a clean shutdown.
+    from so101_sim.parent_death import die_with_parent
 
-        die_with_parent()
+    die_with_parent()
 
     from so101_sim.domain_lock import DomainTaken, acquire
 

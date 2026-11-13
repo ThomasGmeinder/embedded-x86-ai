@@ -18,7 +18,6 @@ import ctypes
 import os
 import shutil
 import signal
-import subprocess
 import sys
 from pathlib import Path
 
@@ -26,9 +25,15 @@ REPO = Path(__file__).resolve().parents[3]
 LAUNCH = REPO / "launch" / "strix_vla.launch.py"
 
 
-def pipeline_twin_arm() -> dict:
-    """The arm launch ``run_pipeline.sh --digital-twin`` starts. The notebook starts this too."""
-    return {"arm": True, "cameras": False, "digital_twin": True, "dry_run": False}
+def command(*, arm: bool, cameras: bool, digital_twin: bool, dry_run: bool) -> list[str]:
+    """The ``python -m so101_sim.stack`` command ``run_pipeline.sh`` runs."""
+    return [
+        sys.executable, "-m", "so101_sim.stack",
+        "--arm", str(arm).lower(),
+        "--cameras", str(cameras).lower(),
+        "--digital-twin", str(digital_twin).lower(),
+        "--dry-run", str(dry_run).lower(),
+    ]
 
 
 def launch_argv(
@@ -81,46 +86,15 @@ def exec_launch(**kwargs) -> None:
     os.execvp(argv[0], argv)
 
 
-def popen_launch(*, log=None, env=None, **kwargs) -> subprocess.Popen:
-    """The launch in its own session. The shell uses :func:`exec_launch` instead."""
-    return subprocess.Popen(
-        launch_argv(**kwargs),
-        cwd=str(REPO),
-        stdout=log,
-        stderr=subprocess.STDOUT if log is not None else None,
-        start_new_session=True,
-        env=env,
-    )
-
-
-def popen_pipeline_twin_arm(*, log=None, env=None) -> subprocess.Popen:
-    """``python -m so101_sim.stack --pipeline-twin-arm``, the notebook's arm launch."""
-    return subprocess.Popen(
-        [sys.executable, "-m", "so101_sim.stack", "--pipeline-twin-arm"],
-        cwd=str(REPO),
-        stdout=log,
-        stderr=subprocess.STDOUT if log is not None else None,
-        start_new_session=True,
-        env=env,
-    )
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Start launch/strix_vla.launch.py")
-    parser.add_argument("--pipeline-twin-arm", action="store_true",
-                        help="the arm launch of run_pipeline.sh --digital-twin")
-    parser.add_argument("--arm", choices=("true", "false"))
-    parser.add_argument("--cameras", choices=("true", "false"))
+    parser.add_argument("--arm", required=True, choices=("true", "false"))
+    parser.add_argument("--cameras", required=True, choices=("true", "false"))
     parser.add_argument("--digital-twin", default="false", choices=("true", "false"))
     parser.add_argument("--dry-run", default="false", choices=("true", "false"))
     parser.add_argument("--config", default=None)
     flag = {"true": True, "false": False}
     args = parser.parse_args()
-    if args.pipeline_twin_arm:
-        exec_launch(**pipeline_twin_arm(), config=args.config)
-        return
-    if args.arm is None or args.cameras is None:
-        parser.error("--arm and --cameras are required")
     exec_launch(
         arm=flag[args.arm],
         cameras=flag[args.cameras],

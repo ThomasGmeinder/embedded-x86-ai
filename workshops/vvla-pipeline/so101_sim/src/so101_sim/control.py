@@ -73,6 +73,22 @@ def bridge_prefix_path() -> str:
     return os.pathsep.join(dict.fromkeys(prefixes))
 
 
+def child_domain_env(base: dict | None = None) -> dict:
+    """Environment for a child process that publishes or subscribes.
+
+    The child reads ``ROS_DOMAIN_ID``. This process's participant may already
+    be on a domain that variable no longer names.
+    """
+    env = dict(os.environ if base is None else base)
+    try:
+        import rclpy
+    except ImportError:
+        return env
+    if rclpy.ok():
+        env["ROS_DOMAIN_ID"] = str(rclpy.get_default_context().get_domain_id())
+    return env
+
+
 def start_controllers(config_path, stack: str, gripper: str = "forward", log=None) -> subprocess.Popen:
     """``launch/so101_control.launch.py`` with this Python, in a process group of
     its own, shut down (SIGINT) when this process exits however it exits."""
@@ -81,20 +97,11 @@ def start_controllers(config_path, stack: str, gripper: str = "forward", log=Non
     ros2 = shutil.which("ros2")
     if ros2 is None:
         raise RuntimeError("ros2 is not on PATH: source /opt/ros/jazzy/setup.bash first")
-    # The arm server already publishing in this process is on the rclpy context's
-    # domain. A child reads ROS_DOMAIN_ID, which can lag that context.
-    env = os.environ.copy()
-    try:
-        import rclpy
-    except ImportError:
-        rclpy = None
-    if rclpy is not None and rclpy.ok():
-        env["ROS_DOMAIN_ID"] = str(rclpy.get_default_context().get_domain_id())
     return subprocess.Popen(
         [sys.executable, "-m", "so101_sim.parent_death", sys.executable, ros2, "launch", str(LAUNCH_FILE),
          f"config:={config_path}", f"stack:={stack}", f"gripper:={gripper}"],
         cwd=str(REPO_ROOT), stdout=log, stderr=subprocess.STDOUT if log is not None else None,
-        start_new_session=True, env=env,
+        start_new_session=True, env=child_domain_env(),
     )
 
 

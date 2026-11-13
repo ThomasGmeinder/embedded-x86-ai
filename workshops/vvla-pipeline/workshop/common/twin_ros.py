@@ -5,23 +5,13 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The digital twin behind ROS 2, for one notebook kernel (PROVIDED).
+"""Clients for the digital twin that ``python -m so101_sim.stack`` already started.
 
-Section 5 of ``notebooks/03_integration/02_digital_twin.ipynb`` drives the
-twin the way ``01_behavior.ipynb`` drives the real arm: a
-:class:`~ros.arm_client.Ros2ArmClient` on ros2_control's controllers, and a
-server node that owns the (simulated) bus. :class:`TwinSession` starts that
-server - ``python -m so101_sim.node --notebook-twin``, its topics remapped
-onto the hardware side's - and the controllers
-(``launch/so101_control.launch.py``) as children of this kernel, on a ROS
-domain of their own with discovery kept to this machine. The real arm's
-nodes, other notebooks' demo nodes and ``app.py`` live on the default domain
-and never see them.
-
-The twin node adds what a console needs on top of the real topics (see
-:mod:`so101_sim.node`): arm-camera frames stamped with the time their scene
-was captured, the props (their TF frames, and on ``/diagnostics`` whether both
-fingers hold them) and ``/sim/reset_scene``.
+``run_pipeline.sh`` and ``run_notebooks.sh`` start that module. Section 5 of
+``notebooks/03_integration/02_digital_twin.ipynb`` then connects a
+:class:`~ros.arm_client.Ros2ArmClient`, the arm and view cameras, and
+:class:`TwinScene`. This module does not start a launch, pick a ROS domain,
+or stop the stack processes.
 """
 
 from __future__ import annotations
@@ -29,18 +19,11 @@ from __future__ import annotations
 import atexit
 import logging
 import os
-import signal
-import subprocess
-import sys
-import tempfile
 import threading
 import time
-from pathlib import Path
 
 from common.ros_helpers import Spinner, from_image_msg
 from ros.arm_client import Ros2ArmClient
-from so101_sim.control import HARDWARE_STATES, stop_controllers
-from so101_sim.stack import popen_pipeline_twin_arm
 from so101_sim.node import DIAGNOSTICS_TOPIC, GRIPPER_STATUS, PROPS_STATUS, VIEW_TOPIC, WORLD_FRAME
 
 logger = logging.getLogger(__name__)
@@ -236,133 +219,40 @@ class TwinScene:
         self._spin.close()
 
 
-def _tail(path: Path, lines: int = 25) -> str:
-    try:
-        return "\n".join(path.read_text(errors="replace").splitlines()[-lines:])
-    except OSError:
-        return "(no log)"
-
-
 class TwinSession:
-    """The pipeline's digital-twin arm launch, owned by this process, and its clients.
+    """Clients of the launch ``python -m so101_sim.stack`` already started.
 
     ``arm`` (:class:`~ros.arm_client.Ros2ArmClient`), ``armcam`` and ``view``
-    (:class:`TwinCamera`) and ``scene`` (:class:`TwinScene`) are ready when
-    the constructor returns. :meth:`close` stops the controllers and the
-    node; the node also dies with this process, so a crashed kernel leaves
-    no twin behind.
+    (:class:`TwinCamera`) and ``scene`` (:class:`TwinScene`) are the clients.
+    :meth:`close` closes those clients. The shell owns the stack processes.
     """
 
-    def __init__(
-        self,
-        cfg: dict,
-        *,
-        config_path: str | os.PathLike | None = None,
-        scene: dict | None = None,
-        domain_id: int | None = None,
-        ready_timeout_s: float = 60.0,
-    ):
-        from common.config import DEFAULT_CONFIG
-
-        self.config_path = Path(config_path or DEFAULT_CONFIG)
+    def __init__(self, cfg: dict):
         self._arm_topic = (cfg.get("cameras") or {}).get("arm", {}).get(
             "topic", "/cameras/arm/image_raw"
         )
         self.arm = self.armcam = self.view = self.scene = None
-        self._proc = self._controllers = None
         self._closed = False
-        self._scene_file = None
-
-        # Same ROS domain as run_pipeline.sh. Do not open a second one.
-        import rclpy
-        if domain_id is not None:
-            self.domain_id = int(domain_id)
-        elif rclpy.ok():
-            self.domain_id = int(rclpy.get_default_context().get_domain_id())
-        else:
-            self.domain_id = int(os.environ.get("ROS_DOMAIN_ID", "0"))
-        self._refuse_if_owned()
-        self._probe = Spinner("twin_session")
-
-        fd, log_name = tempfile.mkstemp(prefix="twin_node_", suffix=".log")
-        self.log_path = Path(log_name)
-        self.controllers_log_path = self.log_path
-        with os.fdopen(fd, "w") as log:
-            # The same command as run_pipeline.sh --digital-twin for the arm.
-            self._proc = popen_pipeline_twin_arm(
-                log=log,
-                env={**os.environ, "PYTHONUNBUFFERED": "1"},
-            )
-        self._controllers = self._proc
+        self._require_launch()
         atexit.register(self.close)
         try:
-            self._wait_ready(ready_timeout_s, cfg)
+            self.arm = Ros2ArmClient(cfg)
+            self.armcam = TwinCamera("arm", self._arm_topic)
+            self.view = TwinCamera("view", VIEW_TOPIC)
+            self.scene = TwinScene()
         except BaseException:
             self.close()
             raise
 
-    @property
-    def pid(self) -> int | None:
-        return None if self._proc is None else self._proc.pid
+    def _require_launch(self) -> None:
+        """The twin node holds the domain lock. No holder means the launch was not started."""
+        from so101_sim.domain_lock import owner
 
-    @property
-    def controllers_pid(self) -> int | None:
-        return None if self._controllers is None else self._controllers.pid
-
-    def _refuse_if_owned(self) -> None:
-        """The twin node holds its domain's lock (``so101_sim.domain_lock``) while it runs."""
-        from so101_sim.domain_lock import DomainTaken, owner
-
-        pid = owner(self.domain_id)
-        if pid is not None:
-            raise DomainTaken(self.domain_id, pid)
-
-    def _exited(self) -> RuntimeError | None:
-        if self._proc.poll() is None:
-            return None
-        return RuntimeError(f"the twin node exited with code {self._proc.returncode}:\n{_tail(self.log_path)}")
-
-    def _wait_ready(self, timeout_s: float, cfg: dict) -> None:
-        """The node's first joint state, then the arm client (the controllers
-        up), then the first arm frame, within ``timeout_s``."""
-        from sensor_msgs.msg import JointState
-
-        from common.motion import MotionTimeout
-
-        deadline = time.time() + timeout_s
-
-        def remaining() -> float:
-            return max(deadline - time.time(), 0.0)
-
-        def not_ready(what: str) -> Exception:
-            return self._exited() or TimeoutError(
-                f"the twin node sent no {what} within {timeout_s:.0f} s:\n{_tail(self.log_path)}"
+        domain = int(os.environ.get("ROS_DOMAIN_ID", "0"))
+        if owner(domain) is None:
+            raise RuntimeError(
+                "the digital twin is not running. Start it with ./run_pipeline.sh --digital-twin"
             )
-
-        up = threading.Event()  # the first joint state, or the node's exit
-        threading.Thread(target=lambda: (self._proc.wait(), up.set()), daemon=True, name="twin-exit").start()
-        first = self._probe.node.create_subscription(JointState, HARDWARE_STATES, lambda _m: up.set(), _sensor_qos())
-        try:
-            up.wait(timeout_s)
-        finally:
-            self._probe.node.destroy_subscription(first)
-        if self._exited() is not None or not up.is_set():
-            raise not_ready("joint state")
-        try:
-            self.arm = Ros2ArmClient(cfg, state_timeout_s=remaining())
-        except MotionTimeout as e:
-            raise TimeoutError(
-                f"{e}; the controllers' launch {'exited' if self._controllers.poll() is not None else 'runs'}:\n"
-                f"{_tail(self.controllers_log_path)}"
-            ) from None
-        self.armcam = TwinCamera("arm", self._arm_topic)
-        self.view = TwinCamera("view", VIEW_TOPIC)
-        self.scene = TwinScene()
-        if not self.armcam.next_frame(0.0, remaining())[0]:
-            raise not_ready("arm camera frame")
-        logger.info(
-            "twin up on ROS domain %d (pid %d, log %s)", self.domain_id, self.pid, self.log_path
-        )
 
     def reset_scene(self) -> bool:
         """Park the arm with the jaws open and put the props back (in the twin):
@@ -370,7 +260,7 @@ class TwinSession:
         return self.arm.reset_twin()
 
     def close(self) -> None:
-        """Stop the clients and the twin node. Safe to call more than once."""
+        """Close the clients. Safe to call more than once. The launch keeps running."""
         if self._closed:
             return
         self._closed = True
@@ -382,23 +272,3 @@ class TwinSession:
                 part.close()
             except Exception as e:
                 logger.debug("twin client close: %s", e)
-        if self._controllers is not None:
-            try:
-                stop_controllers(self._controllers)
-            except RuntimeError as e:
-                logger.warning("%s", e)
-            if self._controllers.returncode == 0:
-                self.controllers_log_path.unlink(missing_ok=True)  # kept when they failed
-        proc = self._proc
-        if proc is not None and proc.poll() is None:
-            proc.send_signal(signal.SIGINT)
-            try:
-                proc.wait(timeout=10.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5.0)
-        if self._scene_file is not None:
-            self._scene_file.unlink(missing_ok=True)
-        if proc is not None and proc.returncode == 0:
-            self.log_path.unlink(missing_ok=True)  # kept when the node failed
-        self._probe.close()

@@ -245,14 +245,14 @@ def jpeg(img: np.ndarray, quality: int = 80) -> bytes:
 def open_webcam(cfg: dict):
     """The webcam, YOLO-pose and MediaPipe Hands: ``(camera, pose, hands)``.
 
-    A scripted person stands in when the webcam gives no frame, for example
-    because another kernel holds it.
+    The mount camera is the one ``vla_pipeline.main`` builds for
+    ``./run_pipeline.sh --digital-twin``: the subscriber on the topic published
+    by the ``so101_sim.stack`` camera node.
     """
-    from common.fixtures import ScriptedHands, ScriptedPose, SyntheticCamera
     from common.quiet import QuietHands, quiet_stderr
     from models.hands import HandTracker
     from models.vision import PoseEstimator
-    from ros.camera_client import make_camera
+    from vla_pipeline.vision.camera import make_camera
 
     pose = PoseEstimator(cfg)
     # MediaPipe's C++ init writes to stderr (absl, EGL, TFLite); QuietHands
@@ -260,14 +260,7 @@ def open_webcam(cfg: dict):
     with quiet_stderr():
         hands = QuietHands(HandTracker(cfg))
         hands.process(np.zeros((64, 64, 3), np.uint8))
-    cam = make_camera(cfg, "mount")
-    if cam.read()[0]:
-        return cam, pose, hands
-    cam.close()
-    hands.close()
-    device = cfg["cameras"]["mount"].get("device")
-    print(f"webcam: no frames from {device} (in use by another kernel?) - a scripted person stands in")
-    return SyntheticCamera(), ScriptedPose(), ScriptedHands()
+    return make_camera(cfg, "mount"), pose, hands
 
 
 class TwinConsole:

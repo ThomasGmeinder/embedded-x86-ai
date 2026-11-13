@@ -21,20 +21,31 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def test_the_notebook_starts_the_pipeline_launch():
-    """The notebook and ``run_pipeline.sh --digital-twin`` start the arm with one command."""
-    from so101_sim.stack import launch_argv, pipeline_twin_arm
+    """The notebook arm launch is ``run_pipeline.sh --digital-twin``'s arm launch."""
+    from so101_sim.stack import command, launch_argv
 
-    text = " ".join(launch_argv(**pipeline_twin_arm()))
+    argv = command(arm=True, cameras=False, digital_twin=True, dry_run=False)
+    assert argv[1:7] == ["-m", "so101_sim.stack", "--arm", "true", "--cameras", "false"]
+    assert "--digital-twin" in argv and "true" in argv and "--dry-run" in argv
+    text = " ".join(launch_argv(arm=True, cameras=False, digital_twin=True, dry_run=False))
     assert "strix_vla.launch.py" in text
     assert "arm:=true" in text and "cameras:=false" in text
     assert "digital_twin:=true" in text and "dry_run:=false" in text
     assert "notebook_twin" not in text and "scene:=" not in text
     script = (REPO / "run_pipeline.sh").read_text()
+    notebooks = (REPO / "workshop" / "run_notebooks.sh").read_text()
     twin = (REPO / "workshop/common/twin_ros.py").read_text()
-    assert "python -m so101_sim.stack --pipeline-twin-arm" in script
-    assert "popen_pipeline_twin_arm(" in twin
-    assert "use_private_domain(self.domain_id)" not in twin
+    assert 'python -m so101_sim.stack --arm "$1" --cameras "$2"' in script
+    assert "python -m so101_sim.bringup pipeline" in script
+    assert "python -m so101_sim.stack --arm false --cameras true --digital-twin true --dry-run false" in notebooks
+    assert "python -m so101_sim.stack --arm true --cameras false --digital-twin true --dry-run false" in notebooks
+    assert "python -m so101_sim.bringup" in notebooks and '"kernel"' in notebooks
+    assert "--pipeline-twin-arm" not in script
+    assert "popen" not in twin
+    assert "ready_timeout_s" not in twin
     assert "notebook_twin" not in twin
+    assert "use_private_domain(self.domain_id)" not in twin
+    assert "child_domain_env" not in twin
 
 
 def test_both_entry_scripts_run_the_bringup_module():
@@ -42,6 +53,7 @@ def test_both_entry_scripts_run_the_bringup_module():
     notebooks = (REPO / "workshop" / "run_notebooks.sh").read_text()
     assert "python -m so101_sim.bringup pipeline" in pipeline
     assert "python -m so101_sim.stack" in pipeline
+    assert "python -m so101_sim.stack" in notebooks
     assert "so101_sim.bringup" in notebooks and '"kernel"' in notebooks
 
 

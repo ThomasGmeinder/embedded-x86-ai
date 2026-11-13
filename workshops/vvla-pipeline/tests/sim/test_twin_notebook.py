@@ -41,6 +41,7 @@ import logging
 import os
 import re
 import signal
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -67,7 +68,6 @@ from twin_ros_rig import (
     process_gone,
     quat_close,
     twin_log_report,
-    wait_exit,
     xml_poses,
 )
 
@@ -84,13 +84,13 @@ NOTEBOOK = NOTEBOOKS / "03_integration" / "02_digital_twin.ipynb"
 SESSION_ENDED = "session ended, arm parked"  # the console cell's last line
 
 NAMESPACE = '''\
-import json as _json
+import json as _json, os
+from so101_sim.domain_lock import owner
 print("NS " + _json.dumps({
     "trace": voice.trace,
     "dispatcher_alive": dispatcher.is_alive(),
     "log": [line for line, _color in console._log],
-    "pid": twin.pid,
-    "twin_log": str(twin.log_path),
+    "pid": owner(int(os.environ.get("ROS_DOMAIN_ID", "0"))),
     "sessions": _SESSIONS,
 }))
 '''
@@ -112,7 +112,7 @@ for _name in ("common", "integration", "models", "ros", "so101_sim", "vla_pipeli
     _logging.getLogger(_name).setLevel(_logging.INFO)
 import faulthandler as _faulthandler, signal as _signal
 _faulthandler.register(_signal.SIGUSR1, file=_fh.stream, all_threads=True)  # the test's thread dump
-print("KERNEL_LOG", getattr(globals().get("twin"), "log_path", ""))
+print("KERNEL_LOG", "")
 '''
 
 # voice.reset_scene() returns None. It clears ctx.stop_event, which the console cell's finally leaves set.
@@ -410,8 +410,9 @@ class NotebookKernel:
         assert not fallback, f"02_digital_twin fell back to the CPU: {fallback}"
         if self.last_pid is not None and not process_gone(self.last_pid):
             # A second hands.close() raises, so skip this when a scenario already ran c0000018.
+            # The cleanup cell closes clients. run_notebooks.sh owns the stack process.
             await self.client.async_execute_cell(self.nb.cells[self.cleanup], self.cleanup)
-            assert await asyncio.to_thread(wait_exit, self.last_pid), "the cleanup cell left the twin node running"
+            assert not process_gone(self.last_pid), "the cleanup cell stopped the twin launch"
 
 
 @pytest.fixture(scope="module")
@@ -428,14 +429,21 @@ def observers(workshop_cfg):
 
 @pytest.fixture(scope="module")
 def kernel(observers):
+    from twin_ros_rig import start_pipeline_launches, stop_pipeline_launches
+
     assert_domain_free("a twin already runs on the test domain")
+    log = tempfile.NamedTemporaryFile(prefix="notebook_stack_", suffix=".log", delete=False)
+    launches = start_pipeline_launches(log)
     session = NotebookKernel()
-    session.start()
     try:
-        yield session
+        session.start()
+        try:
+            yield session
+        finally:
+            session.finish()
     finally:
-        session.finish()
-    assert_domain_free("the notebook's twin node outlived its cleanup cell", wait=True)
+        stop_pipeline_launches(launches)
+    assert_domain_free("the notebook's twin node outlived the stack process", wait=True)
 
 
 @pytest.mark.parametrize(
@@ -589,7 +597,7 @@ def test_console_run_and_advance(observers, kernel):
     namespace = kernel.run(script, end_with="rerun", after=after)
     assert seen["parked"] == 1, "the console cell ran a second session"
     _assert_dispatcher_dead(namespace)
-    assert wait_exit(namespace["pid"]), "the cleanup cell left the twin node running"
+    assert namespace["pid"] and not process_gone(namespace["pid"]), "the cleanup cell stopped the twin launch"
 
 
 def test_console_stop(observers, kernel):

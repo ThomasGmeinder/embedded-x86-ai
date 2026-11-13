@@ -265,7 +265,19 @@ LLAMA_HOST="${LLAMA_HOST:-127.0.0.1}"
 LLAMA_PORT="${LLAMA_PORT:-8081}"
 LLAMA_PID=""
 MONITOR_PID=""
+LAUNCH_PIDS=()
 cleanup() {
+  # The same stop as run_pipeline.sh: SIGINT to each so101_sim.stack group, then wait.
+  trap '' INT
+  local pid
+  for pid in "${LAUNCH_PIDS[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -INT -- "-$pid" 2>/dev/null || true
+    fi
+  done
+  for pid in "${LAUNCH_PIDS[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
   [[ -n "$LLAMA_PID" ]] && kill -INT "$LLAMA_PID" 2>/dev/null || true
   [[ -n "$MONITOR_PID" ]] && kill "$MONITOR_PID" 2>/dev/null || true
 }
@@ -309,8 +321,22 @@ if [[ "$WITH_LLM" -eq 1 ]]; then
   fi
 fi
 
+# The digital twin. Same two Python launches as ./run_pipeline.sh --digital-twin,
+# before the kernel's python -m so101_sim.bringup kernel.
+start_digital_twin() {
+  command -v ros2 >/dev/null || die "ROS 2 not found - install ROS 2 Jazzy (/opt/ros/jazzy)."
+  # shellcheck disable=SC1091
+  source "${VENV_DIR}/bin/activate"
+  cd "$REPO_ROOT"
+  python -m so101_sim.stack --arm false --cameras true --digital-twin true --dry-run false &
+  LAUNCH_PIDS+=("$!")
+  python -m so101_sim.stack --arm true --cameras false --digital-twin true --dry-run false &
+  LAUNCH_PIDS+=("$!")
+}
+
 # --test: the notebooks, in this environment. Twin and NPU tests are ../run_sim_tests.sh.
 if [[ "$TEST_MODE" -eq 1 ]]; then
+  start_digital_twin
   if [[ -n "$LLAMA_PID" ]]; then
     # The server logs "listening on http://..." once its model is loaded. tail
     # follows the log from where this server's lines start and ends when the
@@ -377,6 +403,7 @@ with open(path, "w") as fh:
     fh.write("\n")
 PY
 
+start_digital_twin
 say "Launching Jupyter ${LAUNCHER} - the workshop kernel is auto-selected"
 cd "$WORKSHOP_DIR"
 # Not exec'd: keep this shell alive so the trap tears the llama server down

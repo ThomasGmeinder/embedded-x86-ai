@@ -31,7 +31,6 @@ from twin_ros_rig import (
     Probe,
     TwinRig,
     assert_domain_free,
-    default_scene_snapshot,
     join_test_domain,
 )
 
@@ -53,7 +52,7 @@ def rig(workshop_cfg, eyes, probe):
     if detector is None:
         pytest.skip("--sim-eyes seg reads the in-process twin's segmentation; this twin is over ROS")
     assert_domain_free("a twin already runs on the test domain")
-    r = TwinRig(workshop_cfg, detector, scene=default_scene_snapshot(workshop_cfg))
+    r = TwinRig(workshop_cfg, detector)
     yield r
     r.close()
     assert_domain_free("the twin node outlived its test", wait=True)

@@ -21,6 +21,8 @@ import csv
 import os
 import select
 import shutil
+import signal
+import subprocess
 import threading
 import time
 from collections import deque
@@ -34,6 +36,32 @@ TEST_DOMAIN_ID = int(os.environ.get("TWIN_TEST_DOMAIN_ID", "93"))
 # folding onto the forearm, as it would from the rest pose.
 EXTENDED = {"shoulder_lift": -20.0, "elbow_flex": 20.0, "wrist_flex": 0.0}
 BODY_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
+
+
+def start_pipeline_launches(log) -> list:
+    """The two ``python -m so101_sim.stack`` commands ``run_notebooks.sh`` runs."""
+    from so101_sim.stack import command
+
+    procs = []
+    for arm, cameras in ((False, True), (True, False)):
+        procs.append(subprocess.Popen(
+            command(arm=arm, cameras=cameras, digital_twin=True, dry_run=False),
+            stdout=log, stderr=subprocess.STDOUT,
+        ))
+    return procs
+
+
+def stop_pipeline_launches(procs) -> None:
+    """SIGINT each launch, then its exit. A launch that already called ``setsid`` is its own group."""
+    for proc in procs:
+        if proc.poll() is not None:
+            continue
+        if os.getpgid(proc.pid) == proc.pid:
+            os.killpg(proc.pid, signal.SIGINT)
+        else:
+            proc.send_signal(signal.SIGINT)
+    for proc in procs:
+        proc.wait()
 
 
 def join_test_domain() -> None:
@@ -303,7 +331,9 @@ class TwinRig:
     stand-in (``ScriptedPose`` / ``ScriptedHands`` / ``SyntheticCamera``).
     """
 
-    def __init__(self, cfg: dict, detector, scene: dict | None = None):
+    def __init__(self, cfg: dict, detector):
+        import tempfile
+
         from common.fixtures import ScriptedHands, ScriptedPose, SyntheticCamera
         from common.motion import mapper_from_config
         from common.twin_console import FanoutCamera
@@ -312,7 +342,14 @@ class TwinRig:
 
         self.cfg = copy.deepcopy(cfg)
         self.cfg["robot"]["backend"] = "sim"
-        self.twin = TwinSession(self.cfg, scene=scene)
+        self._log = tempfile.NamedTemporaryFile(prefix="twin_rig_", suffix=".log", delete=False)
+        self.log_path = Path(self._log.name)
+        self._launches = start_pipeline_launches(self._log)
+        try:
+            self.twin = TwinSession(self.cfg)
+        except BaseException:
+            stop_pipeline_launches(self._launches)
+            raise
         self.said: list[str] = []
         self.armcam = FanoutCamera(self.twin.armcam)
         self.mount = FanoutCamera(SyntheticCamera())
@@ -337,7 +374,7 @@ class TwinRig:
     def failure_report(self, dest: Path, since: float | None) -> str:
         """What the robot said, and the twin node's log."""
         said = "\n".join(f"  {m}" for m in self.said[-15:]) or "  (nothing)"
-        return f"robot said:\n{said}\n\n" + twin_log_report(self.twin.log_path, dest)
+        return f"robot said:\n{said}\n\n" + twin_log_report(self.log_path, dest)
 
     def start(self, text: str) -> threading.Thread:
         """Run ``text`` through ``handle_transcript`` on a thread, as the console's dispatcher does.
@@ -380,4 +417,5 @@ class TwinRig:
             except Exception:
                 pass
         self.twin.close()
+        stop_pipeline_launches(self._launches)
         raise_crashes(self._crashes)

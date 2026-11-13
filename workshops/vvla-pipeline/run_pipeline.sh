@@ -163,12 +163,7 @@ if [[ "$ROBOT_ROS2" == "true" || "$CAMERA_ROS2" == "true" ]]; then
   fi
   if [[ "$ROBOT_ROS2" == "true" ]]; then
     echo "Starting the arm nodes (digital twin: $TWIN)..."
-    if [[ "$TWIN" == "true" && "$DRY_ARM" == "false" ]]; then
-      python -m so101_sim.stack --pipeline-twin-arm &
-      LAUNCH_PIDS+=("$!")
-    else
-      start_launch true false
-    fi
+    start_launch true false
   fi
 fi
 
