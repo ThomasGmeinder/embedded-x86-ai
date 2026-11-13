@@ -7,9 +7,9 @@
 
 """The one speech front end for the pipeline and the digital-twin notebook.
 
-``voice_intent`` in ``config/pipeline.yaml`` chooses it. ``gemma4-e4b-it``
-sends rolling microphone windows to Gemma 4 on llama-server. ``whisper_llama``
-keeps WebRTC voice-activity detection, Whisper, and Llama 3.2.
+``voice_intent`` in ``config/pipeline.yaml`` is ``gemma4-e4b-it``. It sends
+rolling microphone windows to Gemma 4 on llama-server and does not wait for
+an end of speech.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from vla_pipeline.utils.config import resolve
 
 logger = logging.getLogger(__name__)
 
-VOICE_INTENTS = ("gemma4-e4b-it", "whisper_llama")
+VOICE_INTENTS = ("gemma4-e4b-it",)
 
 
 def _wav(pcm: bytes, sample_rate: int) -> bytes:
@@ -59,7 +59,7 @@ class VoiceSession:
         if self.error:
             self.opened.set()
             return self
-        target = self._gemma if self.kind == "gemma4-e4b-it" else self._whisper
+        target = self._gemma
         self._thread = threading.Thread(
             target=target, args=(on_text, on_level, on_busy, on_drop, stop_check),
             daemon=True, name="voice",
@@ -78,18 +78,6 @@ class VoiceSession:
         self.stop()
         if self.llm is not None:
             self.llm.close()
-
-    def _whisper(self, on_text, on_level, on_busy, on_drop, stop_check) -> None:
-        from vla_pipeline.audio.vad_listener import FastListener
-        from vla_pipeline.audio.whisper_npu import WhisperNPU
-
-        listener = FastListener(self._cfg, WhisperNPU(self._cfg, device=self._device).transcribe)
-        self.opened.set()
-
-        def stopped() -> bool:
-            return self._stop.is_set() or (stop_check is not None and stop_check())
-
-        listener.run_forever(on_text, stop_check=stopped, on_level=on_level, on_busy=on_busy)
 
     def _gemma(self, on_text, on_level, on_busy, on_drop, stop_check) -> None:
         import sounddevice as sd
@@ -236,17 +224,7 @@ def open_voice(cfg: dict, *, device=None) -> VoiceSession:
     """Build the speech front end selected by ``cfg['voice_intent']``."""
     kind = cfg.get("voice_intent")
     if kind not in VOICE_INTENTS:
-        raise ValueError(
-            f"voice_intent must be gemma4-e4b-it or whisper_llama, not {kind!r}"
-        )
-    if kind == "whisper_llama":
-        from vla_pipeline.llm.llama_intent import LlamaIntentParser
-
-        llm = LlamaIntentParser(cfg)
-        session = VoiceSession(kind, llm.parse, llm)
-        session._cfg = cfg
-        session._device = device
-        return session
+        raise ValueError(f"voice_intent must be gemma4-e4b-it, not {kind!r}")
     try:
         from vla_pipeline.llm.llama_intent import LlamaIntentParser
 

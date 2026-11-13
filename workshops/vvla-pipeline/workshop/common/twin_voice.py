@@ -14,7 +14,7 @@ noise is shown and dropped, anything else waits in a queue. :meth:`VoiceCommands
 runs the newest waiting command through the workshop's ``handle_transcript``
 (``integration/dispatch.py``), with Llama on the iGPU picking the command.
 :meth:`VoiceCommands.listen` takes one sentence before the console runs: it
-prints what Whisper heard and the command Llama picks, and runs nothing.
+prints what was heard and the command Gemma picks, and runs nothing.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ def keyword_parse(text: str) -> ParsedCommand:
 
 
 class VoiceCommands:
-    """The microphone, Whisper, the intent parser and the queue of commands.
+    """The microphone, the intent parser and the queue of commands.
 
     ``ctx`` gets a registry whose behaviors report to ``console`` while they
     run. ``trace`` keeps one record per command: what was asked, what the
@@ -143,7 +143,7 @@ class VoiceCommands:
         print(f"{who} picked: {cmd.intent.value}" + (f" ({params})" if params else "") + f", in {ms:.0f} ms")
 
     def listen(self, seconds: float = 20.0, example: str = "could you pick up the ball for me") -> None:
-        """Wait for one spoken command; print what Whisper heard and the command Llama picks.
+        """Wait for one spoken command; print what was heard and the command Gemma picks.
 
         Nothing runs: the sentence does not reach the command queue. Without a
         microphone, ``example`` stands in for the spoken sentence.
@@ -168,7 +168,7 @@ class VoiceCommands:
                 elif text.startswith("{"):
                     print(f"Heard a command: {text}")
                 else:
-                    print(f'Whisper heard: "{text}"')
+                    print(f'Heard: "{text}"')
                 if is_noise(text):
                     print("That is noise, so it is ignored. Say a command.")
                     continue

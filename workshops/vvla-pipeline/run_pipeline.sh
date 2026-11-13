@@ -65,7 +65,7 @@ export HSA_OVERRIDE_GFX_VERSION="${HSA_OVERRIDE_GFX_VERSION:-11.5.1}"  # gfx1151
 NPU_CONFIGURED="$(python - <<'PY'
 from vla_pipeline.utils.config import load_config
 cfg = load_config()
-sections = ("whisper", "yolo_pose", "yolo_detect")
+sections = ("yolo_pose", "yolo_detect")
 print("yes" if any(str((cfg.get(s) or {}).get("device", "cpu")).lower() == "npu"
                    for s in sections) else "no")
 PY

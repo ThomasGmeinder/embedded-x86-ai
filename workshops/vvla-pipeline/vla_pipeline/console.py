@@ -377,12 +377,12 @@ class TwinConsole:
                 holding.clear()
 
     def on_level(self, rms: float, speaking: bool) -> None:
-        """Microphone block level from :meth:`FastListener.run_forever`."""
+        """Microphone block level from the voice session."""
         with self._lock:
             self._level, self._speaking, self._level_t = rms, speaking, time.monotonic()
 
     def note_asr(self, busy: bool) -> None:
-        """True while Whisper is decoding. The meter keeps running either way."""
+        """True while the voice model is decoding. The meter keeps running either way."""
         with self._lock:
             self._asr_pending = busy
 

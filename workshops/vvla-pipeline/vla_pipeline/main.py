@@ -5,15 +5,15 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Pipeline orchestrator: microphone → Whisper (CPU by default, optional NPU) → Llama intent (iGPU) →
-behavior dispatch, with an always-hot listener for the safety stop.
+"""Pipeline orchestrator: microphone → Gemma 4 on the iGPU → behavior dispatch,
+with an always-hot listener for the safety stop.
 
 Architecture
 ------------
-- A **listener thread** runs :class:`FastListener` continuously (VAD-based,
-  ~0.35 s end-of-speech) and pushes transcripts onto a queue - the mic stays
-  hot *while behaviors run*, which is what makes a spoken "stop" able to
-  interrupt a running behavior.
+- A **listener thread** sends a hop of microphone audio to Gemma as soon as
+  that hop contains speech. It does not wait for silence. The microphone
+  stays hot *while behaviors run*, which is what makes a spoken "stop" able
+  to interrupt a running behavior.
 - ``STOP`` is matched with plain keywords on the raw transcript
   (:data:`STOP_KEYWORDS`) before any LLM round trip, then sets the shared
   stop event that every behavior's ``stop_check`` polls (including mid

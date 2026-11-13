@@ -21,22 +21,19 @@
 #   3. Registers the "vvla-workshop" Jupyter kernel if it doesn't exist
 #      (the notebooks select it automatically).
 #   4. Sources ROS 2 (required) so the notebook kernel gets rclpy + DDS.
-#   5. Starts the llama-server on the iGPU (if the binary and the GGUF
-#      model are present and nothing is already listening on the port).
-#      It logs to workshop/logs/llama-server.log and shuts down when you
-#      quit Jupyter.
+#   5. scripts/ensure_voice.sh (sourced above the Jupyter launch) starts the
+#      Gemma 4 llama-server. This script does not start a second model.
 #   6. Opens the always-on-top resource HUD (CPU% / GPU% / NPU inf/s) so you
 #      can watch the devices light up while a cell runs. It closes with Jupyter.
 #   7. Launches Jupyter Lab in workshop/ (browse the notebooks/ folder).
 #
 # Usage:
-#   ./run_notebooks.sh                 # set up + launch Jupyter Lab (+ llama server + HUD)
+#   ./run_notebooks.sh                 # set up + launch Jupyter Lab (+ HUD)
 #   ./run_notebooks.sh --force-kernel  # re-register the kernel
 #   ./run_notebooks.sh --no-launch     # set everything up, don't start Jupyter
 #   ./run_notebooks.sh --classic       # use `jupyter notebook` instead of lab
-#   ./run_notebooks.sh --no-llm        # don't start the llama server
 #   ./run_notebooks.sh --no-monitor    # don't open the resource HUD
-#   ./run_notebooks.sh --test [args]   # steps 1-5, then the notebooks instead of Jupyter
+#   ./run_notebooks.sh --test [args]   # steps 1-4, then the notebooks instead of Jupyter
 #                                      # (args go to those tests). The twin and the NPU
 #                                      # tests are ../run_sim_tests.sh
 #
@@ -58,14 +55,13 @@ KERNEL_NAME="${KERNEL_NAME:-vvla-workshop}"
 KERNEL_DISPLAY="${KERNEL_DISPLAY:-Python (VVLA workshop)}"
 JUPYTER_PORT="${JUPYTER_PORT:-8888}"
 
-FORCE_KERNEL=0; NO_LAUNCH=0; LAUNCHER="lab"; WITH_LLM=1; WITH_MONITOR=1; TEST_MODE=0
+FORCE_KERNEL=0; NO_LAUNCH=0; LAUNCHER="lab"; WITH_MONITOR=1; TEST_MODE=0
 PYTEST_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force-kernel) FORCE_KERNEL=1 ;;
     --no-launch)    NO_LAUNCH=1 ;;
     --classic)      LAUNCHER="notebook" ;;
-    --no-llm)       WITH_LLM=0 ;;
     --no-monitor)   WITH_MONITOR=0 ;;
     --test)         TEST_MODE=1; NO_LAUNCH=1; WITH_MONITOR=0; shift; PYTEST_ARGS=("$@"); break ;;
     -h|--help)      sed -n '/^# run_notebooks.sh/,/^# =====/p' "$0"; exit 0 ;;
@@ -73,10 +69,6 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-if [[ "$TEST_MODE" -eq 1 && "$WITH_LLM" -eq 0 ]]; then
-  echo "--test needs the llama server: the Llama notebooks run against it (drop --no-llm)" >&2
-  exit 2
-fi
 
 # --- 1. Use the repo venv created by bootstrap.sh ----------------------------
 RYZEN_ENV_SCRIPT="${REPO_ROOT}/scripts/ryzen_ai_env.sh"
@@ -261,12 +253,6 @@ print("==> kernel sees: numpy %s | onnxruntime %s | mediapipe %s | NPU(VitisAI) 
       % (_v("numpy"), _v("onnxruntime"), _v("mediapipe"), "YES" if npu else "no (CPU fallback)"))
 PYEOF
 
-# --- 5. Start the llama server (component 1's brain, torn down on exit) -----
-LLAMA_BIN="${REPO_ROOT}/third_party/llama.cpp/build/bin/llama-server"
-LLAMA_GGUF="${REPO_ROOT}/models/llama-3.2-3b/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-LLAMA_HOST="${LLAMA_HOST:-127.0.0.1}"
-LLAMA_PORT="${LLAMA_PORT:-8081}"
-LLAMA_PID=""
 MONITOR_PID=""
 LAUNCH_PIDS=()
 cleanup() {
@@ -281,48 +267,9 @@ cleanup() {
   for pid in "${LAUNCH_PIDS[@]}"; do
     wait "$pid" 2>/dev/null || true
   done
-  [[ -n "$LLAMA_PID" ]] && kill -INT "$LLAMA_PID" 2>/dev/null || true
   [[ -n "$MONITOR_PID" ]] && kill "$MONITOR_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
-
-llama_alive() {
-  "$PY" - "$LLAMA_HOST" "$LLAMA_PORT" <<'PYEOF'
-import sys, urllib.request
-try:
-    r = urllib.request.urlopen(f"http://{sys.argv[1]}:{sys.argv[2]}/health", timeout=1)
-    sys.exit(0 if r.status == 200 else 1)
-except Exception:
-    sys.exit(1)
-PYEOF
-}
-
-if [[ "$WITH_LLM" -eq 1 ]]; then
-  if llama_alive; then
-    say "llama-server already running at http://${LLAMA_HOST}:${LLAMA_PORT} - using it"
-  elif [[ -x "$LLAMA_BIN" && -f "$LLAMA_GGUF" ]]; then
-    mkdir -p "${WORKSHOP_DIR}/logs"
-    LLAMA_LOG="${WORKSHOP_DIR}/logs/llama-server.log"
-    LLAMA_LOG_FROM=$(( $( [[ -f "$LLAMA_LOG" ]] && wc -l < "$LLAMA_LOG" || echo 0 ) + 1 ))
-    say "Starting llama-server on the iGPU (port ${LLAMA_PORT})"
-    say "  log: ${LLAMA_LOG}"
-    HSA_OVERRIDE_GFX_VERSION="${HSA_OVERRIDE_GFX_VERSION:-11.5.0}" \
-      "$LLAMA_BIN" --model "$LLAMA_GGUF" \
-      --host "$LLAMA_HOST" --port "$LLAMA_PORT" \
-      --n-gpu-layers 99 --ctx-size 2048 --parallel 1 --no-warmup \
-      >>"$LLAMA_LOG" 2>&1 &
-    LLAMA_PID=$!
-    say "  llama-server PID ${LLAMA_PID} (auto-stops when you quit Jupyter;"
-    say "  first load takes 10-30 s while the model streams into iGPU memory)"
-  else
-    [[ "$TEST_MODE" -eq 1 ]] && die "llama-server binary or GGUF model not found (${LLAMA_BIN}, ${LLAMA_GGUF}) - run ./bootstrap.sh"
-    warn "llama-server binary or GGUF model not found - skipping."
-    warn "  expected binary: ${LLAMA_BIN}"
-    warn "  expected model:  ${LLAMA_GGUF}"
-    warn "  (run the repo bootstrap to build/download them; the 03_igpu_llama"
-    warn "   notebook shows the exact command to start the server yourself)"
-  fi
-fi
 
 # The digital twin. Same two Python launches as ./run_pipeline.sh --digital-twin,
 # before the kernel's python -m so101_sim.bringup kernel.
@@ -342,20 +289,6 @@ start_digital_twin() {
 # ROS_DOMAIN_ID is often 93 too, so starting the launch here makes those
 # tests see a twin that is already running.
 if [[ "$TEST_MODE" -eq 1 ]]; then
-  if [[ -n "$LLAMA_PID" ]]; then
-    # The server logs "listening on http://..." once its model is loaded. tail
-    # follows the log from where this server's lines start and ends when the
-    # server exits, which grep then sees as the end of its input.
-    say "Waiting for llama-server to log that it is listening (${LLAMA_LOG})"
-    exec {llama_fd}< <(tail -n "+${LLAMA_LOG_FROM}" -F --pid="$LLAMA_PID" "$LLAMA_LOG")
-    LLAMA_TAIL_PID=$!
-    LLAMA_READY=0
-    timeout 90 grep -m1 -q "listening on http://" <&"$llama_fd" || LLAMA_READY=$?
-    kill "$LLAMA_TAIL_PID" 2>/dev/null || true
-    exec {llama_fd}<&-
-    [[ "$LLAMA_READY" -eq 0 ]] || die "llama-server did not report listening within 90 s - see ${LLAMA_LOG}"
-  fi
-  llama_alive || die "llama-server does not answer at http://${LLAMA_HOST}:${LLAMA_PORT} - see ${WORKSHOP_DIR}/logs/llama-server.log"
   for entry in "pytest:pytest" "pytest_timeout:pytest-timeout" "nbclient:nbclient"; do
     "$PY" -c "import ${entry%%:*}" 2>/dev/null || pip_install "${entry#*:}"
   done
@@ -368,7 +301,7 @@ fi
 # --- 6. Pop the always-on-top resource HUD (CPU/GPU/NPU), torn down on exit --
 # Only when we're really launching Jupyter and a display is available. It reuses
 # launch_monitor.sh, logs to workshop/logs/monitor.log, and the cleanup trap
-# kills it (alongside the llama server) when Jupyter exits.
+# kills it when Jupyter exits.
 if [[ "$WITH_MONITOR" -eq 1 && "$NO_LAUNCH" -eq 0 ]]; then
   if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
     mkdir -p "${WORKSHOP_DIR}/logs"
@@ -411,6 +344,6 @@ PY
 start_digital_twin
 say "Launching Jupyter ${LAUNCHER} - the workshop kernel is auto-selected"
 cd "$WORKSHOP_DIR"
-# Not exec'd: keep this shell alive so the trap tears the llama server down
+# Not exec'd: keep this shell alive so the trap stops the digital twin
 # after Jupyter exits.
 "$PY" -m jupyter "$LAUNCHER" notebooks --port "$JUPYTER_PORT"

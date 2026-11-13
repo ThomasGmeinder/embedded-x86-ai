@@ -52,9 +52,6 @@ PATHS = [
 # The student's actions in each live cell (by cell id); any other live cell is
 # watched until it draws three frames (notebook_harness.DEFAULT_ACTIONS).
 SCRIPTS = {
-    "03_igpu_llama": {
-        "07f51d10d595": [("type", "Why do robots like grammars?"), ("wait_for", "llama: ")],
-    },
     "02_robot": {
         "cell-10": [("click", "rest pose")],
     },
@@ -72,7 +69,6 @@ SCRIPTS = {
 
 # What the notebook's own output must show.
 EXPECT = {
-    "03_igpu_llama": ["llama: "],
     "03_intent_node": ["[LLM parse]", "'pick_place'"],
 }
 

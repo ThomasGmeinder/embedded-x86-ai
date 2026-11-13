@@ -33,12 +33,9 @@
 #      4e. Builds topic_based_ros2_control (the ros2_control hardware side that
 #          talks to the arm servers over topics) into the colcon workspace ros_ws/
 #   5. Downloads the models:
-#        - Whisper-base ONNX encoder/decoder
-#        - Whisper tokenizer + feature extractor (openai/whisper-base.en)
-#        - Llama-3.2-3B-Instruct GGUF Q4_K_M        (hf download)
-#        - Gemma 4 E4B-IT GGUF + audio projector, and Silero VAD v6.2.3, when
-#          voice_intent is gemma4-e4b-it (scripts/ensure_voice.sh; the
-#          launchers run it too, so a machine that only pulls gets them)
+#        - Gemma 4 E4B-IT GGUF + audio projector, and Silero VAD v6.2.3
+#          (scripts/ensure_voice.sh; the launchers run it too, so a machine
+#          that only pulls gets them)
 #      YOLO ONNX export is manual (Ultralytics is AGPL-3.0). See the README:
 #        python scripts/export_yolo26s_pose.py
 #        python scripts/export_yolo26s_detect.py
@@ -73,9 +70,6 @@ UBUNTU_CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME:-noble}")"
 TORCH_SPEC='torch==2.11.0+rocm7.13.0'
 TORCHVISION_SPEC='torchvision==0.26.0+rocm7.13.0'
 TORCHAUDIO_SPEC='torchaudio==2.11.0+rocm7.13.0'
-LLAMA_GGUF_REPO="bartowski/Llama-3.2-3B-Instruct-GGUF"
-LLAMA_GGUF_FILE="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-LLAMA_OUT_DIR="${MODELS_DIR}/llama-3.2-3b"
 # Not packaged for Jazzy, so section 4e builds it from this tag (BSD-3), with
 # the patches in patches/topic_based_ros2_control/.
 TOPIC_BRIDGE_REPO="https://github.com/PickNikRobotics/topic_based_ros2_control.git"
@@ -640,39 +634,9 @@ uv pip install 'opencv-contrib-python>=4.10' 'numpy<2' \
 # 5. Models
 # -----------------------------------------------------------------------------
 if [[ "$SKIP_MODELS" -eq 0 ]]; then
-  mkdir -p "$MODELS_DIR" "$LLAMA_OUT_DIR" "${REPO_ROOT}/cache" "${REPO_ROOT}/logs"
-
-  log "Pre-downloading NPU-optimized Whisper ONNX (amd/whisper-base-en-onnx-npu)"
-  PYTHONPATH="${REPO_ROOT}" python - <<'PY' || warn "Whisper ONNX pre-download failed - it will be retried on first run; or set whisper.encoder_onnx/decoder_onnx in config/pipeline.yaml to local files (e.g. exported via scripts/export_whisper_onnx.py)."
-from vla_pipeline.audio.whisper_npu import download_whisper_onnx
-from vla_pipeline.utils.config import load_config, resolve
-cfg = load_config()
-mt = cfg["whisper"].get("model_type", "whisper-base")
-dest = resolve(cfg.get("system", {}).get("models_dir", "models")) / mt
-enc, dec = download_whisper_onnx(mt, dest_dir=dest)
-print("encoder:", enc)
-print("decoder:", dec)
-PY
-
-  log "Caching the Whisper tokenizer and feature extractor"
-  PYTHONPATH="${REPO_ROOT}" python - <<'PY' || warn "Whisper tokenizer download failed - the first voice run will try Hugging Face again. Check the network, then rerun ./bootstrap.sh --skip-apt --skip-llama."
-from vla_pipeline.audio.whisper_npu import download_whisper_tokenizer
-from vla_pipeline.utils.config import load_config
-cfg = load_config()
-w = cfg["whisper"]
-tok = download_whisper_tokenizer(w.get("model_type", "whisper-base"), w.get("tokenizer"))
-print("tokenizer:", tok)
-PY
+  mkdir -p "$MODELS_DIR" "${REPO_ROOT}/cache" "${REPO_ROOT}/logs"
 
   log "YOLO ONNX export is a manual setup step — see README"
-
-  log "Downloading Llama-3.2-3B-Instruct GGUF (Q4_K_M)"
-  if [[ -f "${LLAMA_OUT_DIR}/${LLAMA_GGUF_FILE}" ]]; then
-    echo "Already present: ${LLAMA_OUT_DIR}/${LLAMA_GGUF_FILE}"
-  else
-    hf download "$LLAMA_GGUF_REPO" "$LLAMA_GGUF_FILE" --local-dir "$LLAMA_OUT_DIR" \
-      || warn "GGUF download failed. Llama 3.2 is a gated/licensed model - log in with 'hf auth login' (accept the Llama 3.2 license on huggingface.co) or place ${LLAMA_GGUF_FILE} in ${LLAMA_OUT_DIR} manually."
-  fi
 
   log "Gemma 4 E4B-IT, its audio projector and Silero VAD (skipped when present)"
   VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/ensure_voice.sh" --models-only \
@@ -683,8 +647,6 @@ fi
 
 # -----------------------------------------------------------------------------
 # 5b. Compile the YOLO NPU models using the full Ryzen AI SDK venv
-# Whisper runs on the CPU (config whisper.device). Compile it only when
-# that field is set to npu: scripts/compile_npu_models.sh --only whisper
 # -----------------------------------------------------------------------------
 # The deployment .venv can RUN precompiled NPU models but cannot COMPILE them.
 # Compilation uses an externally installed full SDK venv. bootstrap never
@@ -783,7 +745,6 @@ cat <<EOF
 
      python -m vla_pipeline.utils.resource_monitor
      ./workshop/launch_monitor.sh                 # always-on-top CPU%/GPU%/NPU inf/s HUD (open/close anytime)
-     python -m vla_pipeline.audio.whisper_npu --input /tmp/speech.wav --device npu
      python -m vla_pipeline.llm.llama_intent --selftest
      python -m vla_pipeline.vision.yolo_pose_npu
 

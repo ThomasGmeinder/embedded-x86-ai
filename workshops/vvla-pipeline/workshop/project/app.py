@@ -273,7 +273,7 @@ def _build_parser(cfg, args):
             "Check the GGUF model and llama.cpp build (HSA_OVERRIDE_GFX_VERSION "
             "for the iGPU); pass --no-llm for keyword routing.",
         )
-    print("brain: Llama 3.2 3B on the iGPU (grammar-constrained)")
+    print("brain: Gemma 4 E4B on the iGPU (grammar-constrained)")
     return parser.parse
 
 

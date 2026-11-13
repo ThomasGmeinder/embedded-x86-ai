@@ -176,13 +176,3 @@ def test_models_only_skips_the_llama_server_check(root):
     assert _run(root).returncode == 1
     result = _run(root, "--models-only")
     assert result.returncode == 0, result.stderr
-
-
-def test_whisper_llama_needs_no_gemma_file(root):
-    cfg = _config(root)
-    cfg["voice_intent"] = "whisper_llama"
-    _write_config(root, cfg)
-    shutil.rmtree(root / "models")
-    result = _run(root)
-    assert result.returncode == 0, result.stderr
-    assert not (root / "models").exists()

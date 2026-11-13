@@ -57,7 +57,7 @@ class IntentNode(Node):
     """Subscribes to transcripts, publishes grammar-shaped intent JSON.
 
     ``parser`` is injected: any callable ``str -> ParsedCommand``. On the rig
-    that's :meth:`models.llm.LlamaIntentParser.parse` (Llama on the iGPU);
+    that's :meth:`models.llm.LlamaIntentParser.parse` (Gemma 4 on the iGPU);
     in tests it's a keyword stand-in. The node doesn't know or care - which
     is exactly why it's a clean seam.
     """

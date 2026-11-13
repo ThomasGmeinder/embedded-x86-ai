@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Llama-3.2-3B intent parsing via llama.cpp running on ROCm.
+"""Gemma 4 E4B intent parsing via llama.cpp running on ROCm.
 
 The model runs in ``llama-server`` (built with ``-DGGML_HIP=ON`` by
 ``bootstrap.sh``) and is queried over its OpenAI-compatible HTTP API. A GBNF
@@ -49,7 +49,7 @@ READY_LINE = "listening on http://"
 class LlamaIntentParser:
     """Manage a llama.cpp server and turn transcripts into :class:`ParsedCommand`."""
 
-    def __init__(self, cfg: dict, *, section: str = "llm"):
+    def __init__(self, cfg: dict, *, section: str = "gemma4-e4b-it"):
         l = cfg[section]
         self._audio = bool(l.get("mmproj"))
         self.host: str = l["host"]
@@ -290,7 +290,7 @@ def main() -> None:
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
     parser = argparse.ArgumentParser(
-        description="Llama-3.2-3B intent parser (llama.cpp + ROCm) - component test"
+        description="Gemma 4 intent parser (llama.cpp + ROCm) - component test"
     )
     parser.add_argument("--config", default=None)
     parser.add_argument("--text", default=None, help="single utterance to parse")

@@ -38,8 +38,6 @@ logger = logging.getLogger(__name__)
 # First entry whose device is npu is opened and held. (config section, ONNX
 # key, VitisAI config key, cache key, VitisAI target.)
 _BY_SIZE = (
-    ("whisper", "encoder_onnx", "encoder_vitisai_config", "cache_key_encoder", None),
-    ("whisper", "decoder_onnx", "decoder_vitisai_config", "cache_key_decoder", None),
     ("yolo_pose", "onnx", "vitisai_config", "cache_key", "VAIML"),
     ("yolo_detect", "onnx", "vitisai_config", "cache_key", "VAIML"),
 )
@@ -61,8 +59,7 @@ def active_provider(session: ort.InferenceSession) -> str:
 def sizer_onnx(cfg: dict) -> Path | None:
     """ONNX file of the first model whose own YAML ``device`` is ``npu``.
 
-    Whisper is first in the list and the shipped config leaves it on the CPU,
-    so this is the YOLO-pose file.
+    The shipped config puts YOLO-pose on the NPU, so this is that file.
     """
     found = _sizer_choice(cfg)
     return None if found is None else found[0]
