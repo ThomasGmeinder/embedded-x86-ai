@@ -161,6 +161,9 @@ done
 say "Installing so101_sim from this clone"
 "$PY" -m pip install --quiet --no-deps --upgrade --force-reinstall -e "${REPO_ROOT}/so101_sim"
 "$PY" -m so101_sim.assets || warn "could not fetch the SO-101 meshes - the digital twin will not load"
+# A pull does not re-run bootstrap. Without this, the kernel cannot import vla_pipeline.
+say "Installing vla_pipeline from this clone"
+"$PY" -m pip install --quiet --no-deps --upgrade --force-reinstall -e "${REPO_ROOT}"
 
 # ipykernel is handled separately (NOT in the presence-only loop above): it must
 # stay on the 6.x line. ipykernel 7.x removed Kernel.do_one_iteration(), which

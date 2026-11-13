@@ -611,6 +611,12 @@ uv pip install 'mujoco>=3.1.3' 'PyOpenGL>=3.1' 'numpy<2' \
   && python -m so101_sim.assets \
   || warn "Digital twin install incomplete - --digital-twin will not work. Retry: python -m so101_sim.assets"
 
+# Editable and --no-deps: the notebook kernel and run_pipeline.sh both import
+# vla_pipeline. A pull does not copy this venv, so the install has to happen here.
+log "Installing vla_pipeline into the venv (editable, this clone)"
+uv pip install --no-deps -e "${REPO_ROOT}" \
+  || die "Could not install vla_pipeline from ${REPO_ROOT}"
+
 # -----------------------------------------------------------------------------
 # 4d. Enforce GUI-enabled OpenCV (LAST pip action, like onnxruntime)
 # -----------------------------------------------------------------------------
