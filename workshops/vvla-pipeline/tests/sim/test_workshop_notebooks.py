@@ -89,7 +89,27 @@ def test_readme_lists_every_notebook_folder():
 @pytest.mark.parametrize("path", PATHS, ids=lambda p: f"{p.parent.name}/{p.stem}")
 def test_notebook_runs(path: Path):
     join_test_domain()
-    run = run_notebook(path, SCRIPTS.get(path.stem))
+    # 02_robot connects to the real arm launch ./run_pipeline.sh starts.
+    # There is no bus on the test machine, so this is that launch with the
+    # motors off (./run_pipeline.sh --dry-run).
+    launches = None
+    if path.stem == "02_robot":
+        import tempfile
+
+        from twin_ros_rig import assert_domain_free, start_pipeline_launches, stop_pipeline_launches
+
+        assert_domain_free("a twin already runs on the test domain")
+        log = tempfile.NamedTemporaryFile(prefix="robot_notebook_stack_", suffix=".log", delete=False)
+        launches = start_pipeline_launches(
+            log, digital_twin=False, dry_run=True, cameras=False,
+        )
+    try:
+        run = run_notebook(path, SCRIPTS.get(path.stem))
+    finally:
+        if launches is not None:
+            from twin_ros_rig import stop_pipeline_launches
+
+            stop_pipeline_launches(launches)
     yolo = [(model, provider) for model, provider in run.sessions if "yolo" in model.lower()]
     if path.stem in YOLO:
         assert yolo, f"{path.name} made no YOLO session"

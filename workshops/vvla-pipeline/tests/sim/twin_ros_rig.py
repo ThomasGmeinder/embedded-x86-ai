@@ -38,26 +38,34 @@ EXTENDED = {"shoulder_lift": -20.0, "elbow_flex": 20.0, "wrist_flex": 0.0}
 BODY_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
 
 
-def start_pipeline_launches(log) -> list:
-    """The two ``python -m so101_sim.stack`` commands ``run_notebooks.sh`` runs.
+def start_pipeline_launches(
+    log, *, digital_twin: bool = True, dry_run: bool = False, cameras: bool = True,
+) -> list:
+    """The ``python -m so101_sim.stack`` commands ``run_pipeline.sh`` runs.
 
-    The child inherits this process's ROS domain. The call returns when the
-    twin node logs that it is publishing, which is after it holds the domain lock.
+    The defaults are the digital twin ``run_notebooks.sh`` starts.
+    ``digital_twin=False`` is the real arm; ``dry_run=True`` leaves the motors
+    off, which is ``./run_pipeline.sh --dry-run``. The child inherits this
+    process's ROS domain. The call returns when the arm launch logs that it
+    is publishing.
     """
     from so101_sim.stack import command
 
     join_test_domain()
     os.environ["PYTHONUNBUFFERED"] = "1"
-    camera = subprocess.Popen(
-        command(arm=False, cameras=True, digital_twin=True, dry_run=False),
-        stdout=log, stderr=subprocess.STDOUT,
-    )
+    procs = []
+    if cameras:
+        procs.append(subprocess.Popen(
+            command(arm=False, cameras=True, digital_twin=digital_twin, dry_run=dry_run),
+            stdout=log, stderr=subprocess.STDOUT,
+        ))
     arm = subprocess.Popen(
-        command(arm=True, cameras=False, digital_twin=True, dry_run=False),
+        command(arm=True, cameras=False, digital_twin=digital_twin, dry_run=dry_run),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
     _wait_until_publishing(arm, log)
-    return [camera, arm]
+    procs.append(arm)
+    return procs
 
 
 def _wait_until_publishing(arm_launch: subprocess.Popen, log) -> None:
@@ -73,7 +81,7 @@ def _wait_until_publishing(arm_launch: subprocess.Popen, log) -> None:
     if not ready:
         name = getattr(log, "name", None)
         text = Path(name).read_text(errors="replace")[-2000:] if name else ""
-        raise RuntimeError(f"the digital twin exited before it was publishing:\n{text}")
+        raise RuntimeError(f"the arm launch exited before it was publishing:\n{text}")
     threading.Thread(
         target=_keep_log, args=(arm_launch.stdout, log), daemon=True, name="twin-arm-log",
     ).start()
