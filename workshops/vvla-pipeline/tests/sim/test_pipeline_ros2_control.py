@@ -107,7 +107,7 @@ def test_a_stop_cancels_the_move_and_the_arm_holds(arm):
 
 
 def test_a_goal_the_joints_cannot_meet_is_blocked(arm):
-    """Tighter than one encoder step: the trajectory controller ends the goal as a tolerance violation."""
+    """Tighter than one encoder step: the arm settles still, outside the goal."""
     _world, client = arm
     assert client.move_to({"shoulder_pan": 10.0}, tolerance_deg=1e-4) == "blocked"
 
