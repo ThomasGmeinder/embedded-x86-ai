@@ -11,10 +11,11 @@
 # run_notebooks.sh - one command to open the workshop notebooks.
 #
 # ./bootstrap.sh installs everything this needs: the repo venv (../.venv) with
-# the pipeline, the workshop helpers and the twin, and the "vvla-workshop"
-# Jupyter kernel with the NPU runtime and ROS 2 in its kernel.json (so VS Code
-# runs the notebooks the same way). This script, in order:
-#   1. Checks the venv and that kernel, and sources the Ryzen AI runtime and
+# the pipeline, the workshop helpers and the twin. This script, in order:
+#   1. Checks the venv, registers the "vvla-workshop" Jupyter kernel for this
+#      clone (scripts/register_kernel.sh: the NPU runtime and ROS 2 go in its
+#      kernel.json, so VS Code runs the notebooks the same way; every launch
+#      does it because that file is shared by all clones), and sources the Ryzen AI runtime and
 #      ROS 2 for the llama server and the tests started here. Installs this
 #      clone's vla_pipeline into the venv, and fetches the Gemma 4 voice
 #      models (scripts/ensure_voice.sh) when they are missing.
@@ -49,7 +50,7 @@ say "run_notebooks.sh${*:+ $*}"
 
 WORKSHOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${WORKSHOP_DIR}/.." && pwd)"
-KERNEL_NAME="vvla-workshop"  # the kernel the notebooks ask for; bootstrap.sh registers it
+KERNEL_NAME="vvla-workshop"  # the kernel the notebooks ask for; scripts/register_kernel.sh registers it
 JUPYTER_PORT="${JUPYTER_PORT:-8888}"
 
 NO_LAUNCH=0; LAUNCHER="lab"; WITH_LLM=1; WITH_MONITOR=1; TEST_MODE=0
@@ -77,17 +78,10 @@ PY="${VENV_DIR}/bin/python"
 [[ -x "$PY" ]] || die "no venv at ${VENV_DIR} - run ./bootstrap.sh from the repo root first."
 say "Python: $("$PY" -c 'import sys; print(sys.version.split()[0], "@", sys.executable)')"
 
-"$PY" - "$KERNEL_NAME" <<'PYEOF' || die "the '${KERNEL_NAME}' kernel is not registered with its environment - run ./bootstrap.sh from the repo root."
-import sys
-from jupyter_client.kernelspec import KernelSpecManager, NoSuchKernel
-try:
-    spec = KernelSpecManager().get_kernel_spec(sys.argv[1])
-except NoSuchKernel:
-    sys.exit(1)
-missing = [k for k in ("AMENT_PREFIX_PATH", "LD_LIBRARY_PATH") if k not in spec.env]
-sys.exit(1 if missing else 0)
-PYEOF
-say "Kernel '${KERNEL_NAME}' registered with the NPU runtime and ROS 2 in its kernel.json"
+# The kernel.json is per user and shared by every clone, so register it from
+# this clone on every launch.
+"${REPO_ROOT}/scripts/register_kernel.sh" || die "could not register the '${KERNEL_NAME}' kernel - run ./bootstrap.sh from the repo root."
+say "Kernel '${KERNEL_NAME}' registered for this clone (NPU runtime and ROS 2 in its kernel.json)"
 
 say "Sourcing scripts/ryzen_ai_env.sh (NPU runtime, llama.cpp GPU target)"
 # shellcheck disable=SC1091

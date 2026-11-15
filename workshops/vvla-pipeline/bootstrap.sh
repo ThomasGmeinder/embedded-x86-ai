@@ -699,39 +699,9 @@ done
 # VS Code and JupyterLab start a kernel from its kernel.json alone and source
 # nothing, so the NPU runtime (scripts/ryzen_ai_env.sh), ROS 2 and the ros_ws
 # overlay built above are written into it. The notebooks ask for this kernel
-# by name.
-KERNEL_NAME="vvla-workshop"
-log "Registering the Jupyter kernel '${KERNEL_NAME}' with the NPU runtime and ROS 2 environment"
-python -m ipykernel install --user --name "$KERNEL_NAME" --display-name "Python (VVLA workshop)"
-KERNEL_ENV_JSON="$(
-  set +eu
-  # shellcheck disable=SC1091
-  source /opt/ros/jazzy/setup.bash
-  # shellcheck disable=SC1091
-  source "${ROS_WS}/install/setup.bash"
-  # shellcheck disable=SC1091
-  source "${REPO_ROOT}/scripts/ryzen_ai_env.sh"
-  python - <<'PY'
-import json, os
-keys = [
-    "PATH", "VIRTUAL_ENV", "LD_LIBRARY_PATH", "PYTHONPATH",
-    "XLNX_VART_FIRMWARE", "XILINX_XRT", "HSA_OVERRIDE_GFX_VERSION", "FASTDDS_BUILTIN_TRANSPORTS",
-    "AMENT_PREFIX_PATH", "AMENT_CURRENT_PREFIX", "COLCON_PREFIX_PATH", "CMAKE_PREFIX_PATH", "PKG_CONFIG_PATH",
-    "ROS_DISTRO", "ROS_VERSION", "ROS_PYTHON_VERSION", "ROS_LOCALHOST_ONLY", "RMW_IMPLEMENTATION",
-]
-print(json.dumps({k: os.environ[k] for k in keys if os.environ.get(k)}))
-PY
-)" || die "Could not read the runtime environment for the kernel."
-python - "$KERNEL_NAME" "$KERNEL_ENV_JSON" <<'PY' || die "Could not write the kernel's environment."
-import json, sys
-from pathlib import Path
-from jupyter_client.kernelspec import KernelSpecManager
-path = Path(KernelSpecManager().get_kernel_spec(sys.argv[1]).resource_dir) / "kernel.json"
-spec = json.loads(path.read_text())
-spec["env"] = json.loads(sys.argv[2])
-path.write_text(json.dumps(spec, indent=1) + "\n")
-print(f"  {path}: {', '.join(sorted(spec['env']))}")
-PY
+# by name. workshop/run_notebooks.sh runs the same script on every launch.
+log "Registering the Jupyter kernel 'vvla-workshop' with the NPU runtime and ROS 2 environment"
+"${REPO_ROOT}/scripts/register_kernel.sh" || die "Could not register the Jupyter kernel."
 
 # -----------------------------------------------------------------------------
 # 5. Models
