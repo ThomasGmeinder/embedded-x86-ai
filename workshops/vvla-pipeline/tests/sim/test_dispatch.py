@@ -8,7 +8,7 @@
 """The stop fast path and the LLM parse: the pipeline's dispatcher and its
 ``handle_transcript`` (the answer key of the workshop's TODO 3.2).
 
-The stand-in LLM hears "stop" while it is still parsing, as the always-hot
+The stand-in LLM hears "stop robot" while it is still parsing, as the always-hot
 listener delivers it on the rig.
 """
 
@@ -48,7 +48,7 @@ def test_a_stop_said_while_the_llm_parses_cancels_the_command():
     held = {}
 
     def parse(text):
-        held["dispatcher"].on_transcript("stop")
+        held["dispatcher"].on_transcript("stop robot")
         return ParsedCommand(Intent.WAVE, transcript=text)
 
     d, ctx, ran, said, events = _dispatcher(parse)
@@ -65,7 +65,7 @@ def test_a_stop_said_before_the_command_does_not_cancel_it():
     from vla_pipeline.llm.intents import Intent, ParsedCommand
 
     d, ctx, ran, _said, events = _dispatcher(lambda text: ParsedCommand(Intent.WAVE, transcript=text))
-    d.on_transcript("stop")
+    d.on_transcript("stop robot")
     d.dispatch("wave at me")
 
     assert ran == [Intent.WAVE]
@@ -80,13 +80,100 @@ def test_a_stop_discards_a_command_already_queued():
         lambda text: ParsedCommand(Intent.WAVE, transcript=text)
     )
     d.on_transcript("wave at me")
-    d.on_transcript("stop")
+    d.on_transcript("stop robot")
 
-    generation, text = d.transcripts.get_nowait()
+    generation, text, command = d.transcripts.get_nowait()
+    assert command is None
     d.dispatch(text, generation)
 
     assert ran == [], "a command queued before stop ran anyway"
     assert "cancelled" in events, events
+
+
+def _while_mimicking(parse):
+    """A dispatcher whose current behavior is gesture mimic."""
+    from vla_pipeline.llm.intents import Intent, ParsedCommand
+
+    d, ctx, ran, said, events = _dispatcher(parse)
+    d.current = ParsedCommand(Intent.GESTURE_MIMIC)
+    d.busy.set()
+    return d, ctx, ran, said, events
+
+
+def test_speech_that_is_not_a_command_does_not_stop_mimic():
+    from vla_pipeline.llm.intents import Intent, ParsedCommand
+
+    d, ctx, _ran, said, events = _while_mimicking(
+        lambda text: ParsedCommand(Intent.UNKNOWN, transcript=text)
+    )
+    d.on_transcript("so this is the camera on the wrist")
+
+    assert not ctx.stop_event.is_set()
+    assert d.transcripts.empty()
+    assert "queued" not in events
+    assert "ignored" in events
+    assert said == []
+
+
+def test_the_same_mimic_command_does_not_stop_mimic():
+    d, ctx, _ran, _said, events = _while_mimicking(lambda text: (_ for _ in ()).throw(AssertionError(text)))
+    reasons = []
+    d.listeners.append(lambda _event, **data: reasons.append(data.get("reason")))
+    d.on_transcript('{"command": "gesture_mimic", "object": "", "heard": "copy me"}')
+
+    assert not ctx.stop_event.is_set()
+    assert d.transcripts.empty()
+    assert "queued" not in events
+    assert "already mimicking" in reasons
+
+
+def test_a_different_command_stops_mimic_and_is_not_parsed_twice():
+    from vla_pipeline.llm.intents import Intent, ParsedCommand
+
+    calls = []
+
+    def parse(text):
+        calls.append(text)
+        return ParsedCommand(Intent.WAVE, transcript=text)
+
+    d, ctx, ran, _said, events = _while_mimicking(parse)
+    d.on_transcript("wave at me")
+    assert ctx.stop_event.is_set()
+    assert calls == ["wave at me"]
+
+    generation, text, command = d.transcripts.get_nowait()
+    d.busy.clear()
+    d.current = None
+    ctx.stop_event.clear()
+    d.dispatch(text, generation, command)
+
+    assert calls == ["wave at me"], "the queued command was parsed again"
+    assert ran == [Intent.WAVE]
+    assert "parsed" in events
+
+
+def test_a_parse_failure_during_mimic_leaves_it_running():
+    d, ctx, _ran, said, events = _while_mimicking(
+        lambda _text: (_ for _ in ()).throw(RuntimeError("llama unavailable"))
+    )
+    d.on_transcript("wave at me")
+
+    assert not ctx.stop_event.is_set()
+    assert d.transcripts.empty()
+    assert "parse_error" in events
+    assert any("language service" in message for message in said)
+
+
+def test_another_behavior_still_stops_on_any_transcript():
+    from vla_pipeline.llm.intents import Intent, ParsedCommand
+
+    d, ctx, _ran, _said, events = _dispatcher(lambda text: (_ for _ in ()).throw(AssertionError(text)))
+    d.current = ParsedCommand(Intent.WAVE)
+    d.busy.set()
+    d.on_transcript("whatever the crowd said")
+
+    assert ctx.stop_event.is_set()
+    assert "queued" in events
 
 
 def test_a_parse_failure_does_not_kill_dispatch():
@@ -107,7 +194,7 @@ def test_handle_transcript_drops_a_command_whose_parse_a_stop_overlapped():
     ctx, ran, _said = _context()
 
     def parse(text):
-        handle_transcript(ctx, "stop", parse)
+        handle_transcript(ctx, "stop robot", parse)
         return ParsedCommand(Intent.WAVE, transcript=text)
 
     handle_transcript(ctx, "wave at me", parse)
@@ -121,7 +208,7 @@ def test_a_stop_said_before_handle_transcript_does_not_cancel_the_command():
     from vla_pipeline.llm.intents import Intent, ParsedCommand
 
     ctx, ran, _said = _context()
-    handle_transcript(ctx, "stop", None)
+    handle_transcript(ctx, "stop robot", None)
     handle_transcript(ctx, "wave at me", lambda text: ParsedCommand(Intent.WAVE, transcript=text))
 
     assert ran == [Intent.WAVE]

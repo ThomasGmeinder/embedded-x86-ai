@@ -16,6 +16,9 @@
 #   ./run_sim_tests.sh --sim-video failed
 #   ./run_sim_tests.sh --sim-eyes seg
 #
+# The first pytest run that fails ends this script with its exit status; the
+# runs after it are not started.
+#
 # ./bootstrap.sh installs everything these tests import.
 set -euo pipefail
 
@@ -28,7 +31,6 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
 # shellcheck disable=SC1091
 source "${REPO_ROOT}/scripts/test_env.sh"
-RC=0
 LAST_TWIN_DOMAIN=""
 
 # A MoveIt process that just exited can leave its DDS participant on that
@@ -51,12 +53,12 @@ else:
 PY
 }
 say "NPU load order"
-"$PY" -m pytest tests/npu || RC=$?
+"$PY" -m pytest tests/npu
 say "Stacks on the twin"
 # A second MoveItPy in one process segfaults when its context is destroyed.
 # The two twin modules each construct one, so each gets its own process.
 "$PY" -m pytest --rootdir "$REPO_ROOT" tests/sim -m "sim and not docs" \
-  --ignore=tests/sim/test_twin_infra.py --ignore=tests/sim/test_twin_ros.py "$@" || RC=$?
+  --ignore=tests/sim/test_twin_infra.py --ignore=tests/sim/test_twin_ros.py "$@"
 say "MoveIt twin, one MoveItPy per process"
 # The shared fixtures keep one MoveItPy. Tests that construct their own need
 # a free domain, so they are deselected here and run below. Collecting them
@@ -67,7 +69,7 @@ run_on_fresh_domain() {
   domain="$(pick_twin_domain)" || die "no free ROS domain for a twin"
   say "ROS domain ${domain}"
   LAST_TWIN_DOMAIN="$domain"
-  TWIN_TEST_DOMAIN_ID="$domain" "$@" || RC=$?
+  TWIN_TEST_DOMAIN_ID="$domain" "$@"
 }
 run_on_fresh_domain "$PY" -m pytest --rootdir "$REPO_ROOT" tests/sim/test_twin_infra.py -m "sim and not docs" \
   --deselect tests/sim/test_twin_infra.py::test_the_twin_domain_is_private \
@@ -83,5 +85,4 @@ do
 done
 run_on_fresh_domain "$PY" -m pytest --rootdir "$REPO_ROOT" tests/sim/test_twin_ros.py -m "sim and not docs" "$@"
 say "MoveIt 2 on the twin"
-"$PY" -m pytest --rootdir "$REPO_ROOT" tests/moveit || RC=$?
-exit "$RC"
+"$PY" -m pytest --rootdir "$REPO_ROOT" tests/moveit

@@ -5,12 +5,15 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Llama-3.2-3B intent parsing via llama.cpp running on ROCm.
+"""Gemma 4 E4B intent parsing via llama.cpp running on ROCm.
 
 The model runs in ``llama-server`` (built with ``-DGGML_HIP=ON`` by
 ``bootstrap.sh``) and is queried over its OpenAI-compatible HTTP API. A GBNF
 grammar (``config/intent.gbnf``) constrains generation so the model can only
-emit ``{"command": "<name>", "object": "<words>"}`` - no free-form parsing.
+emit ``{"command": "<name>", "object": "<words>", "heard": "<words>"}`` - no
+free-form parsing. The ``gemma4-e4b-it`` config section picks the model; when it
+has an ``mmproj`` (the audio projector), :func:`parse_audio_clip` sends a
+microphone clip and Gemma hears it directly.
 
 :func:`llama_server_command` is the launch recipe and :func:`parse_intent`
 one grammar-constrained request (the workshop's TODOs 1.5 and 1.6).
@@ -31,6 +34,7 @@ Independent test
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import logging
 import os
@@ -49,6 +53,9 @@ logger = logging.getLogger(__name__)
 # What llama-server logs once its model is loaded and it serves requests.
 READY_LINE = "listening on http://"
 
+# The config section that names the model, its port, and its grammar.
+DEFAULT_SECTION = "gemma4-e4b-it"
+
 
 def server_alive(base_url: str, http=None, timeout: float = 0.5) -> bool:
     """``GET /health`` answers HTTP 200."""
@@ -59,16 +66,17 @@ def server_alive(base_url: str, http=None, timeout: float = 0.5) -> bool:
         return False
 
 
-def llama_server_command(cfg: dict):
+def llama_server_command(cfg: dict, section: str = DEFAULT_SECTION):
     """Build the ``llama-server`` launch: ``(cmd list, env dict)``.
 
-    Reads ``llm:`` from the config. The command carries the model, host,
-    port, ``--n-gpu-layers``, ``--ctx-size``, ``--parallel``, and
+    Reads the ``section`` block of the config (default ``gemma4-e4b-it``). The
+    command carries the model, host, port, ``--n-gpu-layers``, ``--ctx-size``,
+    ``--parallel``, ``--mmproj`` (the audio projector) when configured, and
     ``--no-warmup`` when configured; the environment carries
     ``HSA_OVERRIDE_GFX_VERSION`` when the config sets one, without
     overriding a value the user already exported.
     """
-    l = cfg["llm"]
+    l = cfg[section]
     server_bin = resolve(l["server_bin"])
     model = resolve(l["model_gguf"])
     if not server_bin.exists():
@@ -84,6 +92,13 @@ def llama_server_command(cfg: dict):
         "--ctx-size", str(l["ctx_size"]),
         "--parallel", str(l.get("parallel", 1)),
     ]
+    if l.get("mmproj"):
+        mmproj = resolve(l["mmproj"])
+        if not mmproj.exists():
+            raise FileNotFoundError(
+                f"{mmproj} not found - the Gemma audio projector has not finished downloading."
+            )
+        cmd += ["--mmproj", str(mmproj)]
     if l.get("no_warmup", False):
         cmd.append("--no-warmup")
     # Smaller compute ubatches keep each GPU submission short, so a 3-D
@@ -107,29 +122,31 @@ def llama_server_command(cfg: dict):
     return cmd, env
 
 
-def parse_intent(transcript: str, base_url: str, grammar: str, http=None, temperature: float = 0.0) -> ParsedCommand:
-    """One transcript → one :class:`ParsedCommand`, grammar-constrained.
+def _chat_command(
+    user_content, base_url: str, grammar: str, http=None, temperature: float = 0.0,
+    *, audio: bool = False, transcript: str = "",
+) -> ParsedCommand:
+    """One grammar-constrained chat completion, read into a :class:`ParsedCommand`.
 
-    POSTs an OpenAI-style chat completion to ``{base_url}/v1/chat/completions``
-    with the system prompt (:data:`INTENT_SYSTEM_PROMPT`), the transcript as
-    the user message, ``temperature`` (0 = deterministic routing), a small
-    ``max_tokens``, and the GBNF ``grammar``, which is what makes the output
-    JSON guaranteed parseable. An empty transcript maps to UNKNOWN without
-    any HTTP round trip.
+    ``user_content`` is the text or, for audio, the content list with the WAV
+    clip. ``heard`` (the words Gemma reports) is the transcript when Gemma gives
+    none.
     """
     http = http or requests
-    if not transcript or not transcript.strip():
-        return ParsedCommand(Intent.UNKNOWN, transcript=transcript or "")
     payload = {
         "messages": [
             {"role": "system", "content": INTENT_SYSTEM_PROMPT},
-            {"role": "user", "content": transcript.strip()},
+            {"role": "user", "content": user_content},
         ],
         "temperature": temperature,
-        "max_tokens": 48,
+        "max_tokens": 96,  # command JSON plus the short "heard" phrase
         "grammar": grammar,
     }
+    if audio:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     r = http.post(f"{base_url}/v1/chat/completions", json=payload, timeout=30)
+    if r.status_code >= 400:
+        logger.error("llama-server rejected the request: %s", r.text[:500])
     r.raise_for_status()
     content = r.json()["choices"][0]["message"]["content"]
     try:
@@ -142,7 +159,37 @@ def parse_intent(transcript: str, base_url: str, grammar: str, http=None, temper
     obj = str(data.get("object", "") or "").strip()
     if obj:
         params["object"] = obj
-    return ParsedCommand(Intent.from_string(command), params=params, transcript=transcript)
+    heard = str(data.get("heard", "") or "").strip() or transcript
+    return ParsedCommand(Intent.from_string(command), params=params, transcript=heard)
+
+
+def parse_intent(
+    transcript: str, base_url: str, grammar: str, http=None, temperature: float = 0.0, *, audio: bool = False,
+) -> ParsedCommand:
+    """One transcript → one :class:`ParsedCommand`, grammar-constrained.
+
+    POSTs an OpenAI-style chat completion to ``{base_url}/v1/chat/completions``
+    with the system prompt (:data:`INTENT_SYSTEM_PROMPT`), the transcript as
+    the user message, ``temperature`` (0 = deterministic routing), a small
+    ``max_tokens``, and the GBNF ``grammar``, which is what makes the output
+    JSON guaranteed parseable. An empty transcript maps to UNKNOWN without
+    any HTTP round trip.
+    """
+    if not transcript or not transcript.strip():
+        return ParsedCommand(Intent.UNKNOWN, transcript=transcript or "")
+    return _chat_command(
+        transcript.strip(), base_url, grammar, http, temperature, audio=audio, transcript=transcript,
+    )
+
+
+def parse_audio_clip(wav: bytes, base_url: str, grammar: str, http=None, temperature: float = 0.0) -> ParsedCommand:
+    """One WAV clip → one :class:`ParsedCommand`: Gemma hears the audio itself."""
+    encoded = base64.b64encode(wav).decode("ascii")
+    content = [
+        {"type": "text", "text": "Classify the spoken robot instruction in this audio."},
+        {"type": "input_audio", "input_audio": {"data": encoded, "format": "wav"}},
+    ]
+    return _chat_command(content, base_url, grammar, http, temperature, audio=True)
 
 
 class LlamaIntentParser:
@@ -151,8 +198,10 @@ class LlamaIntentParser:
     It owns the server process only if it started one.
     """
 
-    def __init__(self, cfg: dict, autostart: bool | None = None):
-        l = cfg["llm"]
+    def __init__(self, cfg: dict, autostart: bool | None = None, *, section: str = DEFAULT_SECTION):
+        l = cfg[section]
+        self._section = section
+        self._audio = bool(l.get("mmproj"))
         self.base = f"http://{l['host']}:{int(l['port'])}"
         self.temperature: float = float(l.get("temperature", 0.0))
         self.grammar = resolve(l["grammar_file"]).read_text(encoding="utf-8")
@@ -176,7 +225,7 @@ class LlamaIntentParser:
     def _spawn_server(self, ready_timeout_s: float = 120.0) -> None:
         """Launch llama-server as a subprocess and block until it logs that it
         is listening (:data:`READY_LINE`), or exits."""
-        cmd, env = llama_server_command(self._cfg)
+        cmd, env = llama_server_command(self._cfg, self._section)
         logger.info("Starting llama-server (ROCm): %s", " ".join(cmd))
         log_dir = resolve(self._log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -245,12 +294,27 @@ class LlamaIntentParser:
     def parse(self, transcript: str) -> ParsedCommand:
         """Map one spoken transcript to a ParsedCommand (grammar-constrained), logging the latency."""
         t0 = time.perf_counter()
-        cmd = parse_intent(transcript, self.base, self.grammar, http=self._http, temperature=self.temperature)
+        cmd = parse_intent(
+            transcript, self.base, self.grammar, http=self._http, temperature=self.temperature, audio=self._audio,
+        )
         logger.info(
             "Intent %r %s ← %r (%.0f ms)",
             cmd.intent.value,
             cmd.params or "",
-            transcript,
+            cmd.transcript or transcript,
+            (time.perf_counter() - t0) * 1e3,
+        )
+        return cmd
+
+    def parse_audio(self, wav: bytes) -> ParsedCommand:
+        """Map one WAV clip to a ParsedCommand: Gemma hears the audio (needs the ``mmproj``)."""
+        t0 = time.perf_counter()
+        cmd = parse_audio_clip(wav, self.base, self.grammar, http=self._http, temperature=self.temperature)
+        logger.info(
+            "Intent %r %s ← %r (%.0f ms)",
+            cmd.intent.value,
+            cmd.params or "",
+            cmd.transcript,
             (time.perf_counter() - t0) * 1e3,
         )
         return cmd
@@ -275,8 +339,8 @@ _SELFTEST_CASES = [
     ("place it", Intent.PLACE, None),
     ("set it down on the table", Intent.PLACE, None),
     ("wave hello", Intent.WAVE, None),
-    ("go back to your home position", Intent.HOME, None),
-    ("stop right now", Intent.STOP, None),
+    ("go home", Intent.HOME, None),
+    ("stop robot", Intent.STOP, None),
     ("what's the weather like today", Intent.UNKNOWN, None),
 ]
 
@@ -287,7 +351,7 @@ def main() -> None:
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
     parser = argparse.ArgumentParser(
-        description="Llama-3.2-3B intent parser (llama.cpp + ROCm) - component test"
+        description="Gemma 4 intent parser (llama.cpp + ROCm) - component test"
     )
     parser.add_argument("--config", default=None)
     parser.add_argument("--text", default=None, help="single utterance to parse")

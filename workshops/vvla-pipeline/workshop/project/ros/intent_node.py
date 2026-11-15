@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""TODOs 2.10-2.11: the Llama intent node - language as a ROS 2 citizen.
+"""TODOs 2.10-2.11: the Gemma intent node - language as a ROS 2 citizen.
 
 Transcripts arrive as ``std_msgs/String`` on ``/vla/transcript``; parsed
 intents leave as JSON on ``/vla/intent``, so ANY node can react to language
@@ -47,7 +47,7 @@ class IntentNode(intent_node.IntentNode):
         1. :func:`is_stop` on the RAW text → publish
            ``ParsedCommand(Intent.STOP)`` immediately and return - no LLM round
            trip on the safety path.
-        2. :func:`is_noise` → drop silently (Whisper's silence hallucinations
+        2. :func:`is_noise` → drop silently (stock phrases heard in silence
            must not become robot commands).
         3. Otherwise ``self._parse(text)`` and publish the result via
            :meth:`publish_intent`.

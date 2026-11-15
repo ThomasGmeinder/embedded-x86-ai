@@ -137,6 +137,19 @@ def test_a_partial_line_is_not_an_answer_yet():
     assert cell_answer("Got the tooth", "") is None
 
 
+DANCE_PROGRESS = r"^\d+\.\d+ s/beat, \d+ beats$|^  beat \d+: "
+
+
+def test_a_progress_line_is_not_the_cells_answer():
+    assert cell_answer("0.60 s/beat, 8 beats\n  beat 1: pan= +12.0  roll= -3.0\n", "", DANCE_PROGRESS) is None
+
+
+def test_a_line_that_is_not_progress_is_still_the_answer():
+    assert cell_answer("0.60 s/beat, 8 beats\n  stop! interrupting mid-dance\n", "", DANCE_PROGRESS) == (
+        "stop! interrupting mid-dance"
+    )
+
+
 def test_an_error_line_is_the_cells_answer():
     assert cell_answer("", "[WARN] [moveit]: Joint jerk limits are not defined.\n") == (
         "[WARN] [moveit]: Joint jerk limits are not defined."

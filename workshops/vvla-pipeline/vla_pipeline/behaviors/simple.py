@@ -9,7 +9,7 @@
 
 Both are deliberately tiny: they are the canonical shape of a behavior
 handler - ``(ctx, cmd)`` in, motion through ``ctx.arm``, ``ctx.stop_check``
-polled so a spoken "stop" interrupts mid-move, park at the end - and the
+polled so a spoken "stop robot" interrupts mid-move, park at the end - and the
 template for adding new voice commands (see :mod:`vla_pipeline.llm.intents`).
 
 Independent test

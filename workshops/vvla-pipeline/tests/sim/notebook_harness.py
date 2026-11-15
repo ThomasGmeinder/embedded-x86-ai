@@ -380,19 +380,24 @@ def cell_text(cell) -> str:
     return "".join(parts)
 
 
-def cell_answer(stdout: str, stderr: str) -> str | None:
+def cell_answer(stdout: str, stderr: str, progress: str | None = None) -> str | None:
     """What ``stdout`` and ``stderr`` have finished showing, or None while they are still going.
 
-    A complete stdout line is the cell's answer. A line :data:`CELL_ERROR`
-    matches is the cell turning red. A trailing partial line is not an answer yet.
+    A complete stdout line is the cell's answer, unless the regex ``progress``
+    matches it: a line the cell prints on the way to its answer. A line
+    :data:`CELL_ERROR` matches is the cell turning red. A trailing partial
+    line is not an answer yet.
     """
     errors = [line for line in stderr.splitlines() if CELL_ERROR.search(line)]
     if errors:
         return "\n".join(errors)
     if "\n" not in stdout:
         return None
-    finished = stdout[: stdout.rfind("\n") + 1].strip()
-    return finished or None
+    finished = [
+        line for line in stdout[: stdout.rfind("\n") + 1].splitlines()
+        if line.strip() and not (progress and re.search(progress, line))
+    ]
+    return "\n".join(finished).strip() or None
 
 
 @dataclass
@@ -400,8 +405,9 @@ class NotebookRun:
     output: str
 
 
-# A student action: ("type", text), ("click", label), ("wait_for", phrase), or
-# ("updates", n): the cell sent n widget updates, a live view's frames.
+# A student action: ("type", text), ("click", label), ("wait_for", phrase),
+# ("wait_for", phrase, progress): lines matching the regex progress may come
+# first, or ("updates", n): the cell sent n widget updates, a live view's frames.
 # The kernel handles the clicks in the order they arrive, so the button that ends
 # the cell comes after every earlier action.
 DEFAULT_ACTIONS = (("updates", 3),)
@@ -435,6 +441,7 @@ async def _interact(client, watcher, nb, index: int, actions) -> None:
                 console.click(action[1])
         elif kind == "wait_for":
             phrase = action[1]
+            progress = action[2] if len(action) > 2 else None
             shown = mark
 
             def answer():
@@ -448,7 +455,7 @@ async def _interact(client, watcher, nb, index: int, actions) -> None:
                 out, err = watcher.output_since(mark)
                 if phrase in out:
                     return True
-                said = cell_answer(out, err)
+                said = cell_answer(out, err, progress)
                 if said is None:
                     return False
                 raise AssertionError(

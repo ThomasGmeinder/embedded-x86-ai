@@ -112,7 +112,7 @@ def test_run_pipeline_drives_the_twin(twin_domain, tmp_path):
         # The trajectory controller's own report that a keyframe finished.
         # The behavior loggers do not show up on this process's stream.
         child.expect(r"Goal reached, success!", timeout=BEHAVIOR_S)
-        child.sendline("stop")
+        child.sendline("stop robot")
         child.expect(PIPELINE_ENDED, timeout=BEHAVIOR_S)
         assert child.match.group(2) == "stopped", f"'stop' left the dance {child.match.group(2)}"
         child.sendeof()

@@ -1,11 +1,15 @@
 # Workshop project - voice→vision→language→action on Ryzen AI
 
-This is the hands-on project for the workshop. Everything generic is
-provided by the pipeline (`../../vla_pipeline/`); the parts where code
-meets the **AMD Ryzen AI stack**, the **ROS 2 transport**, and the
-**pipeline's control flow** are TODOs that you implement. Each TODO has the
-name and parameters of a finished pipeline function, its answer key
-(`TODO_INDEX` in `../common/feedback.py` names it).
+This is the hands-on project for the workshop: a spoken command, Gemma 4
+on the iGPU, and MoveIt on the arm. YOLO-pose and MediaPipe Hands are how
+"copy my movements" sees you. Everything generic is provided by the pipeline
+(`../../vla_pipeline/`); the parts where code meets the **AMD Ryzen AI
+stack**, the **ROS 2 transport**, and the **pipeline's control flow** are
+TODOs that you implement. Each TODO has the name and parameters of a
+finished pipeline function, its answer key (`TODO_INDEX` in
+`../common/feedback.py` names it). Object detection and the reach are not
+TODOs. They stay in the pipeline to record a demonstrated pick for a later
+VLA finetune.
 
 ## Happy path
 
@@ -53,7 +57,7 @@ resource HUD - **CPU %**, **GPU %**, and **NPU inferences/sec** (or Idle):
 
 ## Layout
 
-    models/        component 1 TODOs: the NPU session factory, MediaPipe Hands, Llama
+    models/        component 1 TODOs: the NPU session factory, MediaPipe Hands, Gemma on llama-server
     ros/           component 2 TODOs: the camera client, the intent node
     integration/   component 3 TODOs: the registry and the gauntlet, the mimic tick, the dance
     _artifacts/    what the self-tests write (created on first run)
@@ -68,4 +72,4 @@ resource HUD - **CPU %**, **GPU %**, and **NPU inferences/sec** (or Idle):
   - **Verify the execution provider.** Asking for the NPU isn't getting it.
   - **Mind the NPU load order.** The first model opened sizes the NPU's
     shared buffers while it stays open. Open YOLO-pose first and keep it
-    open, so YOLO-detect can load after it.
+    open, so the second vision model can load after it.

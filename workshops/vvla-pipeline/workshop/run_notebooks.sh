@@ -15,8 +15,10 @@
 # Jupyter kernel with the NPU runtime and ROS 2 in its kernel.json (so VS Code
 # runs the notebooks the same way). This script, in order:
 #   1. Checks the venv and that kernel, and sources the Ryzen AI runtime and
-#      ROS 2 for the llama server and the tests started here.
-#   2. Starts llama-server on the iGPU through the pipeline
+#      ROS 2 for the llama server and the tests started here. Installs this
+#      clone's vla_pipeline into the venv, and fetches the Gemma 4 voice
+#      models (scripts/ensure_voice.sh) when they are missing.
+#   2. Starts the Gemma 4 llama-server on the iGPU through the pipeline
 #      (python -m vla_pipeline.llm.llama_intent --serve, from config/pipeline.yaml)
 #      unless one already answers. It logs to workshop/logs/llama-serve.log and
 #      stops when you quit Jupyter.
@@ -65,7 +67,7 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 if [[ "$TEST_MODE" -eq 1 && "$WITH_LLM" -eq 0 ]]; then
-  echo "--test needs the llama server: the Llama notebooks run against it (drop --no-llm)" >&2
+  echo "--test needs the llama server: the intent notebook runs against it (drop --no-llm)" >&2
   exit 2
 fi
 
@@ -105,6 +107,12 @@ say "Sourcing the ros_ws overlay ($ROS_WS_SETUP)"
 # shellcheck disable=SC1090
 source "$ROS_WS_SETUP" || die "ros_ws setup failed"
 set -e -u
+
+# A pull does not re-run bootstrap. Without this, the kernel cannot import vla_pipeline.
+say "Installing vla_pipeline from this clone"
+"$PY" -m pip install --quiet --no-deps --upgrade --force-reinstall -e "${REPO_ROOT}"
+# The digital-twin notebook's microphone needs the voice models and a llama-server with Gemma 4 audio.
+VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/ensure_voice.sh"
 
 # --- 2. llama-server on the iGPU (component 1's brain, torn down on exit) ----
 LLAMA_PID=""

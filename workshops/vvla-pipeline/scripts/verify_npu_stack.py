@@ -8,8 +8,6 @@ import os
 import sys
 from pathlib import Path
 
-from vla_pipeline.utils.config import load_config, resolve
-
 
 def fail(message: str, errors: list[str]) -> None:
     print(f"  [FAIL] {message}")
@@ -51,37 +49,7 @@ def main() -> int:
     if "VitisAIExecutionProvider" not in available:
         fail("VitisAIExecutionProvider is not registered", errors)
     else:
-        # Use the already-compiled Whisper cache as a real load probe when it
-        # exists. This must not invoke compilation in the deployment venv.
-        whisper = load_config()["whisper"]
-        model = resolve(whisper["encoder_onnx"])
-        cache_dir = resolve(whisper.get("cache_dir", "cache"))
-        cache_key = whisper.get("cache_key_encoder", "whisper_base_encoder")
-        artifact = cache_dir / cache_key
-        if model.is_file() and artifact.is_dir() and any(artifact.iterdir()):
-            try:
-                session = ort.InferenceSession(
-                    str(model),
-                    providers=[
-                        (
-                            "VitisAIExecutionProvider",
-                            {
-                                "config_file": str(resolve(whisper["encoder_vitisai_config"])),
-                                "cache_dir": str(cache_dir),
-                                "cache_key": cache_key,
-                            },
-                        )
-                    ],
-                )
-                active = session.get_providers()
-                if "VitisAIExecutionProvider" in active:
-                    print("  [ok] cached Whisper session uses VitisAIExecutionProvider")
-                else:
-                    fail(f"cached Whisper session fell back to {active}", errors)
-            except Exception as exc:
-                fail(f"cached Whisper session failed to load: {exc}", errors)
-        else:
-            print("  [warn] no compiled Whisper cache available for a real session probe")
+        print("  [ok] VitisAIExecutionProvider is registered")
 
     if errors:
         print(f"NPU preflight failed ({len(errors)} problem(s)).")

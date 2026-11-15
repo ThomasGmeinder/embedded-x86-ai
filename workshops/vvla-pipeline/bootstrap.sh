@@ -27,7 +27,7 @@
 #      (--system-site-packages so the ROS 2 Jazzy python stack stays importable)
 #   3. Installs Python deps into the venv:
 #        - PyTorch ROCm wheels for the DETECTED arch (AMD repo)
-#        - LeRobot [feetech] from source, MediaPipe, Whisper deps, etc.
+#        - LeRobot [feetech] from source, MediaPipe, etc.
 #        - Ryzen AI onnxruntime (VitisAI EP) from $RYZEN_AI_WHEELS - installed
 #          LAST (section 4c) so nothing clobbers it; ROCm is never used for
 #          onnxruntime (llama.cpp + torch only)
@@ -42,9 +42,9 @@
 #      4f. Registers the "vvla-workshop" Jupyter kernel with the NPU runtime,
 #          ROS 2 and ros_ws/ in its kernel.json (VS Code and Jupyter alike)
 #   5. Downloads the models:
-#        - Whisper-base ONNX encoder/decoder
-#        - Whisper tokenizer + feature extractor (openai/whisper-base.en)
-#        - Llama-3.2-3B-Instruct GGUF Q4_K_M        (hf download)
+#        - Gemma 4 E4B-IT GGUF + audio projector, and Silero VAD v6.2.3
+#          (scripts/ensure_voice.sh; the launchers run it too, so a machine
+#          that only pulls gets them)
 #      YOLO ONNX export is manual (Ultralytics is AGPL-3.0). See the README:
 #        python scripts/export_yolo26s.py pose
 #        python scripts/export_yolo26s.py detect
@@ -79,9 +79,6 @@ UBUNTU_CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME:-noble}")"
 TORCH_SPEC='torch==2.11.0+rocm7.13.0'
 TORCHVISION_SPEC='torchvision==0.26.0+rocm7.13.0'
 TORCHAUDIO_SPEC='torchaudio==2.11.0+rocm7.13.0'
-LLAMA_GGUF_REPO="bartowski/Llama-3.2-3B-Instruct-GGUF"
-LLAMA_GGUF_FILE="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-LLAMA_OUT_DIR="${MODELS_DIR}/llama-3.2-3b"
 # ros2_so_arm (BSD-3): the SO-101 description, its controllers bringup and
 # so_arm_utils, built by section 4e with the commit in patches/ros2_so_arm/.
 SO_ARM_REPO="https://github.com/ros-physical-ai/ros2_so_arm.git"
@@ -402,9 +399,12 @@ if [[ ! -f /opt/ros/jazzy/setup.bash ]]; then
       || die "ROS 2 Jazzy install failed - check packages.ros.org availability for ${UBUNTU_CODENAME}."
   fi
 fi
+# ros-jazzy-desktop does not install these. Install them even when Jazzy was
+# already present.
 if [[ "$SKIP_APT" -eq 0 && -f /opt/ros/jazzy/setup.bash ]]; then
   log "Installing ros2_control, the controllers, xacro, the ROS build tools and MoveIt 2 (sudo)"
   sudo apt install -y ros-jazzy-ros2-control ros-jazzy-ros2-controllers ros-jazzy-xacro ros-dev-tools \
+    ros-jazzy-control-msgs ros-jazzy-controller-manager-msgs \
     ros-jazzy-moveit ros-jazzy-moveit-servo ros-jazzy-moveit-py ros-jazzy-moveit-setup-assistant \
     ros-jazzy-moveit-task-constructor-core ros-jazzy-moveit-task-constructor-capabilities ros-jazzy-pick-ik \
     ros-jazzy-mujoco-ros2-control ros-jazzy-mujoco-ros2-control-plugins \
@@ -425,8 +425,8 @@ fi
 log "Creating uv venv at ${VENV_DIR}"
 # Pin to the SYSTEM Python 3.12 (Ubuntu 24.04 default). Two reasons:
 #   - lerobot 0.5.2 requires Python >= 3.12 (uv's managed 3.11 fails resolution)
-#   - --system-site-packages only exposes ROS 2 Jazzy's rclpy if the venv
-#     interpreter is ABI-identical to the system python it was built against.
+#   - --system-site-packages exposes /usr/lib, not /opt/ros. Jazzy's Python
+#     packages (rclpy, control_msgs) are added by ros_jazzy.pth below.
 SYS_PY="$(command -v /usr/bin/python3.12 || command -v python3.12 || true)"
 if [[ -z "$SYS_PY" ]]; then
   die "python3.12 not found - install it first (apt install python3.12 python3.12-dev) or check your Ubuntu 24.04 setup."
@@ -737,47 +737,19 @@ PY
 # 5. Models
 # -----------------------------------------------------------------------------
 if [[ "$SKIP_MODELS" -eq 0 ]]; then
-  mkdir -p "$MODELS_DIR" "$LLAMA_OUT_DIR" "${REPO_ROOT}/cache" "${REPO_ROOT}/logs"
-
-  log "Pre-downloading NPU-optimized Whisper ONNX (amd/whisper-base-en-onnx-npu)"
-  python - <<'PY' || warn "Whisper ONNX pre-download failed - it will be retried on first run; or set whisper.encoder_onnx/decoder_onnx in config/pipeline.yaml to local files (e.g. exported via scripts/export_whisper_onnx.py)."
-from vla_pipeline.audio.whisper_npu import download_whisper_onnx
-from vla_pipeline.utils.config import load_config, resolve
-cfg = load_config()
-mt = cfg["whisper"].get("model_type", "whisper-base")
-dest = resolve(cfg.get("system", {}).get("models_dir", "models")) / mt
-enc, dec = download_whisper_onnx(mt, dest_dir=dest)
-print("encoder:", enc)
-print("decoder:", dec)
-PY
-
-  log "Caching the Whisper tokenizer and feature extractor"
-  python - <<'PY' || warn "Whisper tokenizer download failed - the first voice run will try Hugging Face again. Check the network, then rerun ./bootstrap.sh --skip-apt --skip-llama."
-from vla_pipeline.audio.whisper_npu import download_whisper_tokenizer
-from vla_pipeline.utils.config import load_config
-cfg = load_config()
-w = cfg["whisper"]
-tok = download_whisper_tokenizer(w.get("model_type", "whisper-base"), w.get("tokenizer"))
-print("tokenizer:", tok)
-PY
+  mkdir -p "$MODELS_DIR" "${REPO_ROOT}/cache" "${REPO_ROOT}/logs"
 
   log "YOLO ONNX export is a manual setup step — see README"
 
-  log "Downloading Llama-3.2-3B-Instruct GGUF (Q4_K_M)"
-  if [[ -f "${LLAMA_OUT_DIR}/${LLAMA_GGUF_FILE}" ]]; then
-    echo "Already present: ${LLAMA_OUT_DIR}/${LLAMA_GGUF_FILE}"
-  else
-    hf download "$LLAMA_GGUF_REPO" "$LLAMA_GGUF_FILE" --local-dir "$LLAMA_OUT_DIR" \
-      || warn "GGUF download failed. Llama 3.2 is a gated/licensed model - log in with 'hf auth login' (accept the Llama 3.2 license on huggingface.co) or place ${LLAMA_GGUF_FILE} in ${LLAMA_OUT_DIR} manually."
-  fi
+  log "Gemma 4 E4B-IT, its audio projector and Silero VAD (skipped when present)"
+  VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/ensure_voice.sh" --models-only \
+    || die "The Gemma 4 voice models are not in place (see the ensure_voice line above)."
 else
   log "Skipping model download/export (--skip-models)"
 fi
 
 # -----------------------------------------------------------------------------
 # 5b. Compile the YOLO NPU models using the full Ryzen AI SDK venv
-# Whisper runs on the CPU (config whisper.device). Compile it only when
-# that field is set to npu: scripts/compile_npu_models.sh --only whisper
 # -----------------------------------------------------------------------------
 # The deployment .venv can RUN precompiled NPU models but cannot COMPILE them.
 # Compilation uses an externally installed full SDK venv. bootstrap never
@@ -809,7 +781,7 @@ python - <<'PY'
 import importlib, sys
 
 ok = True
-for mod in ("numpy", "cv2", "mediapipe", "onnxruntime", "transformers", "yaml", "psutil", "requests", "sounddevice"):
+for mod in ("numpy", "cv2", "mediapipe", "onnxruntime", "transformers", "yaml", "psutil", "requests", "sounddevice", "xacro", "control_msgs"):
     try:
         importlib.import_module(mod)
         print(f"  [ok] {mod}")
@@ -876,7 +848,6 @@ cat <<EOF
 
      python -m vla_pipeline.utils.resource_monitor
      ./workshop/launch_monitor.sh                 # always-on-top CPU%/GPU%/NPU inf/s HUD (open/close anytime)
-     python -m vla_pipeline.audio.whisper_npu --input /tmp/speech.wav --device npu
      python -m vla_pipeline.llm.llama_intent --selftest
      python -m vla_pipeline.vision.yolo_pose_npu
 

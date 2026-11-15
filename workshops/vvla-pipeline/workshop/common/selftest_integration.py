@@ -18,7 +18,7 @@ the pipeline's finished functions.
   handlers (and STOP deliberately is NOT - it's an interrupt, not a behavior).
 - **3.2 handle_transcript** - the safety gauntlet in order: the stop fast
   path (sets the stop event, bypasses the parser), the noise gate (drops
-  Whisper's silence hallucinations before the LLM), normal dispatch, the
+  silence hallucinations before the model), normal dispatch, the
   stop-event hygiene that keeps a stale stop from killing the next behavior,
   and a stop said while the LLM parses keeping that command from running.
 - **3.3 mimic_tick** - one camera frame → pose + hands → mapper → a full,
@@ -97,6 +97,9 @@ def _make_ctx(cfg, *, registry=None):
         def go_to_rest(self):
             self.send_joints(REST_POSE)
             return "arrived"
+
+        def stop(self):
+            pass
 
     return PipelineContext(cfg=cfg, arm=_OfflineArm(), pose=ScriptedPose(), hands=ScriptedHands(),
                            mount_camera=SyntheticCamera(), mapper=mapper_from_config(cfg), registry=registry,
@@ -187,7 +190,7 @@ def check_dispatch(rep: Reporter, cfg: dict, reference: bool) -> None:
     def stop_fast_path():
         """Verify a stop transcript sets the event and bypasses the parser."""
         fresh()
-        cmd = handle_transcript(ctx, "whoa STOP right now", parse)
+        cmd = handle_transcript(ctx, "whoa STOP ROBOT right now", parse)
         assert cmd.intent is Intent.STOP, f"stop transcript returned {cmd.intent.value}, expected stop"
         assert ctx.stop_event.is_set(), "a stop transcript must SET ctx.stop_event so a running behavior is interrupted"
         assert not parsed, ("the parser was invoked on a STOP - the safety stop must bypass the model "
@@ -229,9 +232,9 @@ def check_dispatch(rep: Reporter, cfg: dict, reference: bool) -> None:
         fresh()
 
         def parse_then_hear_stop(text: str):
-            """The LLM parses; meanwhile the always-hot listener hears 'stop'."""
+            """The LLM parses; meanwhile the always-hot listener hears 'stop robot'."""
             cmd = parse(text)
-            handle_transcript(ctx, "stop", parse)
+            handle_transcript(ctx, "stop robot", parse)
             return cmd
 
         handle_transcript(ctx, "show me a dance", parse_then_hear_stop)

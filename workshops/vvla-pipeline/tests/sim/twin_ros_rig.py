@@ -210,11 +210,11 @@ class TwinRig:
         raise_crashes(self._crashes)
 
     def stop(self) -> None:
-        """The console's stop button: ``handle_transcript`` with "stop", from another thread."""
+        """The console's stop button: ``handle_transcript`` with "stop robot", from another thread."""
         from vla_pipeline.dispatch import handle_transcript
         from vla_pipeline.llm.intents import keyword_parse
 
-        handle_transcript(self.ctx, "stop", keyword_parse)
+        handle_transcript(self.ctx, "stop robot", keyword_parse)
 
     def close(self) -> None:
         self.ctx.stop_event.set()

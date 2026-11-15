@@ -120,43 +120,43 @@ def test_the_twin_publishes_its_clock_joints_cameras_and_props(ros_node):
 
 
 @launch
-def test_moveitpy_plans_and_executes_from_home_to_ready(ros_node, moveit):
+def test_moveitpy_plans_and_executes_from_home_to_ready(arm):
     from vla_pipeline.robot import moveit_arm
 
-    moveit_arm.reset_twin(ros_node, moveit)
-    arm = moveit.get_planning_component(moveit_arm.PLANNING_GROUP)
-    arm.set_start_state_to_current_state()
-    arm.set_goal_state(configuration_name="ready")
-    plan = arm.plan()
+    arm.reset()
+    planner = arm.robot.get_planning_component(moveit_arm.PLANNING_GROUP)
+    planner.set_start_state_to_current_state()
+    planner.set_goal_state(configuration_name="ready")
+    plan = planner.plan()
     assert plan, "no plan from home to ready"
-    status = moveit.execute(plan.trajectory, controllers=[])
+    status = arm.robot.execute(plan.trajectory, controllers=[])
     assert status.status == "SUCCEEDED", status.status
     ready = _srdf_state("ready")
-    reached = moveit_arm.current_joints(moveit)
+    reached = moveit_arm.current_joints(arm.robot)
     for joint, value in ready.items():
         assert reached[joint] == pytest.approx(value, abs=0.01), joint
 
 
 @launch
-def test_reset_world_puts_the_arm_and_every_prop_back(ros_node, moveit):
+def test_reset_world_puts_the_arm_and_every_prop_back(ros_node, arm):
     from control_msgs.msg import JointTrajectoryControllerState
     from mujoco_ros2_control_msgs.msg import FreeJointState, FreeJointStateArray
     from mujoco_ros2_control_msgs.srv import SetFreeJointState
 
     from vla_pipeline.robot import moveit_arm
 
-    arm = moveit.get_planning_component(moveit_arm.PLANNING_GROUP)
-    arm.set_start_state_to_current_state()
-    arm.set_goal_state(configuration_name="scan_6")
-    plan = arm.plan()
-    assert plan and moveit.execute(plan.trajectory, controllers=[]).status == "SUCCEEDED"
+    planner = arm.robot.get_planning_component(moveit_arm.PLANNING_GROUP)
+    planner.set_start_state_to_current_state()
+    planner.set_goal_state(configuration_name="scan_6")
+    plan = planner.plan()
+    assert plan and arm.robot.execute(plan.trajectory, controllers=[]).status == "SUCCEEDED"
     moved = FreeJointState(name="sports_ball")
     moved.pose.pose.position.x, moved.pose.pose.position.y, moved.pose.pose.position.z = 0.25, 0.12, 0.05
     reply = moveit_arm._call(ros_node, SetFreeJointState, "/mujoco_ros2_control_node/set_free_joint_state",
                              SetFreeJointState.Request(free_joints=[moved]), 15.0)
     assert reply.success, reply.message
 
-    moveit_arm.reset_twin(ros_node, moveit)
+    arm.reset()
 
     home = _srdf_state("home")
     held = _next(ros_node, JointTrajectoryControllerState, "/joint_trajectory_controller/controller_state")

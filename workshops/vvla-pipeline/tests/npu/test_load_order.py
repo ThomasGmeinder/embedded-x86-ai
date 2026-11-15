@@ -12,8 +12,7 @@
 The NPU buffers a process's models share live as long as it keeps an NPU
 session open, so each case runs in a fresh process. Needs the Ryzen AI runtime and
 the compiled YOLO models in ``cache/``; skipped without them, and failed without
-them when ``VVLA_TEST_STRICT=1`` (``./run_sim_tests.sh``). The Whisper case
-also needs Whisper's NPU cache, which the README's install does not build.
+them when ``VVLA_TEST_STRICT=1`` (``./run_sim_tests.sh``).
 """
 
 from __future__ import annotations
@@ -28,7 +27,6 @@ import pytest
 from vla_pipeline.utils.config import REPO_ROOT as ROOT  # noqa: E402
 STRICT = os.environ.get("VVLA_TEST_STRICT") == "1"
 YOLO_CACHES = ("yolo26s_pose_fp32", "yolo26s_detect_fp32")
-WHISPER_CACHES = ("whisper_base_encoder", "whisper_base_decoder")
 
 
 def _need(caches, strict: bool = STRICT) -> None:
@@ -70,23 +68,4 @@ def test_pipeline_detector_before_pose():
         "print(json.dumps({'detect': det.session.get_providers()[0], 'pose': pose.session.get_providers()[0]}))",
     )
     assert got == {"detect": "VitisAIExecutionProvider", "pose": "VitisAIExecutionProvider"}
-
-
-def test_pipeline_whisper_after_both_yolos():
-    _need(YOLO_CACHES)
-    _need(WHISPER_CACHES, strict=False)
-    got = _providers(
-        "import json\n"
-        "from vla_pipeline.utils.config import load_config\n"
-        "from vla_pipeline.vision.yolo_pose_npu import PoseEstimator\n"
-        "from vla_pipeline.vision.yolo_detect_npu import ObjectDetector\n"
-        "from vla_pipeline.audio.whisper_npu import WhisperNPU\n"
-        "cfg = load_config()\n"
-        "cfg['whisper']['device'] = 'npu'\n"
-        "pose, det = PoseEstimator(cfg), ObjectDetector(cfg)\n"  # main.py's order
-        "w = WhisperNPU(cfg)\n"
-        "print(json.dumps({'pose': pose.session.get_providers()[0], 'detect': det.session.get_providers()[0],\n"
-        "                  'encoder': w.model.encoder.get_providers()[0], 'decoder': w.model.decoder.get_providers()[0]}))",
-    )
-    assert set(got.values()) == {"VitisAIExecutionProvider"}, got
 

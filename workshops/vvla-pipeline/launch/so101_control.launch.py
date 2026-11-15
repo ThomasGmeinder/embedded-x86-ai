@@ -76,8 +76,15 @@ def _servo(mujoco: bool):
 
     The shipped panda config is the parameter file. This overrides the group,
     the output topic and the publish period, and it is not the primary planning
-    scene: ``move_group`` is. The process is a user service so its realtime
-    budget is the user service manager's, not this session's.
+    scene: ``move_group`` is. A joint at its position bound holds while the
+    others keep streaming: with Servo's default every joint halts, and mimic's
+    pan stops wherever the elbow met its bound. Servo slows a stream once a
+    self-collision is nearer than ``self_collision_proximity_threshold``. The
+    folded SRDF ``home`` pose has the wrist 4.7 mm from the shoulder and the
+    upper arm, and 3.7 mm with the elbow on its stop, so the panda config's
+    10 mm starts every stream from home at a few percent of its speed. Those
+    pairs do collide in other poses, so they stay checked. The process is a user service
+    so its realtime budget is the user service manager's, not this session's.
     """
     from launch_param_builder import ParameterBuilder
     from so_arm_utils.launch_utils import MoveItConfigs
@@ -97,6 +104,8 @@ def _servo(mujoco: bool):
         .parameter("command_out_topic", f"/{arm_controller}/joint_trajectory")
         .parameter("is_primary_planning_scene_monitor", False)
         .parameter("publish_period", SERVO_PERIOD_S)
+        .parameter("halt_all_joints_in_joint_mode", False)
+        .parameter("self_collision_proximity_threshold", 0.003)
         .to_dict()
     )
     return Node(

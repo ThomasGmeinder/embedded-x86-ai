@@ -651,39 +651,6 @@ def _call(node, srv_type, name: str, request, timeout_s: float):
         node.destroy_client(client)
 
 
-def reset_twin(node, robot, timeout_s: float = 15.0) -> None:
-    """Put the twin back at its ``home`` keyframe: the arm at home with the jaws
-    open, and every prop where the scene file has it.
-
-    MoveIt's controllers are switched off around ``reset_world``, so the
-    trajectory controller holds the reset pose when it starts again instead of
-    driving the arm back to its last goal. The call returns when ``robot``'s
-    planning-scene monitor holds a state stamped after that reset. A plan taken
-    from an older state aborts: its start no longer matches the arm.
-    """
-    from controller_manager_msgs.srv import SwitchController
-    from mujoco_ros2_control_msgs.srv import ResetWorld
-
-    names = list(controllers())
-    strict = SwitchController.Request.STRICT
-    stop = SwitchController.Request(deactivate_controllers=names, strictness=strict)
-    if not _call(node, SwitchController, SWITCH_SERVICE, stop, timeout_s).ok:
-        raise RuntimeError(f"could not stop {names}")
-    try:
-        reply = _call(node, ResetWorld, RESET_SERVICE, ResetWorld.Request(keyframe=HOME_KEYFRAME), timeout_s)
-        if not reply.success:
-            raise RuntimeError(f"reset_world: {reply.message}")
-    finally:
-        # The arm is dead until these are active again. A failed reset must not leave them off.
-        start = SwitchController.Request(activate_controllers=names, strictness=strict)
-        if not _call(node, SwitchController, SWITCH_SERVICE, start, timeout_s).ok:
-            raise RuntimeError(f"could not start {names}")
-    # The stamp is read after the snap, so the state that satisfies it is the keyframe.
-    now = _arm_now(True, timeout_s)
-    if not robot.get_planning_scene_monitor().wait_for_current_robot_state(now, timeout_s):
-        raise RuntimeError(f"MoveIt received no state of the arm within {timeout_s} s of the reset")
-
-
 class MoveItArm:
     """The arm behaviors drive. Joint positions are radians under the URDF joint names.
 
@@ -1739,10 +1706,16 @@ class MoveItArm:
         return how
 
     def stop(self) -> None:
-        """Cancel the move in progress: MoveIt's execution, or the trajectory controller's goal."""
+        """Cancel the move in progress: MoveIt's execution, the trajectory controller's goal, or the stream.
+
+        A cancelled stream leaves no setpoint for :meth:`_settle` to wait for;
+        Servo halts the arm wherever the jog ended.
+        """
         with self._cond:
             self._stops += 1
             self._servo_target = None
+            self._stream_goal = None
+            self._stream_done = False
             timer = self._servo_timer
             self._servo_timer = None
             goal = self._goal
@@ -1792,24 +1765,28 @@ class MoveItArm:
         gone.operation = CollisionObject.REMOVE
         monitor.process_collision_object(gone)
 
-    def reset(self) -> None:
-        """The twin back at its ``home`` keyframe (:func:`reset_twin`).
+    def reset(self, timeout_s: float = 15.0) -> None:
+        """Put the arm back at the start.
 
-        The activity callback has already named every controller active before
-        the reset runs. The call returns when the planning-scene monitor holds
-        a state from after the reset. The planning scene drops the objects
-        :meth:`remember` added and any object a pick left attached.
+        The same call on the real arm and on the twin. The Servo jog is
+        cancelled first: a target from before the reset can never be
+        acknowledged, and a jog that keeps publishing moves the arm out from
+        under the next plan. Remembered and attached objects leave the planning
+        scene. On the twin the world then snaps to its ``home`` keyframe, arm
+        and props together, with the controllers off so the trajectory
+        controller holds that pose instead of driving back to its last goal.
+        Servo is paused across it: a stream it was still halting would publish
+        its last pose from before the reset, and unpausing makes the reset pose
+        its last command. On the real arm there is no world to snap, so the arm plans home and
+        closes the jaws, which is :meth:`go_to_rest`.
         """
+        from controller_manager_msgs.srv import SwitchController
         from moveit_msgs.msg import AttachedCollisionObject, CollisionObject
+        from mujoco_ros2_control_msgs.srv import ResetWorld
 
-        if not self.sim:
-            raise RuntimeError("only the twin resets")
         needed = set(controllers())
         with self._cond:
             self._cond.wait_for(lambda: needed <= self._active)
-            # reset_world replaces the controller's reference. A Servo target
-            # from before that replacement can never be acknowledged, so it
-            # cannot remain the condition a subsequent motion waits on.
             self._stream_goal = None
             self._stream_done = False
             self._servo_target = None
@@ -1819,13 +1796,34 @@ class MoveItArm:
         if timer is not None:
             timer.cancel()
         monitor = self.robot.get_planning_scene_monitor()
-        # A REMOVE with no id detaches every attached object into the world.
         detach = AttachedCollisionObject()
         detach.object.operation = CollisionObject.REMOVE
         monitor.process_attached_collision_object(detach)
         with monitor.read_write() as scene:
             scene.remove_all_collision_objects()
-        reset_twin(self.node, self.robot)
+        if not self.sim:
+            self.go_to_rest()
+            return
+        names = list(needed)
+        strict = SwitchController.Request.STRICT
+        self._pause_servo(True)
+        try:
+            stop = SwitchController.Request(deactivate_controllers=names, strictness=strict)
+            if not _call(self.node, SwitchController, SWITCH_SERVICE, stop, timeout_s).ok:
+                raise RuntimeError(f"could not stop {names}")
+            try:
+                reply = _call(self.node, ResetWorld, RESET_SERVICE, ResetWorld.Request(keyframe=HOME_KEYFRAME), timeout_s)
+                if not reply.success:
+                    raise RuntimeError(f"reset_world: {reply.message}")
+            finally:
+                start = SwitchController.Request(activate_controllers=names, strictness=strict)
+                if not _call(self.node, SwitchController, SWITCH_SERVICE, start, timeout_s).ok:
+                    raise RuntimeError(f"could not start {names}")
+            now = _arm_now(True, timeout_s)
+            if not self.robot.get_planning_scene_monitor().wait_for_current_robot_state(now, timeout_s):
+                raise RuntimeError(f"MoveIt received no state of the arm within {timeout_s} s of the reset")
+        finally:
+            self._pause_servo(False)
 
     def _spin(self) -> None:
         """Run callbacks until :meth:`close` sets the stop event and wakes this wait."""

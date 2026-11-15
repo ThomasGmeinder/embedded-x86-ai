@@ -3,22 +3,28 @@
 A 3-hour workshop that takes a CS/engineering student from zero to a
 running **vision -> language -> action** pipeline on an AMD Ryzen AI
 APU driving a LeRobot SO-101 arm: YOLOv26s x2 on the **NPU** (VitisAI EP),
-Whisper on the **CPU**, Llama 3.2 3B on the **iGPU** (llama.cpp + ROCm),
-MediaPipe Hands on the **CPU**, all wired over **ROS 2**.
+Gemma 4 E4B on the **iGPU** (llama.cpp + ROCm, one hop of audio),
+Silero on the **CPU**, MediaPipe Hands on the **CPU**, all wired over **ROS 2**.
 
 The workshop depends on [Installation](../README.md#installation). That
 creates `.venv`, the model files in `../models`, and the YOLO NPU compile
-cache in `../cache`. The two YOLO models load from that cache. Whisper
-runs on the CPU.
+cache in `../cache`. The two YOLO models load from that cache. Gemma 4
+and Silero are downloaded by `scripts/ensure_voice.sh`.
 
 The digital twin is the MuJoCo bringup in `launch/so101_control.launch.py`: upstream ros2_so_arm controllers, `mujoco_ros2_control`, and `move_group`. `robot.use_ros2` starts that bringup. The arm client is `MoveItArm` (MoveItPy, a Task Constructor pick and place, the gripper action). TODOs 2.7 and 2.8 are MoveItPy `go_to_named` and `go_to_joints`. Servo calibration is `lerobot-calibrate`, which `bootstrap.sh` installs. `camera_calibration` and `easy_handeye2` are not installed, and this repo does not run calibration. The ROS driver does not read the LeRobot JSON.
+
+## What you learn
+
+The subject is a vision-language-action loop. You speak, Gemma 4 turns a hop of audio into one command, and MoveIt carries that command out on the arm. When the command is "copy my movements", YOLOv26s-pose and MediaPipe Hands read your body and your hand. The twin notebook (`notebooks/03_integration/02_digital_twin.ipynb`) is that loop.
+
+Motion planning in the lesson is MoveIt's. YOLO object detection and the reach that turns a camera box into a grasp stay in the pipeline. They are how a demonstrated pick is recorded as training data for a later VLA finetune. The notebooks do not walk through that recorder.
 
 ## What's in the box
 
 ```
 notebooks/               phase 1 - read & run these first (each is self-contained)
-  01_ai_models/          NPU session factory - MediaPipe on CPU - Llama on iGPU
-  02_ros2/               camera subscriber - MoveIt arm - Llama intent node
+  01_ai_models/          NPU session factory - MediaPipe on CPU - Gemma 4 on iGPU
+  02_ros2/               camera subscriber - MoveIt arm - Gemma intent node
   03_integration/        registry dispatch - the mimic composition - the live UI -
                          the digital twin (MuJoCo arm, cameras, grasp; live console over ROS 2)
 common/                  PROVIDED helpers, installed as the vvla_workshop package
@@ -37,7 +43,7 @@ your functions and checks them.
 
 **The rule that decided what's a TODO:** if code would be byte-for-byte
 identical in any non-AMD, non-ROS project (letterboxing, decoders,
-overlays, message codecs, IK/smoothing, grammar files), it's provided. If
+overlays, message codecs, grammar files), it's provided. If
 it's where code meets the **Ryzen AI NPU/iGPU**, the **ROS transport**, or
 the **pipeline's control flow**, it's yours.
 
@@ -47,7 +53,7 @@ Before the steps below, install the Ryzen AI SDK and prerequisites as described 
 
 ```bash
 cd workshop
-./run_notebooks.sh                        # starts the llama server and the resource
+./run_notebooks.sh                        # starts the Gemma 4 server and the resource
                                           # HUD, then serves Jupyter Lab. This shell
                                           # stays here until you quit it.
 ```
@@ -96,10 +102,11 @@ headless, after the same setup as the happy path. See
 
 AMD-specific lessons for the session:
 
-**Choose the device on purpose.** YOLO-pose and YOLO-detect already fill
-the NPU. Another model, such as Whisper, can run on the CPU while those
-two stay there. Pass `device="cpu"` or `device="npu"`, then print the
-provider the session got in order to verify where it landed.
+**Choose the device on purpose.** YOLO-pose is the vision model this workshop
+teaches, and it runs on the NPU. A second vision model shares that NPU, so
+the session lesson is load order: open pose first and keep it open. Gemma 4
+stays on the iGPU and Silero stays on the CPU. Pass `device="cpu"` or
+`device="npu"` for a vision session, then print the provider it got.
 
 Generated dirs (`_artifacts/`, `logs/`, `__pycache__/`) are disposable -
 see `.gitignore`.

@@ -16,13 +16,15 @@ orchestrator's dispatch. Adding a new voice command =
 2. add its name to ``config/intent.gbnf``'s ``cmd`` rule,
 3. decorate a handler with ``@registry.register(Intent.MY_COMMAND)``.
 
-``STOP`` is special: the orchestrator matches it with plain keywords on the
-raw transcript (no LLM round trip) so the safety stop is as fast as possible,
-and it interrupts any running behavior via the shared stop event.
+``STOP`` is special: the orchestrator matches it on the raw transcript (the
+phrase "stop robot", or a Gemma command JSON that says stop) before any LLM
+round trip, so the safety stop never waits on a model. It then interrupts any
+running behavior via the shared stop event.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -67,23 +69,45 @@ class ParsedCommand:
         return self.params.get("object")
 
 
-# Transcript keywords that trigger STOP without an LLM round trip. Matched
-# case-insensitively as whole words on the raw transcript - the safety stop
-# must never wait on a language model.
-STOP_KEYWORDS = ("stop", "halt", "freeze", "abort", "emergency")
+# The only spoken stop. A bare "stop" is crowd noise on a tradeshow floor.
+# Matched as a phrase: a check for the word "stop" would also fire on
+# "stop talking".
+STOP_KEYWORDS = ("stop robot",)
 _STOP_RE = re.compile(r"\b(" + "|".join(STOP_KEYWORDS) + r")\b", re.IGNORECASE)
 
 
+def command_from_json(text: str) -> ParsedCommand | None:
+    """A command JSON string already produced by the audio model, or None."""
+    raw = (text or "").strip()
+    if not raw.startswith("{"):
+        return None
+    try:
+        data = json.loads(raw)
+        command = data["command"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+    params: dict[str, str] = {}
+    obj = str(data.get("object", "") or "").strip()
+    if obj:
+        params["object"] = obj
+    heard = str(data.get("heard", "") or "").strip()
+    return ParsedCommand(Intent.from_string(str(command)), params=params, transcript=heard)
+
+
 def is_stop(transcript: str) -> bool:
-    """True when the raw transcript contains a stop keyword."""
-    return bool(_STOP_RE.search(transcript or ""))
+    """True when the raw transcript says "stop robot", or a Gemma command JSON says stop."""
+    text = transcript or ""
+    if _STOP_RE.search(text):
+        return True
+    cmd = command_from_json(text)
+    return cmd is not None and cmd.intent is Intent.STOP
 
 
-# Whisper, fed the first burst of room noise the moment the mic goes hot,
-# reliably hallucinates a few stock phrases ("you", "thank you.", "Bye.",
-# subtitle credits). With the grammar forcing every transcript into one valid
-# command, such a phantom utterance would dispatch a real behavior, so these
-# are dropped before they reach the LLM. Phrases match the transcript
+# A transcript that is a stock phrase, not a command. A speech model fed the
+# first burst of room noise can hallucinate phrases like "you", "thank you.",
+# "Bye.", or subtitle credits. With the grammar forcing every transcript into
+# one valid command, such a phantom utterance would dispatch a real behavior,
+# so these are dropped before they reach the LLM. Phrases match the transcript
 # lowercased and stripped of whitespace and trailing punctuation, whole.
 DEFAULT_NOISE_PHRASES = (
     "",
@@ -115,7 +139,7 @@ DEFAULT_NOISE_PHRASES = (
     "...",
 )
 
-# Whisper's non-speech annotations: [BLANK_AUDIO], (sighs), *music*.
+# Bracketed non-speech annotations: [BLANK_AUDIO], (sighs), *music*.
 _NON_SPEECH_TAG = re.compile(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*")
 
 
@@ -146,9 +170,12 @@ def make_noise_gate(cfg: dict):
 is_noise = make_noise_gate({})
 
 
-# A keyword stand-in for the LLM, for runs without llama-server (--mock, tests).
+# Keyword routes: a parser that needs no LLM, used with --mock and by the
+# tests. Gemma is the only listener on the robot, so these only stand in for
+# it. The words are explicit on purpose: "home", "rest", and "reset" alone are
+# not "go home", so crowd talk does not move the arm.
 _KEYWORD_ROUTES = [
-    (r"\b(stop|halt|freeze|abort)\b", "stop", None),
+    (r"\bstop robot\b", "stop", None),
     (r"\b(release|open|drop)\b|\blet go\b", "release", None),
     (r"\b(copy|mirror|follow|mimic)\b", "gesture_mimic", None),
     (r"\b(block|cube)\b", "fetch_block", None),
@@ -157,14 +184,16 @@ _KEYWORD_ROUTES = [
     (r"\b(dance|groove|party|moves)\b", "dance", None),
     (r"\b(hold|take)\b", "grip", None),
     (r"\b(wave|hi|hello|greet)\b", "wave", None),
-    (r"\b(home|rest|reset)\b", "home", None),
+    (r"\bgo home\b", "home", None),
 ]
-_OBJECT_WORDS = ("ball", "bottle", "cup", "mug", "phone", "apple", "banana", "book", "toothbrush",
-                 "remote", "orange", "teddy", "pen")
+_OBJECT_WORDS = (
+    "ball", "bottle", "cup", "mug", "phone", "apple", "banana", "book", "pen",
+    "toothbrush", "remote", "orange", "teddy",
+)
 
 
 def offline_parse_text(text: str) -> dict:
-    """Keyword routing → the same ``{"command", "object"}`` dict the LLM emits."""
+    """Keyword routing -> the same ``{"command", "object"}`` dict the LLM emits."""
     low = (text or "").lower()
     for pattern, command, obj_mode in _KEYWORD_ROUTES:
         if re.search(pattern, low):
@@ -191,6 +220,7 @@ class CommandRegistry:
     """
 
     def __init__(self) -> None:
+        """Create an empty registry."""
         self._handlers: dict[Intent, Callable] = {}
 
     def register(self, intent: Intent):
@@ -222,11 +252,15 @@ class CommandRegistry:
 # eval scripts share one source of truth. The grammar (config/intent.gbnf)
 # guarantees the output shape; this prompt steers the choice.
 INTENT_SYSTEM_PROMPT = """\
-You are the command router for a robot arm. Map the user's spoken request to
-exactly one command and answer ONLY with a JSON object
-{"command": "<name>", "object": "<object or empty string>"}.
+You are the command router for a robot arm on a crowded floor. Other people
+are talking. Ignore background conversation, a second speaker, questions,
+quotes, negations, and anything not addressed to the robot: those are
+"unknown". Map a clear instruction to exactly one command and answer ONLY
+with a JSON object {"command": "<name>", "object": "<object or empty string>", "heard": "<words>"}.
 "object" is the thing to act on for pick_place (one or two plain words,
 e.g. "ball", "water bottle"); for every other command use "".
+"heard" is the words the person said to the robot, and nothing else.
+Use "" for "heard" when you cannot make out the words.
 
 Commands:
 - "gesture_mimic": the user wants the arm to copy / mirror / follow their own
@@ -245,8 +279,9 @@ Commands:
 - "place": the user wants the held object set down on the table ("place it",
   "set it down", "put it down", "set it on the table").
 - "wave": the user wants a wave / greeting ("wave at me", "say hi").
-- "home": return to the rest/home position ("go home", "reset position",
-  "rest now").
-- "stop": stop moving immediately ("stop", "halt", "freeze").
+- "home": the speaker says "go home". "home", "rest", and "reset" alone
+  are "unknown".
+- "stop": the speaker says "stop robot". "stop", "halt", "freeze",
+  "stop it", "abort", and "stop talking" are "unknown".
 - "unknown": anything else.
 """

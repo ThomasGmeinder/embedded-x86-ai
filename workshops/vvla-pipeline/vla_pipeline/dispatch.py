@@ -13,15 +13,18 @@ calling thread (the workshop's TODO 3.2):
 1. stop fast path - a stop keyword stops the running behavior at once,
    without an LLM round trip;
 2. noise / hallucination gate;
-3. parse - the grammar-constrained LLM picks the intent;
+3. parse - a command JSON that Gemma already produced is used as it is;
+   any other text goes to the grammar-constrained LLM;
 4. dispatch - the registry's handler runs, unless a stop came in since the
    transcript arrived.
 
 :class:`Dispatcher` puts a queue in front of it for the always-hot listener
-(Whisper) or the ``--text-commands`` stdin loop. ``on_transcript`` takes the
-startup grace window, the stop fast path and the noise gate at once, on the
-listener's thread, and queues the rest; a new command while a behavior runs
-stops it so the new one takes over. ``run`` (main thread) hands each queued
+(Gemma 4 on llama-server, see :mod:`vla_pipeline.llm.voice`) or the
+``--text-commands`` stdin loop. ``on_transcript`` takes the startup grace
+window, the stop fast path and the noise gate at once, on the listener's
+thread, and queues the rest; a new command while a behavior runs stops it so
+the new one takes over. While gesture mimic runs, only a registered command or
+a stop ends it: crowd talk does not. ``run`` (main thread) hands each queued
 transcript to :func:`handle_transcript`, draining a backlog to the newest
 command so stale behaviors never replay. It blocks on the queue;
 ``Dispatcher.stop`` wakes it to see its ``shutdown`` event.
@@ -38,7 +41,14 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from vla_pipeline.llm.intents import CommandRegistry, Intent, ParsedCommand, is_stop, make_noise_gate
+from vla_pipeline.llm.intents import (
+    CommandRegistry,
+    Intent,
+    ParsedCommand,
+    command_from_json,
+    is_stop,
+    make_noise_gate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +140,32 @@ def build_registry() -> CommandRegistry:
     return registry
 
 
-def handle_transcript(ctx: PipelineContext, text: str, parse, stops_before: int | None = None) -> ParsedCommand | None:
+def _parse_transcript(ctx: PipelineContext, text: str, parse) -> ParsedCommand | None:
+    """The command this transcript already is, or the parser's result.
+
+    Gemma sends a command JSON that it has already parsed; that is used as it
+    is. Any other text goes to ``parse``. None means the parser failed; the
+    failure is reported here.
+    """
+    ready = command_from_json(text)
+    if ready is not None:
+        return ready
+    try:
+        return parse(text)
+    except Exception:
+        logger.exception("Intent parse failed for %r.", text)
+        ctx.say("I couldn't understand that command because the language service is unavailable.")
+        ctx.emit("parse_error", text=text)
+        return None
+
+
+def handle_transcript(
+    ctx: PipelineContext,
+    text: str,
+    parse,
+    stops_before: int | None = None,
+    command: ParsedCommand | None = None,
+) -> ParsedCommand | None:
     """Route one raw transcript through the gauntlet; return what it parsed.
 
     The order is a safety property:
@@ -140,8 +175,10 @@ def handle_transcript(ctx: PipelineContext, text: str, parse, stops_before: int 
        never goes through the LLM.
     2. **Noise gate**: a known hallucination does nothing and returns
        ``ParsedCommand(UNKNOWN)``.
-    3. **Parse**: ``parse(text)``. ``stops_before`` is the stop count when the
-       transcript arrived (default: now); a stop since then cancels it.
+    3. **Parse**: ``parse(text)``, unless the text is already a command JSON
+       or ``command`` is given (the mimic gate resolved it). ``stops_before``
+       is the stop count when the transcript arrived (default: now); a stop
+       since then cancels it.
     4. **Dispatch**: UNKNOWN tells the user nothing was caught; no handler
        says so; otherwise ``ctx.begin(stops_before)`` clears the stop event so
        a stale stop never kills the *next* behavior, unless a stop came in:
@@ -163,13 +200,12 @@ def handle_transcript(ctx: PipelineContext, text: str, parse, stops_before: int 
         logger.info("Stop heard before %r was dispatched - command not parsed.", text)
         ctx.emit("cancelled", text=text)
         return None
-    try:
-        cmd = parse(text)
-    except Exception:
-        logger.exception("Intent parse failed for %r.", text)
-        ctx.say("I couldn't understand that command because the language service is unavailable.")
-        ctx.emit("parse_error", text=text)
-        return None
+    if command is not None:
+        cmd = command
+    else:
+        cmd = _parse_transcript(ctx, text, parse)
+        if cmd is None:
+            return None
     ctx.emit("parsed", text=text, intent=cmd.intent.value, params=dict(cmd.params or {}))
     if cmd.intent in (Intent.UNKNOWN, Intent.STOP):
         if cmd.intent is Intent.UNKNOWN:
@@ -212,7 +248,8 @@ class Dispatcher:
         self.startup_grace_s = float(startup_grace_s)
         self._clock = clock
         self.start_time = clock()
-        self.transcripts: queue.Queue[tuple[int, str] | object] = queue.Queue()
+        # (stop count when it arrived, text, command already resolved by the mimic gate)
+        self.transcripts: queue.Queue[tuple[int, str, ParsedCommand | None] | object] = queue.Queue()
         self.current: ParsedCommand | None = None
         self.busy = threading.Event()  # set while a behavior runs
         self.holding = threading.Event()  # set while the console is resetting the scene
@@ -235,9 +272,10 @@ class Dispatcher:
 
     # ---------------------------------------------------------------- input
     def on_transcript(self, text: str) -> None:
-        """Gate one transcript (grace, stop, noise) and queue it for dispatch."""
+        """Gate one transcript (grace, stop, noise, mimic) and queue it for dispatch."""
         logger.info("Heard: %r", text)
-        self.ctx.emit("heard", text=text)
+        spoken = command_from_json(text)
+        self.ctx.emit("heard", text=spoken.transcript if spoken is not None and spoken.transcript else text)
         if self._clock() - self.start_time < self.startup_grace_s:
             logger.info("Ignoring %r (startup grace period).", text)
             self.ctx.emit("ignored", text=text, reason="grace")
@@ -251,23 +289,71 @@ class Dispatcher:
             logger.info("Ignoring %r (noise/hallucination gate).", text)
             self.ctx.emit("ignored", text=text, reason="noise")
             return
+        arrived = self.ctx.stops_heard()
+        prepared: ParsedCommand | None = None
+        if self._mimic_running():
+            # Resolve before stopping. The dispatch thread is inside mimic, so
+            # this parse runs on the listener thread that delivered the text.
+            prepared = _parse_transcript(self.ctx, text, self.parse)
+            if prepared is None or not self._replaces_mimic(prepared, text):
+                return
         with self._work:
+            if prepared is not None and self.ctx.stops_heard() != arrived:
+                logger.info("Stop heard while %r was parsed - not switching from mimic.", text)
+                self.ctx.emit("cancelled", text=text)
+                return
             self._pending += 1
-        self.transcripts.put((self.ctx.stops_heard(), text))
+        self.transcripts.put((arrived, text, prepared))
         self.ctx.emit("queued", text=text)
         if self.busy.is_set():
-            # A new command switches behaviors: stop the running one gracefully;
-            # run() then dispatches the newest queued command.
+            # A command that survived the mimic gate, or any transcript during
+            # another behavior, switches: stop the running one, then run()
+            # dispatches the newest queued command.
             logger.info("New command while %s runs - stopping it to switch.",
                         self.current.intent.value if self.current else "a behavior")
             self.ctx.stop_event.set()
 
-    # ------------------------------------------------------------- dispatch
-    def dispatch(self, text: str, generation: int | None = None) -> ParsedCommand | None:
-        """Parse and run one transcript on the calling thread (:func:`handle_transcript`)."""
-        return handle_transcript(self.ctx, text, self.parse, stops_before=generation)
+    def _mimic_running(self) -> bool:
+        """True while the behavior on the dispatch thread is gesture mimic."""
+        current = self.current
+        return self.busy.is_set() and current is not None and current.intent is Intent.GESTURE_MIMIC
 
-    def _take_all(self) -> list[tuple[int, str]]:
+    def _replaces_mimic(self, command: ParsedCommand, text: str) -> bool:
+        """True when ``command`` should end mimic and run in its place.
+
+        The same mimic command, an unknown transcript, and a command with no
+        behavior leave mimic running. A parsed stop ends it and runs nothing.
+        """
+        if command.intent is Intent.STOP:
+            self.ctx.request_stop()
+            self.ctx.say("Stopping.")
+            self.ctx.emit("stop", text=text)
+            return False
+        if command.intent is Intent.GESTURE_MIMIC:
+            logger.info("Ignoring %r during mimic (already mimicking).", text)
+            self.ctx.emit("ignored", text=text, reason="already mimicking")
+            return False
+        if command.intent is Intent.UNKNOWN or self.ctx.registry.get(command.intent) is None:
+            self.ctx.emit("parsed", text=text, intent=command.intent.value, params=dict(command.params or {}))
+            if command.intent is Intent.UNKNOWN:
+                logger.info("Ignoring %r during mimic (not a command).", text)
+                self.ctx.emit("ignored", text=text, reason="not a command")
+            else:
+                self.ctx.say(f"No behavior registered for '{command.intent.value}'.")
+            return False
+        return True
+
+    # ------------------------------------------------------------- dispatch
+    def dispatch(
+        self, text: str, generation: int | None = None, command: ParsedCommand | None = None,
+    ) -> ParsedCommand | None:
+        """Parse and run one transcript on the calling thread (:func:`handle_transcript`).
+
+        ``command`` is set when the mimic gate already resolved it.
+        """
+        return handle_transcript(self.ctx, text, self.parse, stops_before=generation, command=command)
+
+    def _take_all(self) -> list[tuple[int, str, ParsedCommand | None]]:
         """Every queued transcript, oldest first; a queued stop stays queued."""
         texts, stops = [], 0
         while True:
@@ -316,10 +402,10 @@ class Dispatcher:
             item = self.transcripts.get()
             if item is _STOP:
                 continue
-            generation, text = item
+            generation, text, command = item
             try:
                 if not self.holding.is_set():
-                    self.dispatch(text, generation)
+                    self.dispatch(text, generation, command)
             finally:
                 self._finished(1)
             if self.holding.is_set():

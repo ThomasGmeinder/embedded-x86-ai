@@ -11,8 +11,8 @@
 notebooks in ``01_ai_models``, ``02_ros2`` and ``03_integration``. Here each
 notebook runs top to bottom, as stored, in a fresh ``vvla-workshop`` kernel.
 A live cell gets the clicks its own buttons ask for. The notebooks that
-print their ONNX provider must have printed the NPU, and the Llama
-notebooks must get Llama's answers from the iGPU.
+print their ONNX provider must have printed the NPU, and the intent
+notebook must show Gemma's parse of a typed command.
 
 ``cd workshop && ./run_notebooks.sh --test`` runs this after the README's setup.
 """
@@ -50,21 +50,19 @@ PATHS = [
 # The student's actions in each live cell (by cell id); any other live cell is
 # watched until it draws three frames (notebook_harness.DEFAULT_ACTIONS).
 SCRIPTS = {
-    "03_igpu_llama": {
-        "07f51d10d595": [("type", "Why do robots like grammars?"), ("wait_for", "llama: ")],
-    },
     "02_robot": {
         "cell-10": [("click", "rest pose")],
     },
     "03_intent_node": {
         "578bb604bee3": [
-            ("type", "stop"), ("wait_for", "stop fast path"),
+            ("type", "stop robot"), ("wait_for", "stop fast path"),
             ("type", "pick up the ball"), ("wait_for", "[LLM parse]"),
         ],
     },
     "01_behavior": {
         "cell-14": [("type", "wave at me"), ("wait_for", "[toy_wave] waving!")],
-        "cell-16": [("click", "dance"), ("wait_for", "parked:")],
+        # The dance prints its tempo, then one line per beat, before it parks.
+        "cell-16": [("click", "dance"), ("wait_for", "parked:", r"^\d+\.\d+ s/beat, \d+ beats$|^  beat \d+: ")],
     },
     # Typed into the console's text box, then the reset button, then another
     # pickup. The cell ends with end session, which the notebook says to click
@@ -85,7 +83,6 @@ SCRIPTS = {
 # What the notebook's own output must show. The YOLO notebooks print the
 # provider the session got.
 EXPECT = {
-    "03_igpu_llama": ["llama: "],
     "03_intent_node": ["[LLM parse]", "'pick_place'"],
     "01_npu_yolo": ["VitisAIExecutionProvider"],
     "01_behavior": ["VitisAIExecutionProvider"],

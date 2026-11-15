@@ -192,7 +192,7 @@ def check_intent(rep: Reporter, cfg: dict, reference: bool) -> None:
         def stop_fast_path():
             """Verify a stop transcript publishes at once without reaching the parser."""
             before = len(calls)
-            intent = say("whoa STOP right now!")
+            intent = say("whoa STOP ROBOT right now!")
             assert intent.get("command") == "stop", f"stop transcript produced {intent}"
             assert len(calls) == before, (
                 "the LLM parser was invoked for a STOP transcript - the safety stop must bypass the model "
@@ -210,7 +210,7 @@ def check_intent(rep: Reporter, cfg: dict, reference: bool) -> None:
             pub.publish(String(data="Thank you."))
             intent = say("wave hello")
             assert intent.get("command") == "wave", (
-                f"the noise transcript published an intent ({intent}) - Whisper's silence hallucinations "
+                f"the noise transcript published an intent ({intent}) - silence hallucinations "
                 "must be dropped (is_noise)")
             assert calls[before:] == ["wave hello"], "the parser was invoked for a noise transcript - gate first"
 

@@ -78,7 +78,7 @@ class IntentNode(Node):
            publish ``{"command": "stop", "object": ""}`` immediately - no LLM
            round trip on the safety path.
         2. :func:`~vla_pipeline.llm.intents.is_noise` → drop silently
-           (Whisper's silence hallucinations must not become robot commands).
+           (a noise phrase must not become a robot command).
         3. Otherwise ``self._parse(text)`` and publish the result via
            :meth:`publish_intent`.
         """

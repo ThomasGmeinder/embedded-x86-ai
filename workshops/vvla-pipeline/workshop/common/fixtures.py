@@ -187,6 +187,11 @@ class ScriptedPose:
         scores = np.array([0.93], dtype=np.float32)
         return boxes, scores, kpts
 
+    def draw(self, frame, boxes, scores, kpts):
+        from vla_pipeline.vision.yolo_pose_npu import draw_skeleton
+
+        return draw_skeleton(frame, boxes, scores, kpts, self.kpt_threshold)
+
 
 class ScriptedHands:
     """Drop-in for :class:`vla_pipeline.vision.mediapipe_hands.HandTracker` with a scripted pinch/roll."""

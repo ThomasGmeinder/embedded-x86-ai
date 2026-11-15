@@ -15,7 +15,7 @@ the behaviors, dispatcher and transports under test run unchanged:
 ``ScriptedMountCamera`` the mount camera: paced frames showing the scripted
                         person, plus the "signals" pane for the test video
 ``SimDetector``         YOLO ``ObjectDetector`` from the twin's segmentation
-``ScriptedTranscripts`` Whisper: timed utterances into the dispatcher
+``ScriptedTranscripts`` timed utterances into the dispatcher
 
 All timelines share one clock (``Clock``) started when the scenario starts.
 """
@@ -380,7 +380,7 @@ class ScriptedTranscripts:
 
     ``concurrent=True`` runs each delivery on its own thread - for stacks
     whose transcript handler runs the behavior synchronously (the workshop's
-    ``handle_transcript``), so a later "stop" can still interrupt it, as the
+    ``handle_transcript``), so a later "stop robot" can still interrupt it, as the
     always-hot listener does on the rig.
     """
 

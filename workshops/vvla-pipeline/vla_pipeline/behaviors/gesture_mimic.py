@@ -88,7 +88,12 @@ class MimicSignals:
 
 
 def park_after_mimic(ctx) -> None:
-    """Park at rest after mimic, without consulting the stop event."""
+    """Park at rest after mimic, without consulting the stop event.
+
+    The stream ends first. Its last setpoint can be further than the arm
+    travels before the park gives up waiting for it, and the park replaces it.
+    """
+    ctx.arm.stop()
     ctx.arm.go_to_rest()
 
 

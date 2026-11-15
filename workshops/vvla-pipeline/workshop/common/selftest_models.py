@@ -182,8 +182,8 @@ def _offline_checks(rep: Reporter, cfg: dict, reference: bool) -> None:
     fake_bin.write_text("#!/bin/sh\n")
     fake_gguf.write_text("gguf")
     cfg_llm = deepcopy(cfg)
-    cfg_llm["llm"]["server_bin"] = str(fake_bin)
-    cfg_llm["llm"]["model_gguf"] = str(fake_gguf)
+    cfg_llm["gemma4-e4b-it"]["server_bin"] = str(fake_bin)
+    cfg_llm["gemma4-e4b-it"]["model_gguf"] = str(fake_gguf)
 
     def check_server_cmd():
         """Verify the llama-server command and env carry the iGPU survival flags."""
@@ -192,13 +192,13 @@ def _offline_checks(rep: Reporter, cfg: dict, reference: bool) -> None:
         assert cmd[0] == str(fake_bin), f"cmd[0]={cmd[0]!r}, expected the server binary"
         assert "--model" in cmd, "missing --model"
         for flag in ("--host", "--port", "--n-gpu-layers", "--ctx-size"):
-            assert flag in cmd, f"missing {flag} - see the llm: config section"
+            assert flag in cmd, f"missing {flag} - see the gemma4-e4b-it: config section"
         ctx = int(cmd[cmd.index("--ctx-size") + 1])
         assert ctx <= 2048, (
             f"--ctx-size {ctx} > 2048 - the native 131072 KV cache OOMs the iGPU VRAM carve-out on Strix; keep it capped")
         assert "--no-warmup" in text, (
             "missing --no-warmup - config sets no_warmup: true because the warmup pass can segfault on gfx1151")
-        want = str(cfg["llm"]["hsa_override_gfx_version"])
+        want = str(cfg["gemma4-e4b-it"]["hsa_override_gfx_version"])
         assert env.get("HSA_OVERRIDE_GFX_VERSION") == want, (
             f"HSA_OVERRIDE_GFX_VERSION={env.get('HSA_OVERRIDE_GFX_VERSION')!r}, expected {want!r} - the ROCm "
             "runtime needs the iGPU presented as a supported gfx target (config: hsa_override_gfx_version)")
@@ -208,7 +208,7 @@ def _offline_checks(rep: Reporter, cfg: dict, reference: bool) -> None:
         rep.run("1.5", "llama-server command + env carry the iGPU survival flags", check_server_cmd)
 
     # --- TODO 1.6: grammar-constrained intent parsing -------------------------
-    grammar = resolve(cfg["llm"]["grammar_file"]).read_text(encoding="utf-8")
+    grammar = resolve(cfg["gemma4-e4b-it"]["grammar_file"]).read_text(encoding="utf-8")
 
     def check_parse():
         """Verify parse_intent() sends grammar-constrained chat completions and routes correctly."""

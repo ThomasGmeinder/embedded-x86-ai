@@ -52,7 +52,9 @@ def build_registry() -> CommandRegistry:
     return registry
 
 
-def handle_transcript(ctx, text: str, parse, stops_before: int | None = None) -> ParsedCommand | None:
+def handle_transcript(
+    ctx, text: str, parse, stops_before: int | None = None, command: ParsedCommand | None = None,
+) -> ParsedCommand | None:
     """Route one raw transcript through the full gauntlet. Returns the parsed command.
 
     The order is a safety property - implement it exactly:
@@ -64,7 +66,8 @@ def handle_transcript(ctx, text: str, parse, stops_before: int | None = None) ->
        ``ParsedCommand(UNKNOWN)``.
     3. **Parse**: ``heard`` is ``stops_before`` (the stop count when the
        transcript arrived) or, when that is None, ``ctx.stops_heard()``; then
-       ``cmd = parse(text)``.
+       ``cmd = parse(text)``, unless ``command`` is given (already parsed
+       upstream): then ``cmd = command``.
     4. **Dispatch**: UNKNOWN → tell the user you didn't catch a command.
        No handler registered (``ctx.registry.get``) → say that. Otherwise
        ``ctx.begin(heard)`` clears the stop event, so a stale stop never

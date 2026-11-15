@@ -208,6 +208,27 @@ def test_mimic_parks_at_home_when_it_stops(arm, pipeline_cfg):
 
 
 @launch
+def test_mimic_parks_at_home_when_it_stops_mid_stream(arm, pipeline_cfg):
+    """The park abandons a streamed setpoint the arm is still more than
+    ``REPLY_S`` of travel from, at the lift's ``max_velocity``, and parks at home."""
+    from types import SimpleNamespace
+
+    from vla_pipeline.behaviors.gesture_mimic import park_after_mimic
+    from vla_pipeline.robot.moveit_arm import PLANNING_GROUP, REPLY_S, moveit_configs
+
+    lift = "shoulder_lift_joint"
+    speed = float(moveit_configs().joint_limits["robot_description_planning"]["joint_limits"][lift]["max_velocity"])
+    group = arm.robot.get_robot_model().get_joint_model_group(PLANNING_GROUP)
+    upper = dict(zip(group.active_joint_model_names, group.active_joint_model_bounds))[lift][0].max_position
+    start = arm.get_joints()[lift]
+    far = start + 1.2 * REPLY_S * speed
+    assert far < upper, "the lift has no setpoint that far from here"
+    arm.send_joints({lift: far})
+    park_after_mimic(SimpleNamespace(arm=arm, cfg=pipeline_cfg))
+    assert off(arm.get_joints(), arm.named_state("home")) < 0.05
+
+
+@launch
 def test_mimic_tick_streams_the_wrist_as_a_urdf_setpoint(arm, pipeline_cfg):
     """One ``mimic_tick`` on a visible right wrist streams radians on this arm."""
     from sensor_msgs.msg import JointState
@@ -247,29 +268,37 @@ def test_mimic_tick_streams_the_wrist_as_a_urdf_setpoint(arm, pipeline_cfg):
 @launch
 def test_mimic_follows_generated_poses_to_its_range_ends_and_parks(arm, pipeline_cfg):
     """``run_mimic`` on generated YOLO-pose people and MediaPipe hands, one frame
-    per 1/30 s of the arm's clock. The person reaches high left toward the
-    camera, then low right away from it, where mimic's elbow setpoint is past
-    the URDF limit. The session ends there, and the arm parks at home."""
+    per 1/30 s of the arm's clock, from the start the twin resets to. The person
+    reaches high left toward the camera, then low right away from it, where
+    mimic's elbow setpoint is past the URDF limit. The session ends there, and
+    the arm parks at home.
+
+    Each pose is held for the frames mimic's smoothing takes to settle on it,
+    plus the time joint_limits.yaml gives the arm for that move: Servo scales
+    every joint to the one furthest from its speed limit, and the shoulder lift's
+    limit is the lowest."""
+    import math
     from sensor_msgs.msg import JointState
     from types import SimpleNamespace
 
     import numpy as np
 
     from vla_pipeline.behaviors.gesture_mimic import mimic_tick, run_mimic
-    from vla_pipeline.robot.moveit_arm import PLANNING_GROUP
+    from vla_pipeline.robot.moveit_arm import PLANNING_GROUP, moveit_configs
+    from vla_pipeline.utils.gesture_map import mapper_from_config
     from vla_pipeline.vision.mediapipe_hands import HandObservation
     from vla_pipeline.vision.yolo_pose_npu import KP
 
     width, height, period = 640, 480, 1.0 / 30.0
     neutral = 0.16
-    # (wrist x, wrist y as frame fractions, hand size, hand direction deg, pinch, frames)
+    # (wrist x, wrist y as frame fractions, hand size, hand direction deg, pinch)
     keyframes = [
-        (0.5, 0.5, neutral, 0.0, 1.4, 30),
-        (0.1, 0.15, neutral * 1.3, -60.0, 0.1, 45),
-        (0.5, 0.5, neutral, 0.0, 1.4, 30),
-        (0.9, 0.85, neutral * 0.7, 60.0, 1.4, 45),
+        (0.5, 0.5, neutral, 0.0, 1.4),
+        (0.1, 0.15, neutral * 1.3, -60.0, 0.1),
+        (0.5, 0.5, neutral, 0.0, 1.4),
+        (0.9, 0.85, neutral * 0.7, 60.0, 1.4),
     ]
-    script = [frame[:5] for frame in keyframes for _ in range(frame[5])]
+    shown = [keyframes[0]]
 
     class _Camera:
         def __init__(self):
@@ -278,6 +307,7 @@ def test_mimic_follows_generated_poses_to_its_range_ends_and_parks(arm, pipeline
         def read(self):
             arm.wait_state(arm.state_time() + period)
             self.index = min(self.index + 1, len(script) - 1)
+            shown[0] = script[self.index]
             return True, np.zeros((height, width, 3), np.uint8)
 
     camera = _Camera()
@@ -287,7 +317,7 @@ def test_mimic_follows_generated_poses_to_its_range_ends_and_parks(arm, pipeline
         kpt_threshold = 0.3
 
         def infer(self, frame):
-            x, y = script[camera.index][0] * width, script[camera.index][1] * height
+            x, y = shown[0][0] * width, shown[0][1] * height
             shoulder = (0.55 * width, 0.35 * height)
             kpts = np.zeros((1, 17, 3), np.float32)
             kpts[0, KP["nose"]] = (0.5 * width, 0.2 * height, 0.9)
@@ -300,7 +330,7 @@ def test_mimic_follows_generated_poses_to_its_range_ends_and_parks(arm, pipeline
 
     class _Hands:
         def process(self, frame):
-            x, y, size, direction, pinch = script[camera.index]
+            x, y, size, direction, pinch = shown[0]
             wrist = (int(x * width), int(y * height))
             return HandObservation(
                 pinch=pinch, thumb_px=wrist, index_px=wrist, handedness="Right",
@@ -309,6 +339,50 @@ def test_mimic_follows_generated_poses_to_its_range_ends_and_parks(arm, pipeline
 
         def draw(self, frame, obs, raw):
             return frame
+
+    class _Clocked:
+        """The mapper on a clock of one ``period`` per frame."""
+
+        def __init__(self):
+            self.mapper, self.t = mapper_from_config(pipeline_cfg), 0.0
+
+        def step(self, *args, **kwargs):
+            self.t += period
+            return self.mapper.step(*args, t=self.t, **kwargs)
+
+        def reset(self):
+            self.mapper.reset()
+
+    arm.reset()
+    mimic = pipeline_cfg["mimic"]
+    # The smoothing at its slowest is a low-pass of time constant 1/(2 pi min_cutoff);
+    # ln(1e4) of those leave a step 1e-4 short. The hand-size baseline comes first.
+    tau = 1.0 / (2.0 * math.pi * float(mimic["smoothing"]["min_cutoff"]))
+    hold = int(mimic["depth_baseline_frames"]) + math.ceil(math.log(1e4) * tau / period)
+    limits = moveit_configs().joint_limits["robot_description_planning"]["joint_limits"]
+    sent: list[dict] = []
+    offline = SimpleNamespace(
+        pose=_Pose(), hands=_Hands(), mapper=_Clocked(), cfg=pipeline_cfg,
+        arm=SimpleNamespace(send_joints=sent.append, send_gripper=lambda _jaw: None, gripper_joint=arm.gripper_joint),
+    )
+    blank = np.zeros((height, width, 3), np.uint8)
+    previous = arm.get_joints()
+    script: list[tuple] = []
+    for key in keyframes:
+        shown[0] = key
+        sent.clear()
+        for _ in range(hold):
+            mimic_tick(offline, blank)
+        steady = {name: sent[-1][name] for name in arm.arm_joints}
+        settle = next(i for i, joints in enumerate(sent) if off(joints, steady) < 0.01)
+        # A long move cruises at max_velocity after a ramp of max_velocity/max_acceleration.
+        move_s = max(
+            abs(steady[name] - previous[name]) / float(limits[name]["max_velocity"])
+            + float(limits[name]["max_velocity"]) / float(limits[name]["max_acceleration"])
+            for name in arm.arm_joints
+        )
+        script += [key] * (settle + math.ceil(move_s / period))
+        previous = steady
 
     commanded: list[dict] = []
 

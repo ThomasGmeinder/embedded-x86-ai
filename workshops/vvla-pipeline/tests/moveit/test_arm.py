@@ -168,10 +168,22 @@ def test_a_streamed_setpoint_is_reached(arm, ros_node):
 
 
 @launch
-def test_reset_discards_a_streamed_target(arm):
-    """A reset replaces both the physical controller target and Servo's local one."""
+def test_reset_discards_a_streamed_target(arm, ros_node):
+    """A reset replaces both the physical controller target and Servo's own
+    last command, so the next stream starts from home rather than from the
+    stream before the reset. Ready is about 1 rad from home on the elbow; the
+    joints a stream does not name sag about 0.01 rad under it."""
+    from sensor_msgs.msg import JointState
+
+    assert arm.go_to_named("ready") == "arrived"
     arm.send_joints({PAN: arm.get_joints()[PAN] + 0.3})
     arm.reset()
+    home = arm.named_state("home")
+    goal = home[PAN] + 0.1
+    arm.send_joints({PAN: goal})
+    reached = next_message(ros_node, JointState, "/joint_states", lambda m: abs(dict(zip(m.name, m.position))[PAN] - goal) < 0.01)
+    others = {name: value for name, value in home.items() if name != PAN}
+    assert off(dict(zip(reached.name, reached.position)), others) < 0.05
     assert arm.go_to_named("ready") == "arrived"
     assert off(arm.get_joints(), arm.named_state("ready")) < 0.01
 

@@ -54,16 +54,27 @@ class _Arm:
 
 def _ctx(monkeypatch, arm, *, info=True):
     from vla_pipeline.behaviors import manipulation
+    from vla_pipeline.robot.moveit_arm import grasp_frame
     from vla_pipeline.vision import camera, yolo_detect_npu
+    from vla_pipeline.vision.yolo_detect_npu import CLASS_SIZE
+
+    tip = SimpleNamespace(
+        position=SimpleNamespace(x=0.0, y=0.0, z=0.1), orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+    )
+    # The twin reports the picked toothbrush where the jaws hold it.
+    jaws = grasp_frame(CLASS_SIZE["toothbrush"]).position
+    held = SimpleNamespace(free_joints=[SimpleNamespace(name="toothbrush", pose=SimpleNamespace(pose=SimpleNamespace(
+        position=SimpleNamespace(x=tip.position.x + jaws.x, y=tip.position.y + jaws.y, z=tip.position.z + jaws.z),
+    )))])
 
     def message(_node, msg_type, _topic):
-        return None if (msg_type.__name__ == "CameraInfo" and not info) else object()
+        if msg_type.__name__ == "CameraInfo" and not info:
+            return None
+        return held if msg_type.__name__ == "FreeJointStateArray" else object()
 
     monkeypatch.setattr(manipulation, "_ros_message", message)
     monkeypatch.setattr(manipulation, "_optical_in_base", lambda _node: None)
-    monkeypatch.setattr(manipulation, "tip_pose", lambda _arm: SimpleNamespace(
-        position=SimpleNamespace(z=0.1), orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
-    ))
+    monkeypatch.setattr(manipulation, "tip_pose", lambda _arm: tip)
     monkeypatch.setattr(camera, "from_image_msg", lambda _image: arm.at)
     monkeypatch.setattr(
         yolo_detect_npu, "locate_detection",

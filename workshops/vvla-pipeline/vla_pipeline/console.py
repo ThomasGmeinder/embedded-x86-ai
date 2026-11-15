@@ -10,7 +10,7 @@
 Layout (1200 x 1100)::
 
     +-----------------+-----------------+-----------------+
-    | mount: YOLO pose| mount: MediaPipe| arm: YOLO detect|   400 x 300 each
+    | mount pose      | mount hands     | arm detect      |   400 x 300 each
     +-----------------+-----------------+-----------------+
     |                                   | voice / intent  |
     |        3D view of the twin        | behavior log    |   800 x 800 + 400 x 800
@@ -47,14 +47,56 @@ logger = logging.getLogger(__name__)
 WINDOW = "SO-101 twin console"
 TILE_W, TILE_H = 400, 300
 VIEW_W, VIEW_H = 800, 800  # tall enough for the raised arm (wave)
-LOG_LINES = (VIEW_H - 230) // 20  # what fits between the header and the arm HUD
+LOG_LINES = (VIEW_H - 250) // 20  # what fits under the voice lines and above the arm HUD
 PANEL_W = 400
+# The reset button, in the composed image. The notebook's reset button calls
+# the same TwinConsole.reset_scene the ``r`` key calls.
+RESET_BUTTON = (VIEW_W + 12, TILE_H + VIEW_H - 44, 110, 30)
 IDLE_AFTER_S = 0.5  # a model untouched this long is run by the console itself
 FPS = 15.0
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 WHITE, GRAY, DIM = (235, 235, 235), (150, 150, 150), (90, 90, 90)
 GREEN, YELLOW, RED, CYAN = (80, 200, 80), (60, 200, 230), (60, 60, 230), (220, 200, 80)
+ORANGE = (40, 140, 240)
 RESET_LINE = "Reset. Arm parked, objects back on the table."
+
+POSE = "mount: YOLOv26s-pose"
+HANDS = "mount: MediaPipe hands"
+DETECT = "arm: YOLOv26s-detect"
+VIEW = "digital twin simulated in MuJoCo"
+VOICE = (
+    "Voice: gemma4-e4b-it transcription",
+    "and intent-to-command translation",
+)
+
+
+def with_processor(caption: str, processor: str) -> str:
+    """``caption`` plus the processor it is running on, in brackets."""
+    return f"{caption} [{processor}]"
+
+
+def hits_reset_button(x: int, y: int) -> bool:
+    """True when an image-space click lands on the reset button."""
+    bx, by, bw, bh = RESET_BUTTON
+    return bx <= x < bx + bw and by <= y < by + bh
+
+
+def pointer_hits_reset(x: int, y: int, image_wh: tuple[int, int], window_rect: tuple[int, int, int, int]) -> bool:
+    """True when a window click lands on the reset button.
+
+    OpenCV reports the pointer either in image pixels or in the window, and
+    ``getWindowImageRect`` may be screen coordinates. Accept the mapping that
+    lands on the button.
+    """
+    if hits_reset_button(x, y):
+        return True
+    iw, ih = image_wh
+    _rx, _ry, rw, rh = window_rect
+    if rw <= 0 or rh <= 0 or iw <= 0 or ih <= 0:
+        return False
+    scaled = (int(x * iw / rw), int(y * ih / rh))
+    shifted = (int((x - _rx) * iw / rw), int((y - _ry) * ih / rh))
+    return hits_reset_button(*scaled) or hits_reset_button(*shifted)
 
 
 class FanoutCamera:
@@ -278,7 +320,7 @@ class TwinConsole:
     (default: through the arm client).
     """
 
-    def __init__(self, ctx, voice: str = "mic", view=None, hint: str = "space: stop    r: reset    q: quit",
+    def __init__(self, ctx, voice: str = "mic", view=None, hint: str = "space: stop    q: quit",
                  restore=None):
         self.ctx = ctx
         self.voice = voice  # "mic" | "typed"
@@ -360,12 +402,12 @@ class TwinConsole:
                 holding.clear()
 
     def on_level(self, rms: float, speaking: bool) -> None:
-        """Microphone block level from :class:`~vla_pipeline.audio.vad_listener.FastListener`."""
+        """Microphone block level from the voice session."""
         with self._lock:
             self._level, self._speaking, self._level_t = rms, speaking, time.monotonic()
 
     def note_asr(self, busy: bool) -> None:
-        """True while Whisper is decoding. The meter keeps running either way."""
+        """True while the voice model is decoding. The meter keeps running either way."""
         with self._lock:
             self._asr_pending = busy
 
@@ -434,14 +476,16 @@ class TwinConsole:
         topic = getattr(self.view, "topic", None) if self.view is not None else None
         label = f"waiting for {topic}" if topic else ("waiting for the twin" if self.view is not None else "no 3D view")
         img = _fit(frame, VIEW_W, VIEW_H, label).copy()
-        _title(img, "digital twin")
+        _title(img, VIEW)
         return img
 
     def _panel(self) -> np.ndarray:
         p = np.full((VIEW_H, PANEL_W, 3), 28, np.uint8)
         now = time.monotonic()
-        y = 28
-        cv2.putText(p, "VOICE", (12, y), FONT, 0.55, WHITE, 1, cv2.LINE_AA)
+        y = 22
+        for line in VOICE:
+            cv2.putText(p, line, (12, y), FONT, 0.45, WHITE, 1, cv2.LINE_AA)
+            y += 18
         with self._lock:
             level, speaking, level_t = self._level, self._speaking, self._level_t
             asr, log = self._asr_pending, list(self._log)
@@ -455,7 +499,7 @@ class TwinConsole:
             state, color = "transcribing...", YELLOW
         else:
             state, color = "listening", GRAY
-        cv2.putText(p, state, (90, y), FONT, 0.5, color, 1, cv2.LINE_AA)
+        cv2.putText(p, state, (12, y), FONT, 0.5, color, 1, cv2.LINE_AA)
         if self.voice == "mic":
             db = 20.0 * np.log10(max(level, 1e-6))
             _bar(p, 12, y + 12, PANEL_W - 24, 10, (db + 60.0) / 50.0, GREEN if speaking else DIM)
@@ -477,8 +521,13 @@ class TwinConsole:
             cv2.putText(p, text, (12, y), FONT, 0.45, color, 1, cv2.LINE_AA)
             y += 20
 
-        self._arm_hud(p, VIEW_H - 92)
-        cv2.putText(p, self.hint, (12, VIEW_H - 12), FONT, 0.45, DIM, 1, cv2.LINE_AA)
+        self._arm_hud(p, VIEW_H - 110)
+        bx, by, bw, bh = RESET_BUTTON
+        # RESET_BUTTON is in the composed image; this panel is its right half.
+        local = (bx - VIEW_W, by - TILE_H, bw, bh)
+        cv2.rectangle(p, (local[0], local[1]), (local[0] + bw, local[1] + bh), ORANGE, -1)
+        cv2.putText(p, "reset", (local[0] + 24, local[1] + 21), FONT, 0.55, (20, 20, 20), 1, cv2.LINE_AA)
+        cv2.putText(p, self.hint, (local[0] + bw + 12, local[1] + 21), FONT, 0.42, DIM, 1, cv2.LINE_AA)
         return p
 
     def _arm_hud(self, p, y) -> None:
@@ -495,8 +544,8 @@ class TwinConsole:
 
     def _webcam_tiles(self, frame) -> list[np.ndarray]:
         pose, hands = self._pose_tile(frame).copy(), self._hands_tile(frame).copy()
-        _title(pose, f"mount: YOLO pose [{provider_name(self.pose.obj) if self.pose else 'off'}]")
-        _title(hands, f"mount: MediaPipe hands [{provider_name(self.hands.obj) if self.hands else 'off'}]")
+        _title(pose, with_processor(POSE, provider_name(self.pose.obj) if self.pose else "off"))
+        _title(hands, with_processor(HANDS, provider_name(self.hands.obj) if self.hands else "off"))
         return [pose, hands]
 
     def webcam_tiles(self) -> np.ndarray:
@@ -509,7 +558,7 @@ class TwinConsole:
         mount_frame = self.ctx.mount_camera.latest() if self.ctx.mount_camera is not None else None
         armcam = self.ctx.arm_camera.latest() if self.ctx.arm_camera is not None else None
         detect = self._detect_tile(armcam).copy()
-        _title(detect, f"arm: YOLO detect [{provider_name(self.detector.obj) if self.detector else 'off'}]")
+        _title(detect, with_processor(DETECT, provider_name(self.detector.obj) if self.detector else "off"))
         top = np.hstack([*self._webcam_tiles(mount_frame), detect])
         bottom = np.hstack([self._view_tile(), self._panel()])
         return np.vstack([top, bottom])
@@ -527,12 +576,22 @@ class TwinConsole:
     def run(self, shutdown: threading.Event, on_stop) -> None:
         """Draw until ``shutdown`` is set or the window is closed.
 
-        Space calls ``on_stop()``. ``r`` resets the twin: park the arm and put
-        the props back.
+        Space calls ``on_stop()``. The reset button and ``r`` both call
+        :meth:`reset_scene`: park the arm and put the props back.
         """
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
         scale = min(1.0, 950 / (TILE_H + VIEW_H))  # fit a 1080p screen; drag to resize
         cv2.resizeWindow(WINDOW, int(TILE_W * 3 * scale), int((TILE_H + VIEW_H) * scale))
+        clicked = {"reset": False}
+
+        def on_mouse(event, x, y, flags, _param) -> None:
+            if event != cv2.EVENT_LBUTTONDOWN:
+                return
+            rect = cv2.getWindowImageRect(WINDOW)
+            if pointer_hits_reset(x, y, (TILE_W * 3, TILE_H + VIEW_H), rect):
+                clicked["reset"] = True
+
+        cv2.setMouseCallback(WINDOW, on_mouse)
         period = 1.0 / FPS
         try:
             while not shutdown.is_set():
@@ -546,7 +605,8 @@ class TwinConsole:
                     break
                 if key == ord(" "):
                     on_stop()
-                elif key in (ord("r"), ord("R")):
+                elif key in (ord("r"), ord("R")) or clicked["reset"]:
+                    clicked["reset"] = False
                     self.reset_scene()
                 if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
                     break
