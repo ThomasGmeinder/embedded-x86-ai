@@ -244,20 +244,20 @@ class ModelTap:
 
 
 def _view_source(cfg: dict):
-    """The twin's mount camera on ``cameras.mount.topic``."""
+    """The twin's scene camera on ``cameras.scene.topic``."""
     if (cfg.get("robot") or {}).get("backend") != "sim":
         return None
     try:
         if (cfg.get("robot") or {}).get("use_ros2"):
             from vla_pipeline.vision.camera import Ros2Camera
 
-            topic = ((cfg.get("cameras") or {}).get("mount") or {}).get(
-                "topic", "/cameras/mount/image_raw"
+            topic = ((cfg.get("cameras") or {}).get("scene") or {}).get(
+                "topic", "/cameras/scene/image_raw"
             )
             camera = Ros2Camera("view", topic, stale_after_s=1.0)
             camera.topic = topic
             return camera
-        logger.warning("[console] no 3D view: the twin view is the mount camera topic")
+        logger.warning("[console] no 3D view: the twin view is the scene camera topic")
         return None
     except Exception as e:
         logger.warning("[console] no 3D view: %s", e)

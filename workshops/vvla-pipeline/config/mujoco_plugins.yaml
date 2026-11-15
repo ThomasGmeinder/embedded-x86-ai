@@ -1,6 +1,7 @@
 # The twin's mujoco_ros2_control plugins (launch/so101_control.launch.py, hardware_type:=mujoco):
-# the wrist and mount cameras on the topics cameras.<role>.topic names in pipeline.yaml,
-# and every prop's pose on /free_joint_states.
+# the wrist and scene cameras on the topics cameras.<role>.topic names in pipeline.yaml,
+# and every prop's pose on /free_joint_states. The mount camera is the real webcam,
+# so mount_cam is not published onto cameras.mount.topic.
 /**:
   ros__parameters:
     mujoco_plugins:
@@ -12,11 +13,11 @@
           image_topic: /cameras/arm/image_raw
           info_topic: /cameras/arm/camera_info
           depth_topic: /cameras/arm/depth
-        mount_cam:
-          image_topic: /cameras/mount/image_raw
-          info_topic: /cameras/mount/camera_info
-          depth_topic: /cameras/mount/depth
         scene_cam:
+          image_topic: /cameras/scene/image_raw
+          info_topic: /cameras/scene/camera_info
+          depth_topic: /cameras/scene/depth
+        mount_cam:
           policy: disabled
       props:
         type: "mujoco_ros2_control_plugins/FreeJointStatePublisherPlugin"

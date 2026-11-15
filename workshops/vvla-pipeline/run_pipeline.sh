@@ -120,7 +120,8 @@ done
 
 if [[ "$ROBOT_ROS2" == "true" || "$CAMERA_ROS2" == "true" ]]; then
   command -v ros2 >/dev/null || { echo "ROS 2 not found - install ROS 2 Jazzy (/opt/ros/jazzy)." >&2; exit 1; }
-  # The twin's camera plugins publish both image topics, so the webcam nodes stay off.
+  # On the twin the wrist and scene images come from the MuJoCo plugins.
+  # The camera launch still starts the real mount webcam.
   TWIN=false
   [[ -n "$SIM" && -z "$DRY" && "$ROBOT_ROS2" == "true" ]] && TWIN=true
   DRY_ARM=false

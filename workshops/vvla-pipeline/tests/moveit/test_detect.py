@@ -317,18 +317,16 @@ def test_the_handover_aims_the_pan(arm, pipeline_cfg):
 
 
 @launch
-def test_the_mount_camera_aims_the_handover(arm, ros_node, pipeline_cfg):
-    """One mount-camera frame decides the handover pan, and the arm reaches it."""
-    from sensor_msgs.msg import Image
+def test_the_mount_camera_aims_the_handover(arm, pipeline_cfg):
+    """An empty mount frame aims the handover straight ahead, and the arm reaches it.
 
+    The twin does not publish the mount image. That camera is the real webcam.
+    """
     from vla_pipeline.behaviors.manipulation import extend_toward_person
-    from vla_pipeline.vision.camera import from_image_msg
     from vla_pipeline.vision.yolo_pose_npu import PoseEstimator
 
     arm.reset()
-    image = next_message(ros_node, Image, pipeline_cfg["cameras"]["mount"]["topic"])
-    frame = from_image_msg(image)
-    assert frame is not None, image.encoding
+    frame = np.zeros((480, 640, 3), np.uint8)
     pose = PoseEstimator(pipeline_cfg)
     seen = pose.primary_person(frame)
     pan = extend_toward_person(arm, pipeline_cfg, pose, frame)
@@ -338,6 +336,8 @@ def test_the_mount_camera_aims_the_handover(arm, ros_node, pipeline_cfg):
         f"mount person {None if seen is None else round(seen[1], 2)}  "
         f"pan {pan:.1f} deg  joint {reached:.4f} rad  target {aimed:.4f} rad"
     )
+    assert seen is None
+    assert pan == 0.0
     assert abs(reached - aimed) < 0.05
 
 
@@ -346,8 +346,7 @@ def test_a_recognized_person_aims_the_handover(arm, pipeline_cfg):
     """The pose model on the workshop's stand-in photo aims the fetch extend.
 
     That photo is the webcam stand-in in ``tests/sim/notebook_harness.py``.
-    The twin's mount camera has nobody in frame, so this is the frame that
-    does contain a person.
+    It is a frame that contains a person.
     """
     import cv2
     from importlib.util import find_spec

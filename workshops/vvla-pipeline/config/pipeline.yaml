@@ -75,9 +75,9 @@ mediapipe:
                               #   cue is fully trusted; below it the weight ramps
                               #   down and the wrist→knuckle angle takes over
 
-# NEW: two-camera architecture. Each camera can be served by its own ROS 2
-# ``v4l2_camera`` when use_ros2 is set and the twin is not running, or opened
-# directly by the process.
+# mount and arm are real webcams: v4l2_camera when use_ros2 is set, or opened
+# directly by the process. On the twin the wrist image comes from the MuJoCo
+# plugin and the mount webcam still starts. scene is the twin's MuJoCo overview.
 cameras:
   mount:                      # externally mounted, faces the human (pose / mimic)
     device: /dev/video0
@@ -104,6 +104,10 @@ cameras:
     # and easy_handeye2 are not installed.
     intrinsics: null          # {fx, fy, cx, cy, dist: [k1, k2, p1, p2, k3], width, height}
     extrinsics: null          # camera on the gripper: {pos: [x, y, z] m, rpy: [roll, pitch, yaw] deg}
+  scene:                      # MuJoCo overview on the twin; not a webcam
+    source: sim
+    use_ros2: true
+    topic: /cameras/scene/image_raw
 
 robot:
   backend: real               # real (Feetech bus) | sim (MuJoCo digital twin, so101_sim)

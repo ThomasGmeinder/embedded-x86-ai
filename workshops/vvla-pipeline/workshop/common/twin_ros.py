@@ -277,8 +277,8 @@ class TwinSession:
         self._arm_topic = (cfg.get("cameras") or {}).get("arm", {}).get(
             "topic", "/cameras/arm/image_raw"
         )
-        self._mount_topic = (cfg.get("cameras") or {}).get("mount", {}).get(
-            "topic", "/cameras/mount/image_raw"
+        self._scene_topic = (cfg.get("cameras") or {}).get("scene", {}).get(
+            "topic", "/cameras/scene/image_raw"
         )
         self.arm = self.armcam = self.view = self.scene = None
         self._proc = None
@@ -368,7 +368,7 @@ class TwinSession:
         if self._scene is not None:
             self._place(self._scene)
         self.armcam = TwinCamera("arm", self._arm_topic)
-        self.view = TwinCamera("view", self._mount_topic)
+        self.view = TwinCamera("view", self._scene_topic)
         self.scene = TwinScene()
         if not self.armcam.next_frame(0.0, remaining())[0]:
             raise not_ready("arm camera frame")

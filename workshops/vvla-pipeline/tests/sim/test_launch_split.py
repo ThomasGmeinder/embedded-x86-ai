@@ -72,6 +72,29 @@ def test_the_arm_launch_holds_only_the_arm_bringup(tmp_path):
     assert _kinds(entities) == ["IncludeLaunchDescription"], _kinds(entities)
 
 
-def test_the_twin_arm_launch_starts_no_webcam_even_with_cameras_on(tmp_path):
+def _node_name(node) -> str:
+    """The name passed to ``Node`` before the action is executed."""
+    return node._Node__node_name
+
+
+def test_the_twin_camera_launch_starts_only_the_mount_webcam(tmp_path):
+    """``arm:=false cameras:=true digital_twin:=true`` is the camera half of ``run_pipeline.sh``."""
+    from launch_ros.actions import Node
+
+    entities = _entities(tmp_path, arm="false", cameras="true", digital_twin="true", dry_run="false")
+    nodes = [e for group in entities for e in group]
+    assert _kinds(entities) == ["Node"], _kinds(entities)
+    assert len(nodes) == 1 and isinstance(nodes[0], Node)
+    assert nodes[0].node_package == "v4l2_camera"
+    assert _node_name(nodes[0]) == "camera_mount"
+
+
+def test_the_twin_arm_launch_with_cameras_starts_the_mount_webcam_not_the_arm(tmp_path):
+    from launch_ros.actions import Node
+
     entities = _entities(tmp_path, arm="true", cameras="true", digital_twin="true", dry_run="false")
-    assert _kinds(entities) == ["IncludeLaunchDescription"], _kinds(entities)
+    nodes = [e for group in entities for e in group if isinstance(e, Node)]
+    assert _kinds(entities) == ["IncludeLaunchDescription", "Node"], _kinds(entities)
+    assert len(nodes) == 1
+    assert nodes[0].node_package == "v4l2_camera"
+    assert _node_name(nodes[0]) == "camera_mount"

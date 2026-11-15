@@ -111,7 +111,8 @@ def test_the_twin_publishes_its_clock_joints_cameras_and_props(ros_node):
     assert (later.clock.sec, later.clock.nanosec) > (first.sec, first.nanosec)
     joints = _next(ros_node, JointState, "/joint_states")
     assert set(joints.name) == {f"{j}_joint" for j in (*MOTOR_NAMES[:5], "gripper")}
-    for role in ("arm", "mount"):
+    # The mount camera is the real webcam, so the twin does not publish it.
+    for role in ("arm", "scene"):
         image = _next(ros_node, Image, f"/cameras/{role}/image_raw")
         info = _next(ros_node, CameraInfo, f"/cameras/{role}/camera_info")
         assert (image.width, image.height) == (640, 480) == (info.width, info.height), role

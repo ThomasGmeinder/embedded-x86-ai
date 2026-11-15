@@ -221,8 +221,9 @@ flowchart LR
 
 | Node | Process / how it starts | Role | Owns |
 |---|---|---|---|
-| `camera_mount` | `v4l2_camera` from `launch/strix_vla.launch.py`, or the twin's camera plugin | Publishes the human-facing image on `cameras.mount.topic` | the mount V4L2 device, or the MuJoCo `mount_cam` |
+| `camera_mount` | `v4l2_camera` from `launch/strix_vla.launch.py` | Publishes the human-facing image on `cameras.mount.topic` | the mount V4L2 device, the real webcam that films the user |
 | `camera_arm` | `v4l2_camera`, or the twin's camera plugin | Publishes the wrist image on `cameras.arm.topic` | the arm V4L2 device, or the MuJoCo `wrist_cam` |
+| `scene_cam` | the twin's camera plugin | Publishes the overview on `cameras.scene.topic` | the MuJoCo `scene_cam` |
 | `controller_manager` | `ros2_control_node` (`launch/so101_control.launch.py`) | Runs `joint_trajectory_controller`, `gripper_controller`, and `joint_state_broadcaster` on `mujoco_ros2_control`, the Feetech driver, or mock hardware | — |
 | `robot_state_publisher` | the upstream `so_arm101_description` bringup | Publishes the SO-101 URDF | — |
 | `camera_client_mount` | created inside `vla_pipeline.main` (`Ros2Camera`) | Subscribes to the mount image topic, hands the latest frame to behaviors | — |
@@ -237,8 +238,9 @@ The three client nodes spin on their own background executors inside the single 
 
 | Topic | Type | Publisher → Subscriber | Notes |
 |---|---|---|---|
-| `/cameras/mount/image_raw` | `sensor_msgs/Image` | `v4l2_camera` or the MuJoCo plugin → `Ros2Camera` | pose / gesture-mimic / person finding. The topic is `cameras.mount.topic` |
+| `/cameras/mount/image_raw` | `sensor_msgs/Image` | `v4l2_camera` → `Ros2Camera` | pose / gesture-mimic / person finding. The real webcam that films the user. The topic is `cameras.mount.topic` |
 | `/cameras/arm/image_raw` | `sensor_msgs/Image` | `v4l2_camera` or the MuJoCo plugin → `Ros2Camera` | object detection. The topic is `cameras.arm.topic` |
+| `/cameras/scene/image_raw` | `sensor_msgs/Image` | the MuJoCo `scene_cam` plugin → the twin console's view | the overview. The topic is `cameras.scene.topic` |
 | `/cameras/arm/camera_info` | `sensor_msgs/CameraInfo` | the same publisher → the pickup | intrinsics for the table-plane locate |
 | `/joint_states` | `sensor_msgs/JointState` (rad) | `joint_state_broadcaster` → `MoveItArm` and anyone | the arm's state, URDF joint names |
 | `/joint_trajectory_controller/follow_joint_trajectory` | `control_msgs/action/FollowJointTrajectory` | `MoveItArm` → the trajectory controller | one goal per planned move or timed keyframe |
@@ -630,7 +632,7 @@ The same command also runs these checks. None of them speak a command.
 | Entry points | `run_pipeline.sh --digital-twin` (with the docs tests: it needs llama-server) starts the MuJoCo MoveIt bringup and runs typed commands through pick, release, wave, an empty grip, home, and a dance stopped after a keyframe. `launch/strix_vla.launch.py dry_run:=true` is mock hardware, and `robot_node --client-test` plans to `ready` and `home`. |
 | Reset | `MoveItArm.reset` calls `reset_world` with the `home` keyframe. The arm parks on the SRDF home pose and every prop returns to its pose in `scene_vvla.xml`. |
 | Twin building blocks | A rendered frame carries the time its scene was captured. A scene snapshot round-trips. The console's camera fan-out judges a stamped frame by its capture time, and an unstamped frame by its arrival time. |
-| ROS twin plumbing | The MuJoCo bringup publishes the wrist camera and prop poses on `/free_joint_states`. A publisher on another ROS domain is invisible, and a second twin on the test domain is refused. Killing the notebook kernel reaps the bringup. Reset puts every prop back on its scene-file pose and parks the arm. |
+| ROS twin plumbing | The MuJoCo bringup publishes the wrist camera, the scene camera, and prop poses on `/free_joint_states`. A publisher on another ROS domain is invisible, and a second twin on the test domain is refused. Killing the notebook kernel reaps the bringup. Reset puts every prop back on its scene-file pose and parks the arm. |
 | Notebook UI polling | In a real `python3` kernel, a cell queued behind a `ui_events` loop runs after the loop ends. Jupyter's stop button cancels a queued cell and interrupts the running one. Running the loop cell again ends the loop. |
 
 Arguments after `./run_sim_tests.sh` select twin tests, for example `./run_sim_tests.sh -k toothbrush`. `--sim-yolo-device cpu` runs YOLO on the CPU on a machine without an NPU. `--sim-video failed` keeps the recordings of failed tests only (by default every test is recorded to `_artifacts/sim_tests/`).

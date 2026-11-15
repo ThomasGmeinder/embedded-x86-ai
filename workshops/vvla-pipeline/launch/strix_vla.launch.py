@@ -10,8 +10,8 @@
 A real webcam is ``v4l2_camera``, with the device and topic from
 ``config/pipeline.yaml``. The arm is ``launch/so101_control.launch.py``:
 ``hardware_type:=real`` on the Feetech bus, ``mock_components`` for
-``dry_run:=true``, and ``mujoco`` for ``digital_twin:=true`` (the twin's
-camera plugins publish both image topics, so the webcam nodes stay off).
+``dry_run:=true``, and ``mujoco`` for ``digital_twin:=true`` (the wrist and
+scene images come from the MuJoCo camera plugins; the mount webcam still starts).
 
     ros2 launch launch/strix_vla.launch.py
     ros2 launch launch/strix_vla.launch.py dry_run:=true     # no motors
@@ -54,11 +54,14 @@ def _arm(context):
 
 
 def _cameras(context):
-    """``v4l2_camera`` for each real webcam. The twin's plugins publish those topics."""
+    """``v4l2_camera`` for each real webcam.
+
+    On the twin, only the mount webcam starts. The wrist image and the scene
+    overview come from the MuJoCo camera plugins.
+    """
     if LaunchConfiguration("cameras").perform(context) != "true":
         return []
-    if LaunchConfiguration("digital_twin").perform(context) == "true":
-        return []
+    twin = LaunchConfiguration("digital_twin").perform(context) == "true"
     import yaml
 
     from launch_ros.actions import Node
@@ -67,7 +70,8 @@ def _cameras(context):
     with open(config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     nodes = []
-    for role in ("mount", "arm"):
+    roles = ("mount",) if twin else ("mount", "arm")
+    for role in roles:
         cam = ((cfg.get("cameras") or {}).get(role) or {})
         if not cam.get("use_ros2", False) or cam.get("source", "device") != "device":
             continue
