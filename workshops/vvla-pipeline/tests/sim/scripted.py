@@ -8,14 +8,14 @@
 """Scripted stand-ins for the user-facing signals of the real interface.
 
 Each one replaces exactly one model/sensor *behind its real interface*, so
-the behaviors, dispatcher and transports under test run unchanged:
+the behaviors, UserRobotControl and transports under test run unchanged:
 
 ``TimelinePose``        YOLO-pose ``infer`` / ``primary_person`` (keyframed people)
 ``TimelineHands``       MediaPipe ``HandTracker.process`` (keyframed pinch/roll/size)
 ``ScriptedMountCamera`` the mount camera: paced frames showing the scripted
                         person, plus the "signals" pane for the test video
 ``SimDetector``         YOLO ``ObjectDetector`` from the twin's segmentation
-``ScriptedTranscripts`` timed utterances into the dispatcher
+``ScriptedTranscripts`` timed utterances into UserRobotControl
 
 All timelines share one clock (``Clock``) started when the scenario starts.
 """

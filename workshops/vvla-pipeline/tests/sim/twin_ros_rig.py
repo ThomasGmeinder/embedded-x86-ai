@@ -151,7 +151,7 @@ class TwinRig:
 
     def __init__(self, cfg: dict, detector, scene: dict | None = None):
         from vla_pipeline.console import FanoutCamera
-        from vla_pipeline.dispatch import PipelineContext, build_registry
+        from vla_pipeline.user_robot_control import PipelineContext, build_registry
         from vla_pipeline.utils.gesture_map import mapper_from_config
         from vvla_workshop.fixtures import ScriptedHands, ScriptedPose, SyntheticCamera
         from vvla_workshop.twin_ros import TwinSession
@@ -186,11 +186,11 @@ class TwinRig:
         return f"robot said:\n{said}\n\n" + twin_log_report(self.twin.log_path, dest)
 
     def start(self, text: str) -> threading.Thread:
-        """Run ``text`` through ``handle_transcript`` on a thread, as the console's dispatcher does.
+        """Run ``text`` through ``handle_transcript`` on a thread, as the console's UserRobotControl does.
 
         A crash is recorded; :meth:`run` and :meth:`close` raise it, so it fails the test.
         """
-        from vla_pipeline.dispatch import handle_transcript
+        from vla_pipeline.user_robot_control import handle_transcript
         from vla_pipeline.llm.intents import keyword_parse
 
         def behave() -> None:
@@ -211,7 +211,7 @@ class TwinRig:
 
     def stop(self) -> None:
         """The console's stop button: ``handle_transcript`` with "stop robot", from another thread."""
-        from vla_pipeline.dispatch import handle_transcript
+        from vla_pipeline.user_robot_control import handle_transcript
         from vla_pipeline.llm.intents import keyword_parse
 
         handle_transcript(self.ctx, "stop robot", keyword_parse)

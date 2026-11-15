@@ -26,7 +26,7 @@ import random
 import time
 
 from vla_pipeline.behaviors.simple import _go_to, _rest
-from vla_pipeline.dispatch import PipelineContext
+from vla_pipeline.user_robot_control import PipelineContext
 from vla_pipeline.robot.arm_interface import make_arm
 from vla_pipeline.utils.config import load_config
 

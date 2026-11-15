@@ -21,7 +21,7 @@ The console only observes. Cameras are wrapped in :class:`FanoutCamera` so the
 console and a running behavior both get every frame; the models are tapped in
 place (:class:`ModelTap`) so the tiles show what the behavior computed, and
 the console runs a model itself only while no behavior is using it. The
-dispatcher's events (:meth:`TwinConsole.attach`) fill the voice panel.
+UserRobotControl's events (:meth:`TwinConsole.attach`) fill the voice panel.
 
 :meth:`TwinConsole.compose` returns the frame: :meth:`TwinConsole.run` shows
 it in a desktop window (``run_pipeline.sh --digital-twin``), and the digital
@@ -311,7 +311,7 @@ def jpeg(img: np.ndarray, quality: int = 80) -> bytes:
 
 
 class TwinConsole:
-    """Observe a :class:`~vla_pipeline.dispatch.PipelineContext` and draw it in one image.
+    """Observe a :class:`~vla_pipeline.user_robot_control.PipelineContext` and draw it in one image.
 
     Construction fans the context's cameras out, so a behavior and the
     console both get every frame, and routes ``ctx.say`` into the voice panel.
@@ -358,9 +358,9 @@ class TwinConsole:
 
     # ------------------------------------------------------------ inputs
 
-    def attach(self, dispatcher) -> None:
-        self._dispatcher = dispatcher
-        dispatcher.listeners.append(self.on_event)
+    def attach(self, robot_voice) -> None:
+        self._robot_voice = robot_voice
+        robot_voice.listeners.append(self.on_event)
 
     def _restore_twin(self) -> bool:
         """Park the twin and restore its props. True when this process can."""
@@ -372,15 +372,15 @@ class TwinConsole:
     def reset_scene(self) -> None:
         """Stop the behavior, park the arm with the jaws open, and restore the props."""
         ctx = self.ctx
-        dispatcher = getattr(self, "_dispatcher", None)
-        holding = getattr(dispatcher, "holding", None)
+        robot_voice = getattr(self, "_robot_voice", None)
+        holding = getattr(robot_voice, "holding", None)
         if holding is not None:
             holding.set()
         ctx.stop_event.set()
-        if dispatcher is not None:
-            dispatcher.discard()
-            dispatcher.wait_idle(3.0)  # the running behavior gets 3 s to stop
-            dispatcher.discard()
+        if robot_voice is not None:
+            robot_voice.discard()
+            robot_voice.wait_idle(3.0)  # the running behavior gets 3 s to stop
+            robot_voice.discard()
         try:
             state = getattr(ctx, "shared_state", None)
             if isinstance(state, dict):
@@ -395,8 +395,8 @@ class TwinConsole:
             logger.exception("reset")
             ctx.say(f"Reset failed: {exc}")
         finally:
-            if dispatcher is not None:
-                dispatcher.discard()
+            if robot_voice is not None:
+                robot_voice.discard()
             ctx.stop_event.clear()
             if holding is not None:
                 holding.clear()

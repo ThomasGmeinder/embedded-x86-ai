@@ -20,7 +20,7 @@ Architecture
   every behavior's ``stop_check`` polls (including mid ``go_to``
   interpolation). The 'q' key in any preview window and Ctrl-C do the same.
 - Every other transcript goes through the grammar-constrained intent parser
-  and is dispatched via the registry (:func:`~vla_pipeline.dispatch.build_registry`) -
+  and is dispatched via the registry (:func:`~vla_pipeline.user_robot_control.build_registry`) -
   adding a voice command never touches this file (see :mod:`vla_pipeline.llm.intents`).
 - Behaviors run on the **main thread** (OpenCV preview windows want that);
   a new command interrupts the current behavior (graceful stop → switch).
@@ -38,7 +38,7 @@ import argparse
 import logging
 import threading
 
-from vla_pipeline.dispatch import PipelineContext, build_registry
+from vla_pipeline.user_robot_control import PipelineContext, build_registry
 from vla_pipeline.utils.config import ensure_dirs, load_config
 
 logger = logging.getLogger(__name__)
@@ -162,7 +162,7 @@ def main() -> None:
 
         console = TwinConsole(ctx, voice="typed" if args.text_commands else "mic")
 
-    from vla_pipeline.dispatch import Dispatcher
+    from vla_pipeline.user_robot_control import UserRobotControl
     from vla_pipeline.llm.voice import open_voice
 
     llm = open_voice(cfg, device=args.device)
@@ -172,11 +172,11 @@ def main() -> None:
     # being honored once the window passes. Tunable via audio.startup_grace_s.
     # Typed commands have no mic, so they get no window.
     grace_s = 0.0 if args.text_commands else float((cfg.get("audio", {}) or {}).get("startup_grace_s", 1.5))
-    dispatcher = Dispatcher(ctx, llm.parse, startup_grace_s=grace_s)
-    _on_transcript = dispatcher.on_transcript
+    robot_voice = UserRobotControl(ctx, llm.parse, startup_grace_s=grace_s)
+    _on_transcript = robot_voice.on_transcript
     shutdown = threading.Event()
     if console is not None:
-        console.attach(dispatcher)
+        console.attach(robot_voice)
         # The twin process keeps the last physics state until something resets
         # it. The notebook's reset button does that before the console is used.
         if args.digital_twin:
@@ -203,7 +203,7 @@ def main() -> None:
                     line = input("you> ")
                 except EOFError:
                     shutdown.set()
-                    dispatcher.stop()
+                    robot_voice.stop()
                     break
                 if line.strip():
                     _on_transcript(line.strip())
@@ -218,16 +218,16 @@ def main() -> None:
     )
     try:
         if console is None:
-            dispatcher.run(shutdown)
+            robot_voice.run(shutdown)
         else:
             worker = threading.Thread(
-                target=dispatcher.run, args=(shutdown,), daemon=True, name="dispatch"
+                target=robot_voice.run, args=(shutdown,), daemon=True, name="dispatch"
             )
             worker.start()
             console.run(shutdown, on_stop=lambda: _on_transcript("stop robot"))
             shutdown.set()
             ctx.stop_event.set()
-            dispatcher.stop()
+            robot_voice.stop()
             worker.join(timeout=5.0)
     except KeyboardInterrupt:
         pass

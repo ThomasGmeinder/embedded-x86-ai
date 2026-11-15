@@ -215,7 +215,7 @@ class CommandRegistry:
     """Maps intents to behavior entry points; the orchestrator just dispatches.
 
     Handlers receive ``(ctx, cmd: ParsedCommand)`` where ``ctx`` is a
-    :class:`~vla_pipeline.dispatch.PipelineContext` (arm, cameras, models,
+    :class:`~vla_pipeline.user_robot_control.PipelineContext` (arm, cameras, models,
     shared state, stop_check).
     """
 

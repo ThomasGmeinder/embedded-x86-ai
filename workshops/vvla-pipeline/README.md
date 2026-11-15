@@ -291,7 +291,7 @@ vvla-pipeline/
 │   └── validate_setup.sh         # check scripts, SDK, caches and .venv
 └── vla_pipeline/
     ├── main.py                   # orchestrator: Gemma listener, handler registry
-    ├── dispatch.py               # PipelineContext, the behavior registry, stop fast path, dispatch queue
+    ├── user_robot_control.py      # PipelineContext, the behavior registry, stop fast path, dispatch queue
     ├── console.py                # twin console window (--digital-twin)
     ├── audio/
     │   └── gemma_listen.py       # Silero gate and hop windows (no wait for silence)
@@ -589,7 +589,7 @@ cd workshop && ./run_notebooks.sh --test    # notebooks and the Instructor's cor
 
 Spoken commands are injected as text. The operator's pose and hands are scripted. The arm camera is read by YOLO on the NPU (`--sim-eyes seg` substitutes the twin's segmentation boxes). The twin stands in for the arm and its camera, and its rendering runs on the iGPU. No arm, camera, or microphone has to be attached. The ROS cases run headless on a private ROS domain, and the exit code is the result.
 
-Spoken commands, and how each one is checked: in process (the real `Dispatcher` and the mock LLM on the twin), and over ROS 2 (the notebook console's context on the notebook twin, through `handle_transcript` and the keyword parser). A cell is blank when that path does not run the case. "Parks at rest" means the body joints finish within 4° of the rest pose.
+Spoken commands, and how each one is checked: in process (the real `UserRobotControl` and the mock LLM on the twin), and over ROS 2 (the notebook console's context on the notebook twin, through `handle_transcript` and the keyword parser). A cell is blank when that path does not run the case. "Parks at rest" means the body joints finish within 4° of the rest pose.
 
 | Use case | Command | In process | Over ROS 2 |
 |---|---|---|---|
@@ -626,7 +626,7 @@ The same command also runs these checks. None of them speak a command.
 | One implementation | Each workshop TODO stub has the parameters of the pipeline function it mirrors. No top-level function, class or constant is defined twice (same name, at least 75 % alike once docstrings are set aside), and no file is a byte-for-byte copy. The twin's default rest pose and jaw closed point are the pipeline's. `make_arm` builds a MoveIt arm. |
 | Motion | An untimed move's cruise, the median of the samples within 10% of it, equals that joint's `max_velocity` in `joint_limits.yaml`. A timed keyframe takes its `duration_s` on the arm's clock. A stop cancels the goal and the arm holds. The jaws open and close on the gripper action. |
 | Handover | The pan aims at the person with one joint-interpolation move. A held ball stays held through a mimic tick that has not seen a pinch. |
-| Stop during the parse | Through the dispatcher and through `handle_transcript`, a "stop robot" said while the LLM parses a command cancels that command; a "stop robot" said before it does not. |
+| Stop during the parse | Through `UserRobotControl` and through `handle_transcript`, a "stop robot" said while the LLM parses a command cancels that command; a "stop robot" said before it does not. |
 | Robot description | The bringup is upstream `so_arm101_description`, not the topic bridge. Every joint turns about the twin's axis, and the controllers drive those joints. |
 | Pipeline over ros2_control | MoveIt on the MuJoCo bringup plans to named states and plays timed keyframes. A pickup leaves a stopped ball, bottle, or toothbrush more than 30 mm up, and place puts it back within 15 mm in z. |
 | Entry points | `run_pipeline.sh --digital-twin` (with the docs tests: it needs llama-server) starts the MuJoCo MoveIt bringup and runs typed commands through pick, release, wave, an empty grip, home, and a dance stopped after a keyframe. `launch/strix_vla.launch.py dry_run:=true` is mock hardware, and `robot_node --client-test` plans to `ready` and `home`. |
@@ -654,7 +654,7 @@ All tunables live in `config/pipeline.yaml`:
 
 - **One arm.** `launch/so101_control.launch.py` starts the ros2_control bringup (`mujoco`, the Feetech bus, or mock hardware) and `move_group`. Behaviors talk to `MoveItArm`: MoveItPy for a planned joint goal, a timed keyframe on the joint trajectory controller, and a MoveIt Task Constructor pick and place. A move ends when that controller reports the goal. Mimic streams setpoints on the controller's `~/joint_trajectory` topic.
 - **Grammar-constrained intent.** llama.cpp's GBNF support means the LLM physically cannot emit anything but one of the command JSONs (`gesture_mimic`, `fetch_block`, `pick_place`, `dance`, `grip`, `release`, `place`, `wave`, `home`, `stop`, `unknown`) with an `object` slot.
-- **Registry dispatch.** The orchestrator never hardcodes behaviors; `dispatch.build_registry` registers the handlers on a `CommandRegistry`, so adding a command never touches the dispatch loop.
+- **Registry dispatch.** The orchestrator never hardcodes behaviors; `user_robot_control.build_registry` registers the handlers on a `CommandRegistry`, so adding a command never touches the dispatch loop.
 - **Grip-lock.** `grip` and `pick_place` record the held position in shared state, so a second "hold this" is refused while the arm holds something. `release` ("release", "open", "drop it") clears the lock and opens the jaws where they are. `place` ("place it", "set it down") clears it once a picked object rests on its place spot. `gesture_mimic` clears it too and hands the gripper to your pinch, so a later "place it" refuses.
 - **Safety.** `clamp_joints` and `JOINT_LIMITS` are the workshop desk margin: the mechanical range pulled in so mimic stops short of the desk. The URDF limits are wider. `enforce_command_limits` is left at its Jazzy default of false. Degree poses still pass through `clamp_joints` before `radians_from_calibrated`. The trajectory controller's speed is `joint_limits.yaml`. `stop robot` is a keyword on the text Gemma returns and sets a shared stop event every move checks (a trajectory goal is cancelled, and the arm holds where it is). "stop" alone is not a command. `q` in any preview window and Ctrl-C are equivalent. A behavior that finishes calls `go_to_rest`, the SRDF `home` pose with the jaws closed. Shutdown closes the arm.
 

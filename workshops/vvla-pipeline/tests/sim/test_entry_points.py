@@ -9,7 +9,7 @@
 
 ``run_pipeline.sh --digital-twin`` starts the twin and its controllers as it
 starts the arm on the rig; each typed command waits for the line its behavior
-ends with, the dispatcher's ``=== <intent> ended (<how>) ===``. The robot
+ends with, UserRobotControl's ``=== <intent> ended (<how>) ===``. The robot
 notebook's "On the rig" commands start the arm server and its controllers,
 then the client's round trip.
 

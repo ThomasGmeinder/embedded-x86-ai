@@ -18,7 +18,7 @@ calling thread (the workshop's TODO 3.2):
 4. dispatch - the registry's handler runs, unless a stop came in since the
    transcript arrived.
 
-:class:`Dispatcher` puts a queue in front of it for the always-hot listener
+:class:`UserRobotControl` puts a queue in front of it for the always-hot listener
 (Gemma 4 on llama-server, see :mod:`vla_pipeline.llm.voice`) or the
 ``--text-commands`` stdin loop. ``on_transcript`` takes the startup grace
 window, the stop fast path and the noise gate at once, on the listener's
@@ -27,7 +27,7 @@ the new one takes over. While gesture mimic runs, only a registered command or
 a stop ends it: crowd talk does not. ``run`` (main thread) hands each queued
 transcript to :func:`handle_transcript`, draining a backlog to the newest
 command so stale behaviors never replay. It blocks on the queue;
-``Dispatcher.stop`` wakes it to see its ``shutdown`` event.
+``UserRobotControl.stop`` wakes it to see its ``shutdown`` event.
 
 Every step is reported to ``ctx.listeners`` (``fn(event, **data)``) so the
 console and the digital-twin tests can timeline it.
@@ -52,7 +52,7 @@ from vla_pipeline.llm.intents import (
 
 logger = logging.getLogger(__name__)
 
-_STOP = object()  # queued by Dispatcher.stop: run() wakes and checks its shutdown event
+_STOP = object()  # queued by UserRobotControl.stop: run() wakes and checks its shutdown event
 
 
 @dataclass
@@ -238,7 +238,7 @@ def handle_transcript(
     return cmd
 
 
-class Dispatcher:
+class UserRobotControl:
     """Owns the transcript queue and runs behaviors from it through :func:`handle_transcript`."""
 
     def __init__(self, ctx: PipelineContext, parse, *, startup_grace_s: float = 0.0, clock=time.monotonic):

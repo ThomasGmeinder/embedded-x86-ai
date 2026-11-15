@@ -13,9 +13,9 @@ gauntlet - stop fast path, noise gate, LLM - and whatever survives is
 dispatched to whichever handler claimed that intent. Adding a voice command
 to the pipeline never touches the dispatch loop; that property comes from
 what you build here. The context every handler gets is the pipeline's
-:class:`~vla_pipeline.dispatch.PipelineContext`.
+:class:`~vla_pipeline.user_robot_control.PipelineContext`.
 
-Reference: ``vla_pipeline/dispatch.py`` (same names and parameters).
+Reference: ``vla_pipeline/user_robot_control.py`` (same names and parameters).
 Notebook: ``notebooks/03_integration/01_behavior.ipynb``
 Self-test: ``python -m vvla_workshop.selftest_integration``
 """

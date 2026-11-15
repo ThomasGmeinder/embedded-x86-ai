@@ -5,7 +5,7 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""The stop fast path and the LLM parse: the pipeline's dispatcher and its
+"""The stop fast path and the LLM parse: the pipeline's UserRobotControl and its
 ``handle_transcript`` (the answer key of the workshop's TODO 3.2).
 
 The stand-in LLM hears "stop robot" while it is still parsing, as the always-hot
@@ -21,7 +21,7 @@ pytestmark = pytest.mark.sim
 
 def _context():
     """A context whose registry records each wave it runs, and what it says."""
-    from vla_pipeline.dispatch import PipelineContext
+    from vla_pipeline.user_robot_control import PipelineContext
     from vla_pipeline.llm.intents import CommandRegistry, Intent
 
     ran, said = [], []
@@ -32,12 +32,12 @@ def _context():
     return ctx, ran, said
 
 
-def _dispatcher(parse):
-    from vla_pipeline.dispatch import Dispatcher
+def _robot_voice(parse):
+    from vla_pipeline.user_robot_control import UserRobotControl
 
     ctx, ran, said = _context()
     events = []
-    d = Dispatcher(ctx, parse)
+    d = UserRobotControl(ctx, parse)
     d.listeners.append(lambda event, **_data: events.append(event))
     return d, ctx, ran, said, events
 
@@ -48,11 +48,11 @@ def test_a_stop_said_while_the_llm_parses_cancels_the_command():
     held = {}
 
     def parse(text):
-        held["dispatcher"].on_transcript("stop robot")
+        held["robot_voice"].on_transcript("stop robot")
         return ParsedCommand(Intent.WAVE, transcript=text)
 
-    d, ctx, ran, said, events = _dispatcher(parse)
-    held["dispatcher"] = d
+    d, ctx, ran, said, events = _robot_voice(parse)
+    held["robot_voice"] = d
     d.dispatch("wave at me")
 
     assert ran == [], "the command the stop overlapped ran anyway"
@@ -64,7 +64,7 @@ def test_a_stop_said_while_the_llm_parses_cancels_the_command():
 def test_a_stop_said_before_the_command_does_not_cancel_it():
     from vla_pipeline.llm.intents import Intent, ParsedCommand
 
-    d, ctx, ran, _said, events = _dispatcher(lambda text: ParsedCommand(Intent.WAVE, transcript=text))
+    d, ctx, ran, _said, events = _robot_voice(lambda text: ParsedCommand(Intent.WAVE, transcript=text))
     d.on_transcript("stop robot")
     d.dispatch("wave at me")
 
@@ -76,7 +76,7 @@ def test_a_stop_said_before_the_command_does_not_cancel_it():
 def test_a_stop_discards_a_command_already_queued():
     from vla_pipeline.llm.intents import Intent, ParsedCommand
 
-    d, _ctx, ran, _said, events = _dispatcher(
+    d, _ctx, ran, _said, events = _robot_voice(
         lambda text: ParsedCommand(Intent.WAVE, transcript=text)
     )
     d.on_transcript("wave at me")
@@ -91,10 +91,10 @@ def test_a_stop_discards_a_command_already_queued():
 
 
 def _while_mimicking(parse):
-    """A dispatcher whose current behavior is gesture mimic."""
+    """A UserRobotControl whose current behavior is gesture mimic."""
     from vla_pipeline.llm.intents import Intent, ParsedCommand
 
-    d, ctx, ran, said, events = _dispatcher(parse)
+    d, ctx, ran, said, events = _robot_voice(parse)
     d.current = ParsedCommand(Intent.GESTURE_MIMIC)
     d.busy.set()
     return d, ctx, ran, said, events
@@ -167,7 +167,7 @@ def test_a_parse_failure_during_mimic_leaves_it_running():
 def test_another_behavior_still_stops_on_any_transcript():
     from vla_pipeline.llm.intents import Intent, ParsedCommand
 
-    d, ctx, _ran, _said, events = _dispatcher(lambda text: (_ for _ in ()).throw(AssertionError(text)))
+    d, ctx, _ran, _said, events = _robot_voice(lambda text: (_ for _ in ()).throw(AssertionError(text)))
     d.current = ParsedCommand(Intent.WAVE)
     d.busy.set()
     d.on_transcript("whatever the crowd said")
@@ -177,7 +177,7 @@ def test_another_behavior_still_stops_on_any_transcript():
 
 
 def test_a_parse_failure_does_not_kill_dispatch():
-    d, _ctx, ran, said, events = _dispatcher(
+    d, _ctx, ran, said, events = _robot_voice(
         lambda _text: (_ for _ in ()).throw(RuntimeError("llama unavailable"))
     )
 
@@ -188,7 +188,7 @@ def test_a_parse_failure_does_not_kill_dispatch():
 
 
 def test_handle_transcript_drops_a_command_whose_parse_a_stop_overlapped():
-    from vla_pipeline.dispatch import handle_transcript
+    from vla_pipeline.user_robot_control import handle_transcript
     from vla_pipeline.llm.intents import Intent, ParsedCommand
 
     ctx, ran, _said = _context()
@@ -204,7 +204,7 @@ def test_handle_transcript_drops_a_command_whose_parse_a_stop_overlapped():
 
 
 def test_a_stop_said_before_handle_transcript_does_not_cancel_the_command():
-    from vla_pipeline.dispatch import handle_transcript
+    from vla_pipeline.user_robot_control import handle_transcript
     from vla_pipeline.llm.intents import Intent, ParsedCommand
 
     ctx, ran, _said = _context()

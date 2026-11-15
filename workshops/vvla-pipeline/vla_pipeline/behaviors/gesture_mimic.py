@@ -61,7 +61,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from vla_pipeline.dispatch import PipelineContext
+from vla_pipeline.user_robot_control import PipelineContext
 from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR, make_arm
 from vla_pipeline.utils.config import load_config
 from vla_pipeline.utils.gesture_map import mapper_from_config

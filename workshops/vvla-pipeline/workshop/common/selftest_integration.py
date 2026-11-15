@@ -66,7 +66,7 @@ class _TwoPeoplePose:
 
 def _make_ctx(cfg, *, registry=None):
     """A fully synthetic context: scripted pose and hands, joints recorded in memory."""
-    from vla_pipeline.dispatch import PipelineContext
+    from vla_pipeline.user_robot_control import PipelineContext
     from vla_pipeline.robot.arm_interface import REST_POSE, clamp_joints
     from vla_pipeline.utils.gesture_map import mapper_from_config
     from vvla_workshop.fixtures import ScriptedHands, ScriptedPose, SyntheticCamera

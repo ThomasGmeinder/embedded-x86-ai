@@ -23,7 +23,7 @@ from __future__ import annotations
 import argparse
 import logging
 
-from vla_pipeline.dispatch import PipelineContext
+from vla_pipeline.user_robot_control import PipelineContext
 from vla_pipeline.robot.arm_interface import make_arm, radians_from_calibrated
 from vla_pipeline.utils.config import load_config
 

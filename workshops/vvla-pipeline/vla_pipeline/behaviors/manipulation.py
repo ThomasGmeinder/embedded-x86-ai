@@ -7,7 +7,7 @@
 
 """Manipulation behaviors: grip, pick_place, place, fetch_block.
 
-The handlers take ``(ctx, cmd)`` (a :class:`~vla_pipeline.dispatch.PipelineContext`);
+The handlers take ``(ctx, cmd)`` (a :class:`~vla_pipeline.user_robot_control.PipelineContext`);
 :func:`register_manipulation` adds them to the registry:
 
 - **grip** - present the open jaws and close them on the gripper action. A stall
