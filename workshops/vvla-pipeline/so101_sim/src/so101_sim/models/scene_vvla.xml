@@ -54,9 +54,9 @@
     <camera name="mount_cam" mode="targetbody" target="mount_look" pos="0.85 0 0.42"
       resolution="640 480" sensorsize="0.0048 0.0036" focal="0.0036 0.0036"/>
 
-    <!-- default 3-D overview camera -->
-    <body name="scene_look" pos="0.17 0 0.08"/>
-    <camera name="scene_cam" mode="targetbody" target="scene_look" pos="0.62 -0.48 0.42"
+    <!-- Overview the console shows: 0.9 m from (0.17, 0, 0.18), azimuth 150 deg, elevation -24 deg. -->
+    <body name="scene_look" pos="0.17 0 0.18"/>
+    <camera name="scene_cam" mode="targetbody" target="scene_look" pos="0.882038 -0.411095 0.546063"
       resolution="640 480"/>
 
     <!-- mocap pedestals: tests/behaviors raise them to put an object exactly where a
