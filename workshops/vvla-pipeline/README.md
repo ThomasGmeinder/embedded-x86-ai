@@ -152,22 +152,37 @@ Gemma 4 is constrained by `config/intent.gbnf` so it can only emit `{"command": 
 
 ## Compute placement
 
-The pipeline is powered by AI models that utilize every subsystem of the APU. Each workload runs on the subsystem whose strengths best match its requirements.
+The pipeline is powered by AI models that utilize every subsystem of the APU. Each workload runs on the subsystem whose strengths best match its requirements. `./run_pipeline.sh` also pins three programs to one CPU core each. The core numbers are `cores` in `config/pipeline.yaml` (`twin` 2, `control` 3, `perception` 4). The pin is `taskset -c`, which limits that process to the one core. An empty value leaves the program on any core.
 
 <table style="border-collapse: collapse">
 <thead>
 <tr><th style="background-color: rgba(128, 128, 128, 0.2); border: 1px solid rgba(128, 128, 128, 0.4)">Task</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">Model or algorithm</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">What it does</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">Runs on</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">Runtime</th></tr>
 </thead>
 <tbody>
-<tr style="background-color: rgba(0, 0, 0, 0)"><td rowspan="2" valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Voice control</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Silero VAD</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">marks 20 ms frames that contain speech</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">ONNX Runtime</td></tr>
+<tr style="background-color: rgba(0, 0, 0, 0)"><td rowspan="2" valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Voice control</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Silero VAD</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">marks 20 ms frames that contain speech</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU (core 4)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">ONNX Runtime</td></tr>
 <tr style="background-color: rgba(0, 0, 0, 0)"><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Gemma 4 E4B-IT (Q4_0)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">a hop of audio → command</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">iGPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)"><code>llama.cpp</code> <code>llama-server</code> (HIP) and the audio projector</td></tr>
 <tr style="background-color: rgba(0, 0, 0, 0)"><td rowspan="2" valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Gestures</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">YOLOv26s-pose</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">finds your body and wrist</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">NPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">ONNX Runtime, VitisAI EP</td></tr>
-<tr style="background-color: rgba(0, 0, 0, 0)"><td style="border: 1px solid rgba(128, 128, 128, 0.4)">MediaPipe Hands</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">detects the hand gesture (pinch, roll)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">MediaPipe Tasks</td></tr>
+<tr style="background-color: rgba(0, 0, 0, 0)"><td style="border: 1px solid rgba(128, 128, 128, 0.4)">MediaPipe Hands</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">detects the hand gesture (pinch, roll)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU (core 4)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">MediaPipe Tasks</td></tr>
 <tr style="background-color: rgba(0, 0, 0, 0)"><td rowspan="2" valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Object localization</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">YOLOv26s-detect</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">finds the named object in the arm camera</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">NPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">ONNX Runtime, VitisAI EP</td></tr>
-<tr style="background-color: rgba(0, 0, 0, 0)"><td style="border: 1px solid rgba(128, 128, 128, 0.4)">image_geometry, tf2, MoveIt Task Constructor, pick_ik</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">places the box-centre ray at the class centre and grasps there</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">ROS 2, MoveIt 2</td></tr>
-<tr style="background-color: rgba(0, 0, 0, 0)"><td valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Digital twin</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">MuJoCo 3D simulation</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">simulates the arm and the table scene</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU (rendering on the iGPU)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">MuJoCo, EGL</td></tr>
+<tr style="background-color: rgba(0, 0, 0, 0)"><td style="border: 1px solid rgba(128, 128, 128, 0.4)">image_geometry, tf2, MoveIt Task Constructor, pick_ik</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">places the box-centre ray at the class centre and grasps there</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU (core 3)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">ROS 2, MoveIt 2</td></tr>
+<tr style="background-color: rgba(0, 0, 0, 0)"><td valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Digital twin</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">MuJoCo 3D simulation</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">simulates the arm and the table scene</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU (core 2), rendering on the iGPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">MuJoCo, EGL</td></tr>
 </tbody>
 </table>
+
+The same three cores, by program. On the real arm the controller node shares core 3 with `move_group` and MoveIt Servo, and core 2 stays idle.
+
+<table style="border-collapse: collapse">
+<thead>
+<tr><th style="background-color: rgba(128, 128, 128, 0.2); border: 1px solid rgba(128, 128, 128, 0.4)">CPU core</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">Config key</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">What <code>./run_pipeline.sh</code> puts there</th></tr>
+</thead>
+<tbody>
+<tr style="background-color: rgba(0, 0, 0, 0)"><td style="border: 1px solid rgba(128, 128, 128, 0.4)">2</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)"><code>cores.twin</code></td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">MuJoCo, its controllers, the wrist and scene cameras, <code>robot_state_publisher</code>, and the console window</td></tr>
+<tr style="background-color: rgba(0, 0, 0, 0)"><td style="border: 1px solid rgba(128, 128, 128, 0.4)">3</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)"><code>cores.control</code></td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">the control process (the arm client and the behaviors), <code>move_group</code>, and MoveIt Servo</td></tr>
+<tr style="background-color: rgba(0, 0, 0, 0)"><td style="border: 1px solid rgba(128, 128, 128, 0.4)">4</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)"><code>cores.perception</code></td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">the perception process (YOLOv26s-pose, YOLOv26s-detect, MediaPipe Hands, Silero) and the mount webcam</td></tr>
+</tbody>
+</table>
+
+The digital-twin notebook starts these same programs and passes no core, so each one may use any core. Its kernel holds the arm client, the behaviors, and the console together. `run_notebooks.sh` starts `llama-server` before the kernel, and that server keeps every core.
 
 A hop window goes to Gemma while the person is still talking. [Voice latency](#voice-latency) is that hop, and the samples in it are not denoised.
 
