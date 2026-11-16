@@ -52,6 +52,15 @@ if [[ "$parsed" != *ARGS_OK* ]]; then
   exit 0
 fi
 
+# One publisher of /control/state. A leftover control process from an earlier
+# run would interleave its last sentence with this run's.
+busy=$(.venv/bin/python -c 'from vla_pipeline.single_instance import format_running; print(format_running())')
+if [[ -n "$busy" ]]; then
+  echo "A pipeline process is already running. Quit it before starting another:" >&2
+  printf '%s\n' "$busy" >&2
+  exit 1
+fi
+
 VENV_DIR="${REPO_ROOT}/.venv" "${REPO_ROOT}/scripts/ensure_voice.sh"
 source .venv/bin/activate
 
@@ -90,23 +99,43 @@ ROBOT_ROS2="${USE_ROS2%% *}"
 CAMERA_ROS2="${USE_ROS2##* }"
 
 LAUNCH_PIDS=()
+SIDE_PIDS=()
+CONTROL_PID=""
+stop_group() {
+  local pid="$1" sig="${2:-TERM}"
+  if kill -0 "$pid" 2>/dev/null; then
+    # setsid makes this pid the group leader, so the signal also reaches
+    # llama-server, which perception started.
+    kill -"$sig" -- "-$pid" 2>/dev/null || kill -"$sig" "$pid" 2>/dev/null || true
+  fi
+}
+# Returns when this process has exited. No clock is involved.
+reap() {
+  wait "$1" 2>/dev/null || true
+}
 cleanup() {
-  # Each launch is a background job, so it and the servo wrapper inherit SIGINT
-  # ignored. Bash will not install the wrapper's stop trap for a signal it
-  # inherited ignored, and a non-interactive wait does not return on SIGINT.
-  # SIGTERM is the signal the wrapper traps: it stops the servo user unit, and
-  # the launch process, which does not ignore SIGTERM, exits. A further Ctrl-C
-  # must not cut this short. Both launches get the signal first, then each is
-  # waited for.
+  # Perception and the console go first, so a late command cannot arrive while
+  # the control process is parking the arm. Then the launches. Each launch is
+  # a background job, so it and the servo wrapper inherit SIGINT ignored.
+  # SIGTERM is the signal the wrapper traps. Control is its own session, so
+  # the terminal's Ctrl-C does not reach it; this function does.
   trap '' INT
   local pid
+  for pid in "${SIDE_PIDS[@]}"; do
+    stop_group "$pid" TERM
+  done
+  for pid in "${SIDE_PIDS[@]}"; do
+    reap "$pid"
+  done
+  if [[ -n "${CONTROL_PID:-}" ]]; then
+    stop_group "$CONTROL_PID" TERM
+    reap "$CONTROL_PID"
+  fi
   for pid in "${LAUNCH_PIDS[@]}"; do
-    if kill -0 "$pid" 2>/dev/null; then
-      kill -TERM -- "-$pid" 2>/dev/null || true
-    fi
+    stop_group "$pid" TERM
   done
   for pid in "${LAUNCH_PIDS[@]}"; do
-    wait "$pid" 2>/dev/null || true
+    reap "$pid"
   done
 }
 trap cleanup EXIT
@@ -127,9 +156,16 @@ if [[ "$ROBOT_ROS2" == "true" || "$CAMERA_ROS2" == "true" ]]; then
   DRY_ARM=false
   [[ -n "$DRY" ]] && DRY_ARM=true
   # start_launch ARM CAMERAS: one strix_vla.launch.py in a session of its own.
+  read -r TWIN_CORE CONTROL_CORE PERCEPTION_CORE < <(python - <<'PY'
+from vla_pipeline.utils.config import load_config
+cores = load_config().get("cores") or {}
+print(cores.get("twin", ""), cores.get("control", ""), cores.get("perception", ""))
+PY
+)
   start_launch() {
     setsid python "$(command -v ros2)" launch launch/strix_vla.launch.py \
-      arm:="$1" cameras:="$2" digital_twin:="$TWIN" dry_run:="$DRY_ARM" &
+      arm:="$1" cameras:="$2" digital_twin:="$TWIN" dry_run:="$DRY_ARM" \
+      twin_core:="$TWIN_CORE" control_core:="$CONTROL_CORE" perception_core:="$PERCEPTION_CORE" &
     LAUNCH_PIDS+=("$!")
   }
   if [[ "$CAMERA_ROS2" == "true" ]]; then
@@ -142,4 +178,49 @@ if [[ "$ROBOT_ROS2" == "true" || "$CAMERA_ROS2" == "true" ]]; then
   fi
 fi
 
-python -m vla_pipeline.main "$@"
+# setsid so the stored pid is a process group. A backgrounded shell function
+# would make $! the shell, and a signal to it would leave python and
+# llama-server running.
+start_side() {
+  if [[ -n "${1:-}" ]]; then
+    setsid taskset -c "$1" "${@:2}" &
+  else
+    setsid "${@:2}" &
+  fi
+  SIDE_PIDS+=("$!")
+}
+# The cores are read with the launches. A run with neither arm nor cameras
+# still reads them here.
+if [[ -z "${TWIN_CORE+x}" ]]; then
+  read -r TWIN_CORE CONTROL_CORE PERCEPTION_CORE < <(python - <<'PY'
+from vla_pipeline.utils.config import load_config
+cores = load_config().get("cores") or {}
+print(cores.get("twin", ""), cores.get("control", ""), cores.get("perception", ""))
+PY
+)
+fi
+start_side "$PERCEPTION_CORE" python -m vla_pipeline.perception "$@"
+CONSOLE=true
+CONSOLE_PID=""
+for a in "$@"; do
+  [[ "$a" == "--no-console" || "$a" == "--headless" ]] && CONSOLE=false
+done
+if [[ -n "$SIM" && "$CONSOLE" == true ]]; then
+  start_side "$TWIN_CORE" python -m vla_pipeline.console_main "$@"
+  CONSOLE_PID="${SIDE_PIDS[-1]}"
+fi
+start_side "$CONTROL_CORE" python -m vla_pipeline.main --no-console "$@"
+CONTROL_PID="${SIDE_PIDS[-1]}"
+unset 'SIDE_PIDS[-1]'
+trap 'for pid in "${SIDE_PIDS[@]}"; do stop_group "$pid" TERM; done; stop_group "$CONTROL_PID" TERM' INT
+set +e
+# The window process exits when the window is closed. That exit, or the
+# control process exiting, ends this script. cleanup then stops the rest.
+if [[ -n "$CONSOLE_PID" ]]; then
+  wait -n "$CONSOLE_PID" "$CONTROL_PID"
+else
+  wait "$CONTROL_PID"
+fi
+status=$?
+set -e
+exit "$status"

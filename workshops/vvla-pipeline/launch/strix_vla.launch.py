@@ -48,7 +48,12 @@ def _arm(context):
     return [
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(LAUNCH_FILE)),
-            launch_arguments={"config": config, "hardware_type": hardware}.items(),
+            launch_arguments={
+                "config": config,
+                "hardware_type": hardware,
+                "control_core": LaunchConfiguration("control_core").perform(context),
+                "twin_core": LaunchConfiguration("twin_core").perform(context),
+            }.items(),
         ),
     ]
 
@@ -69,16 +74,23 @@ def _cameras(context):
     config = LaunchConfiguration("config").perform(context)
     with open(config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+    core = str(LaunchConfiguration("perception_core").perform(context) or "").strip()
+    prefix = f"taskset -c {core}" if core else ""
     nodes = []
     roles = ("mount",) if twin else ("mount", "arm")
     for role in roles:
         cam = ((cfg.get("cameras") or {}).get(role) or {})
         if not cam.get("use_ros2", False) or cam.get("source", "device") != "device":
             continue
-        nodes.append(Node(
+        node = dict(
             package="v4l2_camera",
             executable="v4l2_camera_node",
             name=f"camera_{role}",
+        )
+        if prefix:
+            node["prefix"] = prefix
+        nodes.append(Node(
+            **node,
             parameters=[{
                 "video_device": str(cam.get("device", "/dev/video0")),
                 "image_size": [int(cam.get("width", 640)), int(cam.get("height", 480))],
@@ -118,6 +130,9 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="true",
                 description="run the camera nodes (cameras.<role>.use_ros2)",
             ),
+            DeclareLaunchArgument("twin_core", default_value="", description="CPU core for the digital twin"),
+            DeclareLaunchArgument("control_core", default_value="", description="CPU core for robot control"),
+            DeclareLaunchArgument("perception_core", default_value="", description="CPU core for the cameras"),
             OpaqueFunction(function=_cameras),
             OpaqueFunction(function=_arm),
         ]

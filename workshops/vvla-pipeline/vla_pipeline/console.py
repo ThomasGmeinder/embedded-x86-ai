@@ -41,6 +41,7 @@ import cv2
 import numpy as np
 
 from so101_sim import MOTOR_SHORT
+from vla_pipeline.robot.moveit_arm import GRIPPER_CONTACT_MA, GRIPPER_STALL_MA
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,30 @@ WHITE, GRAY, DIM = (235, 235, 235), (150, 150, 150), (90, 90, 90)
 GREEN, YELLOW, RED, CYAN = (80, 200, 80), (60, 200, 230), (60, 60, 230), (220, 200, 80)
 ORANGE = (40, 140, 240)
 RESET_LINE = "Reset. Arm parked, objects back on the table."
+_LINE_COLOR = {"cyan": CYAN, "red": RED, "gray": GRAY}
+
+
+def panel_line(event: str, **data) -> tuple[str, str] | None:
+    """The voice-log line for one behavior event: ``(text, color name)``.
+
+    The drawing process and the in-process console both use this, so the
+    ``->`` line has one wording.
+    """
+    if event == "parsed":
+        params = ", ".join(f"{k}={v}" for k, v in (data.get("params") or {}).items())
+        text = f"-> {data['intent']}" + (f" ({params})" if params else "")
+        return text, "cyan"
+    if event == "ignored":
+        return f"  (ignored: {data['reason']})", "gray"
+    if event == "stop":
+        return "STOP", "red"
+    if event == "behavior_crash":
+        return f"  crashed: {data['error']}", "red"
+    if event == "behavior_end":
+        how = "stopped" if data.get("stopped") else ("done" if data.get("ok") else "failed")
+        return f"  {data['intent']} {how} after {data['took']:.1f}s", "gray"
+    return None
+
 
 POSE = "mount: YOLOv26s-pose"
 HANDS = "mount: MediaPipe hands"
@@ -345,6 +370,18 @@ class TwinConsole:
         self._behavior: str | None = None
         self._behavior_t0 = 0.0
         self._stop_flash = 0.0
+        self._resetting = False
+        self._tiles = None
+        self._joints = None
+        self._gripper_load = None  # milliamps
+        self._on_reset = None
+        self._say = ""
+        self._heard = ""
+        self._log_seq = 0
+        # An arm in this process (the notebook) feeds apply_joints directly.
+        # The window process has no arm; ConsoleLink feeds it.
+        if ctx.arm is not None and hasattr(ctx.arm, "on_cached_joints"):
+            ctx.arm.on_cached_joints = self.apply_joints
 
         say = ctx.say
 
@@ -369,8 +406,87 @@ class TwinConsole:
         restore = getattr(self.ctx.arm, "reset", None)
         return bool(restore and restore())
 
-    def reset_scene(self) -> None:
-        """Stop the behavior, park the arm with the jaws open, and restore the props."""
+    @property
+    def resetting(self) -> bool:
+        """True from the click until the arm is parked and the props are back."""
+        with self._lock:
+            return self._resetting
+
+    def use_tiles(self) -> None:
+        """Draw published overlays instead of running the models in this process."""
+        self._tiles = {"mount": None, "hands": None, "wrist": None}
+
+    def set_tile(self, name: str, frame) -> None:
+        """The latest overlay for ``name`` (mount, hands, or wrist)."""
+        with self._lock:
+            if self._tiles is not None:
+                self._tiles[name] = frame
+
+    def apply_state(self, state) -> None:
+        """Paint one latched control state. The console does not ask the arm."""
+        say = heard = logged = None
+        with self._lock:
+            if state.say and state.say != self._say:
+                self._say = state.say
+                say = state.say
+            if state.heard and state.heard != self._heard:
+                self._heard = state.heard
+                heard = state.heard
+            if state.log_seq > getattr(self, "_log_seq", 0) and state.log_text:
+                self._log_seq = state.log_seq
+                logged = (state.log_text, state.log_kind)
+            if state.behavior == "idle":
+                self._behavior = None
+            elif state.behavior != self._behavior:
+                self._behavior = state.behavior
+                self._behavior_t0 = time.monotonic()
+            self._resetting = state.resetting
+        if heard:
+            self._add(f"you: {heard}", WHITE)
+        if logged:
+            text, kind = logged
+            if kind == "stop":
+                self._stop_flash = time.monotonic()
+            self._add(text, _LINE_COLOR.get(kind, GRAY))
+        if say:
+            self._add(f"robot: {say}", GREEN)
+
+    def apply_joints(self, joints: dict, gripper_load: float | None = None) -> None:
+        """The latest joint sample and gripper current in milliamps. Neither adds a voice-log line."""
+        with self._lock:
+            self._joints = dict(joints)
+            self._gripper_load = gripper_load
+
+    def reset_scene(self, on_busy=None, on_done=None) -> None:
+        """Stop the behavior, park the arm with the jaws open, and restore the props.
+
+        A second call while this one runs does nothing. ``on_busy`` runs once
+        the button should show the reset in progress, before the arm moves, so
+        the window can redraw. ``on_done`` runs after the arm is parked, while
+        a new reset is still refused.
+
+        When this console only draws, the call publishes a reset and returns.
+        The control process coalesces a second click into one extra pass.
+        """
+        if getattr(self, "_on_reset", None) is not None:
+            self._on_reset()
+            return
+        with self._lock:
+            if self._resetting:
+                return
+            self._resetting = True
+        try:
+            if on_busy is not None:
+                on_busy()
+            self._run_reset()
+            if on_done is not None:
+                on_done()
+        finally:
+            with self._lock:
+                self._resetting = False
+
+    def _run_reset(self) -> None:
+        """The reset itself. ``reset_scene`` is the only caller."""
         ctx = self.ctx
         robot_voice = getattr(self, "_robot_voice", None)
         holding = getattr(robot_voice, "holding", None)
@@ -415,23 +531,21 @@ class TwinConsole:
         if event == "heard":
             self._asr_pending = False
             self._add(f"you: {data['text']}", WHITE)
-        elif event == "ignored":
-            self._add(f"  (ignored: {data['reason']})", GRAY)
-        elif event == "stop":
-            self._stop_flash = time.monotonic()
-            self._add("STOP", RED)
-        elif event == "parsed":
-            params = ", ".join(f"{k}={v}" for k, v in data["params"].items())
-            self._add(f"-> {data['intent']}" + (f" ({params})" if params else ""), CYAN)
         elif event == "behavior_start":
             self._behavior, self._behavior_t0 = data["intent"], time.monotonic()
-        elif event == "behavior_crash":
-            self._add(f"  crashed: {data['error']}", RED)
         elif event == "behavior_end":
-            took = time.monotonic() - self._behavior_t0
-            how = "stopped" if data.get("stopped") else ("done" if data.get("ok") else "failed")
-            self._add(f"  {data['intent']} {how} after {took:.1f}s", GRAY)
             self._behavior = None
+            line = panel_line(event, took=time.monotonic() - self._behavior_t0, **data)
+            if line is not None:
+                text, kind = line
+                self._add(text, _LINE_COLOR.get(kind, GRAY))
+        else:
+            line = panel_line(event, **data)
+            if line is not None:
+                text, kind = line
+                if kind == "stop":
+                    self._stop_flash = time.monotonic()
+                self._add(text, _LINE_COLOR.get(kind, GRAY))
 
     def _add(self, text: str, color: tuple) -> None:
         lines = textwrap.wrap(text, 46, subsequent_indent="    ") or [""]
@@ -489,6 +603,7 @@ class TwinConsole:
         with self._lock:
             level, speaking, level_t = self._level, self._speaking, self._level_t
             asr, log = self._asr_pending, list(self._log)
+            resetting = self._resetting
         if self.voice == "typed":
             state, color = "typed commands (stdin)", GRAY
         elif level_t == 0.0 or now - level_t > 2.0:
@@ -525,18 +640,41 @@ class TwinConsole:
         bx, by, bw, bh = RESET_BUTTON
         # RESET_BUTTON is in the composed image; this panel is its right half.
         local = (bx - VIEW_W, by - TILE_H, bw, bh)
-        cv2.rectangle(p, (local[0], local[1]), (local[0] + bw, local[1] + bh), ORANGE, -1)
-        cv2.putText(p, "reset", (local[0] + 24, local[1] + 21), FONT, 0.55, (20, 20, 20), 1, cv2.LINE_AA)
+        # Gray "resetting" while a reset is running; orange "reset" when it is free.
+        label, scale, fill, ink = (
+            ("resetting", 0.5, (70, 70, 70), WHITE)
+            if resetting
+            else ("reset", 0.55, ORANGE, (20, 20, 20))
+        )
+        cv2.rectangle(p, (local[0], local[1]), (local[0] + bw, local[1] + bh), fill, -1)
+        (tw, th), _ = cv2.getTextSize(label, FONT, scale, 1)
+        cv2.putText(
+            p, label,
+            (local[0] + (bw - tw) // 2, local[1] + (bh + th) // 2),
+            FONT, scale, ink, 1, cv2.LINE_AA,
+        )
         cv2.putText(p, self.hint, (local[0] + bw + 12, local[1] + 21), FONT, 0.42, DIM, 1, cv2.LINE_AA)
         return p
 
     def _arm_hud(self, p, y) -> None:
-        arm = self.ctx.arm
-        try:
-            joints = arm.get_joints()
-        except Exception:
-            joints = None
+        """The gripper-current bar in milliamps, full at stall, then the joint positions.
+
+        Both come only from :meth:`apply_joints`. ``n/a`` means no sample has
+        carried a gripper current yet. The tick is the contact level.
+        """
+        with self._lock:
+            load, joints = getattr(self, "_gripper_load", None), getattr(self, "_joints", None)
         cv2.line(p, (12, y - 16), (PANEL_W - 12, y - 16), DIM, 1)
+        if load is None:
+            cv2.putText(p, "gripper current: n/a", (12, y), FONT, 0.45, GRAY, 1, cv2.LINE_AA)
+        else:
+            grasp = load >= GRIPPER_CONTACT_MA
+            text = f"gripper {load:4.0f} / {GRIPPER_STALL_MA:.0f} mA"
+            cv2.putText(p, text, (12, y), FONT, 0.45, GREEN if grasp else WHITE, 1, cv2.LINE_AA)
+            _bar(
+                p, 12, y + 8, PANEL_W - 24, 8, load / GRIPPER_STALL_MA,
+                GREEN if grasp else GRAY, mark=GRIPPER_CONTACT_MA / GRIPPER_STALL_MA,
+            )
         if joints:
             parts = [f"{MOTOR_SHORT.get(n, n)} {v:+.0f}" for n, v in joints.items()]
             for i in range(0, len(parts), 3):
@@ -555,6 +693,19 @@ class TwinConsole:
 
     def compose(self) -> np.ndarray:
         """One 1200 x 1100 BGR frame of the whole console."""
+        with self._lock:
+            tiles = getattr(self, "_tiles", None)
+            tiles = None if tiles is None else dict(tiles)
+        if tiles is not None:
+            pose = _fit(tiles.get("mount"), TILE_W, TILE_H).copy()
+            hands = _fit(tiles.get("hands"), TILE_W, TILE_H).copy()
+            detect = _fit(tiles.get("wrist"), TILE_W, TILE_H).copy()
+            _title(pose, POSE)
+            _title(hands, HANDS)
+            _title(detect, DETECT)
+            top = np.hstack([pose, hands, detect])
+            bottom = np.hstack([self._view_tile(), self._panel()])
+            return np.vstack([top, bottom])
         mount_frame = self.ctx.mount_camera.latest() if self.ctx.mount_camera is not None else None
         armcam = self.ctx.arm_camera.latest() if self.ctx.arm_camera is not None else None
         detect = self._detect_tile(armcam).copy()
@@ -564,7 +715,10 @@ class TwinConsole:
         return np.vstack([top, bottom])
 
     def close(self) -> None:
-        """Stop the camera fan-out threads (closing the cameras they wrap) and the 3D view."""
+        """Stop the arm's feed, the camera fan-out threads (closing the cameras they wrap) and the 3D view."""
+        arm = self.ctx.arm
+        if arm is not None and getattr(arm, "on_cached_joints", None) == self.apply_joints:
+            arm.on_cached_joints = None
         for cam in (self.ctx.mount_camera, self.ctx.arm_camera):
             if isinstance(cam, FanoutCamera):
                 cam.close()
@@ -573,23 +727,36 @@ class TwinConsole:
 
     # ------------------------------------------------------------ loop
 
-    def run(self, shutdown: threading.Event, on_stop) -> None:
+    def run(self, shutdown: threading.Event, on_stop, on_reset=None) -> None:
         """Draw until ``shutdown`` is set or the window is closed.
 
         Space calls ``on_stop()``. The reset button and ``r`` both call
-        :meth:`reset_scene`: park the arm and put the props back.
+        :meth:`reset_scene`: park the arm and put the props back. The button
+        stays gray until that returns, and a click or ``r`` during it is dropped.
         """
+        if on_reset is not None:
+            self._on_reset = on_reset
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
         scale = min(1.0, 950 / (TILE_H + VIEW_H))  # fit a 1080p screen; drag to resize
         cv2.resizeWindow(WINDOW, int(TILE_W * 3 * scale), int((TILE_H + VIEW_H) * scale))
         clicked = {"reset": False}
 
         def on_mouse(event, x, y, flags, _param) -> None:
-            if event != cv2.EVENT_LBUTTONDOWN:
+            if event != cv2.EVENT_LBUTTONDOWN or (self.resetting and getattr(self, "_on_reset", None) is None):
                 return
             rect = cv2.getWindowImageRect(WINDOW)
             if pointer_hits_reset(x, y, (TILE_W * 3, TILE_H + VIEW_H), rect):
                 clicked["reset"] = True
+
+        def show_busy() -> None:
+            cv2.imshow(WINDOW, self.compose())
+            cv2.waitKey(1)
+
+        def drop_clicks_from_the_reset() -> None:
+            # One pump, while resetting is still true, so a click that landed
+            # during the reset is delivered here and the callback drops it.
+            cv2.waitKey(1)
+            clicked["reset"] = False
 
         cv2.setMouseCallback(WINDOW, on_mouse)
         period = 1.0 / FPS
@@ -607,7 +774,7 @@ class TwinConsole:
                     on_stop()
                 elif key in (ord("r"), ord("R")) or clicked["reset"]:
                     clicked["reset"] = False
-                    self.reset_scene()
+                    self.reset_scene(on_busy=show_busy, on_done=drop_clicks_from_the_reset)
                 if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
                     break
         finally:

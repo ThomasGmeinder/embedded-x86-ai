@@ -404,6 +404,7 @@ def test_mimic_follows_generated_poses_to_its_range_ends_and_parks(arm, pipeline
     try:
         run_mimic(SimpleNamespace(
             cfg=pipeline_cfg, arm=arm, pose=_Pose(), hands=_Hands(), mount_camera=camera, mapper=None,
+            mailbox=None,  # the in-process camera path; PipelineContext defaults this to None
             stop_check=stop.is_set, say=print, shared_state={}, headless=True, max_frames=len(script),
         ), tick=tick)
     finally:

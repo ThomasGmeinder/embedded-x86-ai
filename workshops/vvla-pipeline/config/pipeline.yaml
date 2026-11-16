@@ -8,6 +8,13 @@ system:
   cache_dir: cache            # VitisAI NPU compile cache (first compile is slow)
   log_dir: logs
 
+# One core each. llama-server is not pinned: it starts 16 CPU threads and the
+# model runs on the iGPU. Empty leaves a process on the scheduler's choice.
+cores:
+  twin: 2                     # MuJoCo, the sim controllers, and the console
+  control: 3                  # the arm client, move_group, and MoveIt Servo
+  perception: 4               # cameras, YOLO, MediaPipe, and Silero
+
 audio:
   sample_rate: 16000
   mic_device: null            # null = default input device (or index from `python -m sounddevice`)
@@ -15,9 +22,6 @@ audio:
   max_utterance_s: 12.0
   wake_word: null             # e.g. "robot" - null disables wake-word gating
   stop_key: q                 # press this key for an immediate safety stop (TTY only)
-  # Ignore the microphone for this long after launch so the first noisy
-  # moments can't trigger a behavior.
-  startup_grace_s: 1.5
   #noise_phrases: ["you", "thank you", "bye", "thanks for watching"]
 
 # gemma4-e4b-it: Silero on the CPU, Gemma 4 E4B audio on the iGPU via llama-server.

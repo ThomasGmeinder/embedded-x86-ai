@@ -363,7 +363,7 @@ def object_axis(frame, box, min_elongation):
 
 
 def locate_detection(box, camera_info, optical_in_base, table_z, class_name: str,
-                     frame=None, min_elongation=None):
+                     frame=None, min_elongation=None, axis=None):
     """Where a wrist-camera detection sits: the box centre's ray at the class centre.
 
     ``image_geometry`` casts the ray from this frame's camera info. The class
@@ -394,8 +394,8 @@ def locate_detection(box, camera_info, optical_in_base, table_z, class_name: str
     if top is None or bottom is None:
         return None
     yaw = math.atan2(float(bottom[1] - top[1]), float(bottom[0] - top[0]))
-    if size[0] != size[1] and frame is not None and min_elongation is not None:
-        ends = object_axis(frame, box, min_elongation)
+    if size[0] != size[1] and min_elongation is not None:
+        ends = axis if axis is not None else (object_axis(frame, box, min_elongation) if frame is not None else None)
         if ends is not None:
             start = table_point(ends[0], camera_info, optical_in_base, centre_z)
             end = table_point(ends[1], camera_info, optical_in_base, centre_z)

@@ -20,8 +20,8 @@ calling thread (the workshop's TODO 3.2):
 
 :class:`UserRobotControl` puts a queue in front of it for the always-hot listener
 (Gemma 4 on llama-server, see :mod:`vla_pipeline.llm.voice`) or the
-``--text-commands`` stdin loop. ``on_transcript`` takes the startup grace
-window, the stop fast path and the noise gate at once, on the listener's
+``--text-commands`` stdin loop. ``on_transcript`` takes the stop fast path
+and the noise gate at once, on the listener's
 thread, and queues the rest; a new command while a behavior runs stops it so
 the new one takes over. While gesture mimic runs, only a registered command or
 a stop ends it: crowd talk does not. ``run`` (main thread) hands each queued
@@ -38,7 +38,6 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-import time
 from dataclasses import dataclass, field
 
 from vla_pipeline.llm.intents import (
@@ -73,6 +72,7 @@ class PipelineContext:
     mount_camera: object | None = None  # camera client, mount role (faces the person)
     arm_camera: object | None = None  # camera client, on the wrist
     mapper: object | None = None  # MimicMapper; mimic keeps its smoothing state here
+    mailbox: object | None = None  # latest perception observations, when the models run elsewhere
     registry: CommandRegistry | None = None
     shared_state: dict = field(default_factory=dict)
     stop_event: threading.Event = field(default_factory=threading.Event)
@@ -241,13 +241,10 @@ def handle_transcript(
 class UserRobotControl:
     """Owns the transcript queue and runs behaviors from it through :func:`handle_transcript`."""
 
-    def __init__(self, ctx: PipelineContext, parse, *, startup_grace_s: float = 0.0, clock=time.monotonic):
+    def __init__(self, ctx: PipelineContext, parse):
         self.ctx = ctx
         self.parse = parse
         self.is_noise = make_noise_gate(ctx.cfg)
-        self.startup_grace_s = float(startup_grace_s)
-        self._clock = clock
-        self.start_time = clock()
         # (stop count when it arrived, text, command already resolved by the mimic gate)
         self.transcripts: queue.Queue[tuple[int, str, ParsedCommand | None] | object] = queue.Queue()
         self.current: ParsedCommand | None = None
@@ -272,14 +269,10 @@ class UserRobotControl:
 
     # ---------------------------------------------------------------- input
     def on_transcript(self, text: str) -> None:
-        """Gate one transcript (grace, stop, noise, mimic) and queue it for dispatch."""
+        """Gate one transcript (stop, noise, mimic) and queue it for dispatch."""
         logger.info("Heard: %r", text)
         spoken = command_from_json(text)
         self.ctx.emit("heard", text=spoken.transcript if spoken is not None and spoken.transcript else text)
-        if self._clock() - self.start_time < self.startup_grace_s:
-            logger.info("Ignoring %r (startup grace period).", text)
-            self.ctx.emit("ignored", text=text, reason="grace")
-            return
         if is_stop(text):
             self.ctx.request_stop()
             self.ctx.say("Stopping.")

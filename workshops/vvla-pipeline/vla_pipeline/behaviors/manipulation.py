@@ -71,23 +71,56 @@ def run_grip(ctx, cmd=None, wait_s: float = 4.0) -> bool:
 # ----------------------------------------------------------------------------
 
 
+def pan_from_kpts(kpts, threshold: float, width: int) -> float | None:
+    """The pan angle facing a person's torso, from keypoints the perception process measured."""
+    if kpts is None or len(kpts) == 0 or width <= 0:
+        return None
+    arr = np.asarray(kpts, dtype=float)
+    xs = [arr[i, 0] for i in (KP["l_shoulder"], KP["r_shoulder"], KP["nose"]) if arr[i, 2] > threshold]
+    if not xs:
+        return None
+    cx = (float(np.mean(xs)) / width) * 2.0 - 1.0  # [-1, 1]
+    return float(np.clip(-cx * 60.0, -80.0, 80.0))  # mirrored: person on the left -> pan left
+
+
 def person_pan_target(pose, frame: np.ndarray) -> float | None:
     """The pan angle facing the nearest person's torso, or None."""
     person = pose.primary_person(frame)
     if person is None:
         return None
     kpts, _ = person
-    xs = [kpts[i, 0] for i in (KP["l_shoulder"], KP["r_shoulder"], KP["nose"]) if kpts[i, 2] > pose.kpt_threshold]
-    if not xs:
-        return None
-    cx = (float(np.mean(xs)) / frame.shape[1]) * 2.0 - 1.0  # [-1, 1]
-    return float(np.clip(-cx * 60.0, -80.0, 80.0))  # mirrored: person on the left -> pan left
+    return pan_from_kpts(kpts, pose.kpt_threshold, frame.shape[1])
+
+
+def _pan_from_observations(ctx, seek_s: float) -> tuple[float, bool]:
+    """Aim the pan joint from mount observations newer than the last one, until ``seek_s``."""
+    threshold = float((ctx.cfg.get("yolo_pose") or {}).get("kpt_threshold", 0.3))
+    pan, found = 0.0, False
+    last_seq = 0
+    deadline = time.monotonic() + seek_s
+    while not ctx.stop_check():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        observation = ctx.mailbox.wait_new("mount", last_seq, remaining, ctx.stop_event)
+        if observation is None:
+            break
+        last_seq = observation.seq
+        target = pan_from_kpts(observation.kpts, threshold, observation.width)
+        if target is None:
+            continue
+        pan, found = target, True
+        ctx.arm.send_joints(radians_from_calibrated(ctx.cfg, {"shoulder_pan": pan}))
+    logger.info("[handoff] person %s (pan=%.1f)", "found" if found else "NOT found", pan)
+    return pan, found
 
 
 def find_person_pan(ctx, seek_s: float = 4.0) -> tuple[float, bool]:
     """Track the person for ``seek_s``, one new frame at a time, and aim the
     pan joint at them. A camera that delivers no fresh frame ends the search."""
     pan, found = 0.0, False
+    if getattr(ctx, "mailbox", None) is not None:
+        return _pan_from_observations(ctx, seek_s)
     if ctx.pose is None or ctx.mount_camera is None:
         logger.info("[handoff] no mount camera - handing over straight ahead")
         return pan, found
@@ -242,6 +275,22 @@ def _optical_in_base(node):
     return rotation, origin
 
 
+def _camera_info(model):
+    """A ``CameraInfo`` built from the perception process's camera model."""
+    from sensor_msgs.msg import CameraInfo
+
+    info = CameraInfo()
+    info.width = int(model.width)
+    info.height = int(model.height)
+    info.k = [float(v) for v in model.k]
+    info.d = [float(v) for v in model.d]
+    info.distortion_model = model.distortion_model or "plumb_bob"
+    info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    fx, _, cx, _, fy, cy, _, _, _ = info.k
+    info.p = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
+    return info
+
+
 def _hold_out(ctx, spoken: str) -> bool:
     """Walk the scan views until one sees ``spoken`` and its pick arrives, then hold it.
 
@@ -254,7 +303,7 @@ def _hold_out(ctx, spoken: str) -> bool:
     from vla_pipeline.vision.yolo_detect_npu import CLASS_SIZE, locate_detection, resolve_class
 
     arm, cfg, detector = ctx.arm, ctx.cfg, ctx.detector
-    if hasattr(ctx, "arm_camera") and ctx.arm_camera is None:
+    if getattr(ctx, "mailbox", None) is None and hasattr(ctx, "arm_camera") and ctx.arm_camera is None:
         ctx.say("The arm camera is offline")
         return False
     cam = cfg["cameras"]["arm"]
@@ -287,24 +336,41 @@ def _hold_out(ctx, spoken: str) -> bool:
             return False
         if arm.go_to_named("open") != "arrived" or arm.go_to_named(scan) != "arrived":
             return False
-        image = _ros_message(arm.node, Image, image_topic)
-        info = None if image is None else _ros_message(arm.node, CameraInfo, info_topic)
-        if image is None or info is None:
-            ctx.say("The arm camera is offline")
-            return False
-        frame = from_image_msg(image)
-        if frame is None:
-            continue
-        seen = [det for det in detector.infer(frame) if det.name in CLASS_SIZE]
+        frame = None
+        if getattr(ctx, "mailbox", None) is not None:
+            stale = float(cam.get("stale_after_s", 1.0))
+            observation = ctx.mailbox.wait_after("arm", time.time(), stale, ctx.stop_event)
+            if ctx.stop_check():
+                return False
+            if observation is None:
+                ctx.say("The arm camera is offline")
+                return False
+            if observation.camera is None:
+                ctx.say("The wrist image is arriving, but its calibration message has not.")
+                return False
+            info = _camera_info(observation.camera)
+            seen = [det for det in observation.detections if det.name in CLASS_SIZE]
+        else:
+            image = _ros_message(arm.node, Image, image_topic)
+            info = None if image is None else _ros_message(arm.node, CameraInfo, info_topic)
+            if image is None or info is None:
+                ctx.say("The arm camera is offline")
+                return False
+            frame = from_image_msg(image)
+            if frame is None:
+                continue
+            seen = [det for det in detector.infer(frame) if det.name in CLASS_SIZE]
         if not seen:
             continue
         optical = _optical_in_base(arm.node)
         tries = []
         for det in seen:
             size = CLASS_SIZE[det.name]
+            axis = getattr(det, "axis", None)
             located = locate_detection(
                 det.box, info, optical, table_z, det.name, frame,
                 float(pp["wrist_axis_min_elongation"]),
+                **({} if axis is None else {"axis": axis}),
             )
             if located is None:
                 continue
@@ -453,7 +519,9 @@ def _set_down(ctx) -> bool:
 def run_pick_place(ctx, cmd) -> bool:
     """Find the named object, grasp it, and hold it out. The jaws stay closed."""
     name = (cmd.object_name if cmd is not None else "") or ""
-    if ctx.detector is None:
+    # The detector runs in the perception process. Its wrist observations are
+    # the mailbox. A local detector is only the in-process path.
+    if ctx.detector is None and getattr(ctx, "mailbox", None) is None:
         ctx.say("Object detection isn't available - can't do pick and place.")
         return False
     if not name:

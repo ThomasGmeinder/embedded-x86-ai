@@ -71,7 +71,12 @@ def _user_service_prefix() -> str:
     return shlex.quote(str(_SERVO_SERVICE))
 
 
-def _servo(mujoco: bool):
+def _taskset(core: str) -> str:
+    core = str(core or "").strip()
+    return f"taskset -c {core} " if core else ""
+
+
+def _servo(mujoco: bool, control_core: str = ""):
     """MoveIt Servo, publishing to the trajectory controller within joint_limits.yaml.
 
     The shipped panda config is the parameter file. This overrides the group,
@@ -112,7 +117,7 @@ def _servo(mujoco: bool):
         package="moveit_servo",
         executable="servo_node",
         name=SERVO_NODE,
-        prefix=_user_service_prefix(),
+        prefix=_taskset(control_core) + _user_service_prefix(),
         parameters=[
             {"moveit_servo": servo},
             {"update_period": SERVO_PERIOD_S},
@@ -127,7 +132,7 @@ def _servo(mujoco: bool):
     )
 
 
-def _bringup(cfg: dict, hardware_type: str) -> list:
+def _bringup(cfg: dict, hardware_type: str, control_core: str = "", twin_core: str = "") -> list:
     """ros2_so_arm's controllers bringup, move_group and MoveIt Servo."""
     from ament_index_python.packages import get_package_share_path
 
@@ -135,6 +140,7 @@ def _bringup(cfg: dict, hardware_type: str) -> list:
 
     sim = load_sim_config(cfg)
     mujoco = hardware_type == "mujoco"
+    sim_core = twin_core if mujoco else control_core
     description = get_package_share_path("so_arm101_description")
     moveit = get_package_share_path("so_arm101_moveit_config")
     nodes = [
@@ -147,13 +153,14 @@ def _bringup(cfg: dict, hardware_type: str) -> list:
                 "mujoco_headless": str(not sim["viewer"]).lower(),
                 "mujoco_initial_keyframe": "home",
                 "ros2_control_params_file": str(PLUGINS_FILE) if mujoco else "",
+                "node_prefix": _taskset(sim_core).strip(),
             }.items(),
         ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(moveit / "launch" / "move_group.launch.py")),
-            launch_arguments={"use_sim_time": str(mujoco)}.items(),
+            launch_arguments={"use_sim_time": str(mujoco), "prefix": _taskset(control_core).strip()}.items(),
         ),
-        _servo(mujoco),
+        _servo(mujoco, control_core),
     ]
     if mujoco:
         # The wrist camera lives in the MuJoCo model, on the gripper. This is that
@@ -169,6 +176,7 @@ def _bringup(cfg: dict, hardware_type: str) -> list:
                 "--child-frame-id", "wrist_cam_optical_frame",
             ],
             parameters=[{"use_sim_time": True}],
+            **({"prefix": _taskset(twin_core).strip()} if twin_core else {}),
         ))
     return nodes
 
@@ -180,7 +188,11 @@ def _nodes(context):
     hardware_type = LaunchConfiguration("hardware_type").perform(context)
     with open(config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
-    return _bringup(cfg, hardware_type)
+    return _bringup(
+        cfg, hardware_type,
+        LaunchConfiguration("control_core").perform(context),
+        LaunchConfiguration("twin_core").perform(context),
+    )
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -198,6 +210,8 @@ def generate_launch_description() -> LaunchDescription:
                 choices=HARDWARE_TYPES,
                 description="mujoco: the digital twin; real: the Feetech bus; mock_components: a dry run",
             ),
+            DeclareLaunchArgument("control_core", default_value="", description="CPU core for move_group and Servo"),
+            DeclareLaunchArgument("twin_core", default_value="", description="CPU core for MuJoCo when hardware_type is mujoco"),
             OpaqueFunction(function=_nodes),
         ]
     )

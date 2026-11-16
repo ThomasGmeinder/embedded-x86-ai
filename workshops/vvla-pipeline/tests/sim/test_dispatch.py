@@ -42,6 +42,14 @@ def _robot_voice(parse):
     return d, ctx, ran, said, events
 
 
+def test_a_command_is_accepted_as_soon_as_the_process_can_hear_it():
+    from vla_pipeline.llm.intents import Intent, ParsedCommand
+
+    d, _ctx, _ran, _said, events = _robot_voice(lambda text: ParsedCommand(Intent.WAVE, transcript=text))
+    d.on_transcript('{"command": "wave", "object": "", "heard": "wave"}')
+    assert "ignored" not in events
+
+
 def test_a_stop_said_while_the_llm_parses_cancels_the_command():
     from vla_pipeline.llm.intents import Intent, ParsedCommand
 

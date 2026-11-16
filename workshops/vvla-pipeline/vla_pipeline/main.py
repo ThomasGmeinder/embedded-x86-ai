@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import signal
 import threading
 
 from vla_pipeline.user_robot_control import PipelineContext, build_registry
@@ -53,7 +54,7 @@ def apply_sim_overrides(cfg: dict) -> dict:
     return cfg
 
 
-def build_context(cfg: dict, args) -> PipelineContext:
+def build_context(cfg: dict, args, *, sensors: bool = True) -> PipelineContext:
     """Build the :class:`PipelineContext`, wiring up the arm, cameras, vision models and the registry.
 
     Each vision component is optional: a failure to construct it is logged and
@@ -63,8 +64,10 @@ def build_context(cfg: dict, args) -> PipelineContext:
     from vla_pipeline.utils.gesture_map import mapper_from_config
 
     arm = make_arm(cfg)
-    ctx = PipelineContext(cfg=cfg, arm=arm, headless=args.headless, mapper=mapper_from_config(cfg),
+    ctx = PipelineContext(cfg=cfg, arm=arm, headless=True, mapper=mapper_from_config(cfg),
                           registry=build_registry())
+    if not sensors:
+        return ctx
 
     from vla_pipeline.vision.camera import make_camera
 
@@ -154,50 +157,31 @@ def main() -> None:
     if args.digital_twin:
         apply_sim_overrides(cfg)
     ensure_dirs(cfg)
-    ctx = build_context(cfg, args)
+    # Cameras, YOLO, MediaPipe and the microphone run in the perception process.
+    ctx = build_context(cfg, args, sensors=False)
 
-    console = None
-    if args.digital_twin and not (args.headless or args.no_console):
-        from vla_pipeline.console import TwinConsole
-
-        console = TwinConsole(ctx, voice="typed" if args.text_commands else "mic")
-
+    from vla_pipeline.llm.intents import keyword_parse
     from vla_pipeline.user_robot_control import UserRobotControl
-    from vla_pipeline.llm.voice import open_voice
+    from vla_pipeline.wire import ControlLink
 
-    llm = open_voice(cfg, device=args.device)
-    # Ignore any transcript for a short grace window after launch - the mic goes
-    # hot before the user is ready and the first frames are usually room noise
-    # that the listener hears as words. Voice ('stop robot' included) only starts
-    # being honored once the window passes. Tunable via audio.startup_grace_s.
-    # Typed commands have no mic, so they get no window.
-    grace_s = 0.0 if args.text_commands else float((cfg.get("audio", {}) or {}).get("startup_grace_s", 1.5))
-    robot_voice = UserRobotControl(ctx, llm.parse, startup_grace_s=grace_s)
-    _on_transcript = robot_voice.on_transcript
+    # A command that arrived before the epoch is held by the voice outbox and
+    # sent once this process publishes epoch 1. Nothing is dropped on a timer.
+    robot_voice = UserRobotControl(ctx, keyword_parse)
+
+    def _restore() -> bool:
+        fn = getattr(ctx.arm, "reset", None)
+        if not callable(fn):
+            return False
+        result = fn()
+        return True if result is None else bool(result)
+
+    link = ControlLink(ctx.arm.node, ctx, robot_voice, _restore)
+    ctx.arm.on_cached_joints = link.set_joints
     shutdown = threading.Event()
-    if console is not None:
-        console.attach(robot_voice)
-        # The twin process keeps the last physics state until something resets
-        # it. The notebook's reset button does that before the console is used.
-        if args.digital_twin:
-            console.reset_scene()
-
-    # ---------------- listener thread (always hot) ----------------
-    if not args.text_commands:
-        if llm.error:
-            logger.warning("Voice is unavailable (%s). Use --text-commands.", llm.error)
-        else:
-            llm.start(
-                _on_transcript,
-                on_level=console.on_level if console is not None else None,
-                on_busy=console.note_asr if console is not None else None,
-                on_drop=lambda reason: ctx.emit("ignored", text="", reason=reason),
-                stop_check=shutdown.is_set,
-            )
-    else:
+    if args.text_commands:
 
         def _stdin_loop() -> None:
-            """Read typed commands from stdin (--text-commands mode) and forward them to :func:`_on_transcript`."""
+            """Read typed commands from stdin (--text-commands mode)."""
             while not shutdown.is_set():
                 try:
                     line = input("you> ")
@@ -206,49 +190,39 @@ def main() -> None:
                     robot_voice.stop()
                     break
                 if line.strip():
-                    _on_transcript(line.strip())
+                    robot_voice.on_transcript(line.strip())
 
         threading.Thread(target=_stdin_loop, daemon=True, name="stdin").start()
 
-    # ---------------- dispatch loop (main thread, unless the console owns it) ----------------
     ctx.say(
         "Ready. Try: 'copy my movements', 'pick up the ball', 'wave', "
         "'dance', 'hold this', 'go home' - or 'stop robot' at any time. "
         "In the twin window: space stops, r resets the arm and the table."
     )
+
+    def _on_signal(_signum, _frame) -> None:
+        # rclpy replaces SIGINT with a handler that does not end this loop.
+        # The loop is blocked on the transcript queue, so the sentinel is
+        # what makes run() return.
+        shutdown.set()
+        ctx.stop_event.set()
+        robot_voice.stop()
+
+    signal.signal(signal.SIGINT, _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
     try:
-        if console is None:
-            robot_voice.run(shutdown)
-        else:
-            worker = threading.Thread(
-                target=robot_voice.run, args=(shutdown,), daemon=True, name="dispatch"
-            )
-            worker.start()
-            console.run(shutdown, on_stop=lambda: _on_transcript("stop robot"))
-            shutdown.set()
-            ctx.stop_event.set()
-            robot_voice.stop()
-            worker.join(timeout=5.0)
+        robot_voice.run(shutdown)
     except KeyboardInterrupt:
         pass
     finally:
         shutdown.set()
         ctx.stop_event.set()
+        link.mailbox.close()
         logger.info("Shutting down - parking arm.")
-        for closer in (
-            getattr(ctx.mount_camera, "close", None),
-            getattr(ctx.arm_camera, "close", None),
-            getattr(ctx.hands, "close", None),
-        ):
-            try:
-                if closer:
-                    closer()
-            except Exception:
-                pass
         try:
             ctx.arm.close()
-        finally:
-            llm.close()
+        except Exception:
+            logger.exception("arm close")
 
 
 if __name__ == "__main__":

@@ -23,6 +23,26 @@ from vla_pipeline.main import build_parser
 pytestmark = [pytest.mark.sim, pytest.mark.timeout(60)]
 
 
+def test_a_second_start_exits_while_a_pipeline_process_is_alive():
+    sleeper = subprocess.Popen(
+        [str(PIPE_ROOT / ".venv/bin/python"), "-c", "import time; time.sleep(60)  # vla_pipeline.main"],
+    )
+    try:
+        result = subprocess.run(
+            [str(PIPE_ROOT / "run_pipeline.sh")],
+            cwd=PIPE_ROOT, capture_output=True, text=True, timeout=60,
+        )
+        output = result.stdout + result.stderr
+        assert result.returncode == 1, output
+        assert "already running" in output
+        assert str(sleeper.pid) in output
+        assert "Starting the camera" not in output
+        assert "Starting the arm" not in output
+    finally:
+        sleeper.kill()
+        sleeper.wait(timeout=5)
+
+
 def test_an_unknown_argument_stops_before_setup():
     result = subprocess.run(
         [str(PIPE_ROOT / "run_pipeline.sh"), "--digita-twin"],

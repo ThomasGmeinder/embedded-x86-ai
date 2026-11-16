@@ -87,6 +87,40 @@ class MimicSignals:
     raw: object = None  # raw MediaPipe results, for the hand overlay
 
 
+def _run_mimic_from_observations(ctx) -> MimicSignals:
+    """Follow the perception process until a stop, or until the camera goes stale."""
+    from vla_pipeline.behaviors.manipulation import release_to_pinch
+
+    stale = float(((ctx.cfg.get("cameras") or {}).get("mount") or {}).get("stale_after_s", 1.0))
+    threshold = float((ctx.cfg.get("yolo_pose") or {}).get("kpt_threshold", 0.3))
+    if release_to_pinch(ctx.shared_state):
+        ctx.say("Your pinch drives the gripper now. Open your fingers to let go.")
+    last_seq = 0
+    frames = 0
+    missing = 0
+    last = MimicSignals()
+    try:
+        while not ctx.stop_check():
+            observation = ctx.mailbox.wait_new("mount", last_seq, stale, ctx.stop_event)
+            if observation is None:
+                break
+            last_seq = observation.seq
+            last = _mimic_from_observation(ctx, observation, threshold)
+            frames += 1
+            if not observation.kpts:
+                missing += 1
+                if missing == 5:
+                    ctx.mapper.reset()
+            else:
+                missing = 0
+            if ctx.max_frames and frames >= ctx.max_frames:
+                break
+    finally:
+        logger.info("Mimic stopped after %d frames - parking the arm.", frames)
+        park_after_mimic(ctx)
+    return last
+
+
 def park_after_mimic(ctx) -> None:
     """Park at rest after mimic, without consulting the stop event.
 
@@ -122,32 +156,53 @@ def mimic_tick(ctx, frame) -> MimicSignals:
         wrist_xy, elbow_xy = pick_arm(kpts[pick_nearest(boxes)], ctx.pose.kpt_threshold)
 
     obs, raw = ctx.hands.process(frame) if ctx.hands else (None, None)
-
-    joints = None
-    if wrist_xy is not None or obs is not None:
-        h, w = frame.shape[:2]
-        joints = ctx.mapper.step(
-            wrist_xy,
-            w,
-            h,
-            elbow_xy=elbow_xy,
-            hand_size=obs.hand_size if obs else None,
-            roll_ti=obs.roll_ti if obs else None,
-            roll_ref=obs.roll_ref if obs else None,
-            roll_ti_weight=obs.roll_ti_weight if obs else 0.0,
-            roll_fallback=obs.roll if obs else None,
-            pinch=obs.pinch if obs else None,
-        )
-        from vla_pipeline.robot.arm_interface import radians_from_calibrated
-
-        command = radians_from_calibrated(ctx.cfg, joints)
-        ctx.arm.send_joints(command)
-        jaw = command.get(ctx.arm.gripper_joint)
-        if jaw is not None:
-            ctx.arm.send_gripper(jaw)
-
+    height, width = frame.shape[:2]
+    joints = apply_mimic(ctx, wrist_xy, elbow_xy, obs, width, height)
     return MimicSignals(joints=joints, wrist_xy=wrist_xy, elbow_xy=elbow_xy, boxes=boxes,
                         scores=scores, kpts=kpts, obs=obs, raw=raw)
+
+
+def apply_mimic(ctx, wrist_xy, elbow_xy, hand, width: int, height: int) -> dict | None:
+    """One mapper step and one arm command. None when neither a wrist nor a hand was seen."""
+    if wrist_xy is None and hand is None:
+        return None
+    joints = ctx.mapper.step(
+        wrist_xy,
+        width,
+        height,
+        elbow_xy=elbow_xy,
+        hand_size=hand.hand_size if hand else None,
+        roll_ti=hand.roll_ti if hand else None,
+        roll_ref=hand.roll_ref if hand else None,
+        roll_ti_weight=hand.roll_ti_weight if hand else 0.0,
+        roll_fallback=hand.roll if hand else None,
+        pinch=hand.pinch if hand else None,
+    )
+    from vla_pipeline.robot.arm_interface import radians_from_calibrated
+
+    command = radians_from_calibrated(ctx.cfg, joints)
+    ctx.arm.send_joints(command)
+    jaw = command.get(ctx.arm.gripper_joint)
+    if jaw is not None:
+        ctx.arm.send_gripper(jaw)
+    return joints
+
+
+def _mimic_from_observation(ctx, observation, threshold: float) -> MimicSignals:
+    """One observation already measured by the perception process."""
+    import numpy as np
+
+    from vla_pipeline.vision.yolo_pose_npu import pick_arm
+
+    wrist_xy = elbow_xy = None
+    kpts = None
+    if observation.kpts:
+        kpts = np.asarray(observation.kpts, dtype=float)
+        wrist_xy, elbow_xy = pick_arm(kpts, threshold)
+    joints = apply_mimic(
+        ctx, wrist_xy, elbow_xy, observation.hand, observation.width, observation.height,
+    )
+    return MimicSignals(joints=joints, wrist_xy=wrist_xy, elbow_xy=elbow_xy, kpts=kpts, obs=observation.hand)
 
 
 # =============================================================================
@@ -264,11 +319,13 @@ def run_mimic(ctx, cmd=None, tick=mimic_tick) -> MimicSignals | bool:
     """
     from vla_pipeline.behaviors.manipulation import release_to_pinch
 
-    if ctx.pose is None or ctx.mount_camera is None:
+    if ctx.mailbox is None and (ctx.pose is None or ctx.mount_camera is None):
         ctx.say("Gesture mimic needs the mount camera and pose model.")
         return False
     if ctx.mapper is None:
         ctx.mapper = mapper_from_config(ctx.cfg)
+    if ctx.mailbox is not None:
+        return _run_mimic_from_observations(ctx)
     provider = getattr(ctx.pose, "provider", "?")
     if release_to_pinch(ctx.shared_state):
         ctx.say("Your pinch drives the gripper now. Open your fingers to let go.")
