@@ -26,6 +26,7 @@
 #   3. Opens the always-on-top resource HUD (CPU% / GPU% / NPU inf/s) so you
 #      can watch the devices light up while a cell runs. It closes with Jupyter.
 #   4. Launches Jupyter Lab in workshop/ (browse the notebooks/ folder).
+#      Ctrl-C shuts that server's kernels down and releases the webcam.
 #
 # Usage:
 #   ./run_notebooks.sh                 # launch Jupyter Lab (+ llama server + HUD)
@@ -109,13 +110,16 @@ say "Installing vla_pipeline from this clone"
 VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/ensure_voice.sh"
 
 # --- 2. llama-server on the iGPU (component 1's brain, torn down on exit) ----
+# notebook_session.sh owns Ctrl-C: it shuts the notebook server's kernels
+# down (a kernel that opened the webcam closes it) and stops any camera
+# launch in LAUNCH_PIDS. This script starts none; the list stays empty.
 LLAMA_PID=""
 MONITOR_PID=""
-cleanup() {
-  [[ -n "$LLAMA_PID" ]] && kill -INT "$LLAMA_PID" 2>/dev/null || true
-  [[ -n "$MONITOR_PID" ]] && kill "$MONITOR_PID" 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
+JUPYTER_PID=""
+LAUNCH_PIDS=()
+# shellcheck disable=SC1091
+source "${WORKSHOP_DIR}/notebook_session.sh"
+trap stop_session EXIT INT TERM
 
 if [[ "$WITH_LLM" -eq 1 ]]; then
   mkdir -p "${WORKSHOP_DIR}/logs"
@@ -146,8 +150,8 @@ fi
 
 # --- 3. Pop the always-on-top resource HUD (CPU/GPU/NPU), torn down on exit --
 # Only when we're really launching Jupyter and a display is available. It reuses
-# launch_monitor.sh, logs to workshop/logs/monitor.log, and the cleanup trap
-# kills it (alongside the llama server) when Jupyter exits.
+# launch_monitor.sh, logs to workshop/logs/monitor.log, and stop_session
+# kills it (alongside the llama server) when Jupyter exits or Ctrl-C arrives.
 if [[ "$WITH_MONITOR" -eq 1 && "$NO_LAUNCH" -eq 0 ]]; then
   if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
     mkdir -p "${WORKSHOP_DIR}/logs"
@@ -189,6 +193,7 @@ PY
 
 say "Launching Jupyter ${LAUNCHER} - the workshop kernel is auto-selected"
 cd "$WORKSHOP_DIR"
-# Not exec'd: keep this shell alive so the trap tears the llama server down
-# after Jupyter exits.
-"$PY" -m jupyter "$LAUNCHER" notebooks --port "$JUPYTER_PORT"
+# Waits on the server. Ctrl-C runs stop_session, which SIGTERMs this server
+# so its kernels exit and the webcam is released. Quitting Jupyter from the
+# browser takes the same EXIT path.
+run_notebook_server "$PY" "$LAUNCHER" "$JUPYTER_PORT"
