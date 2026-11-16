@@ -209,9 +209,14 @@ if [[ -n "$SIM" && "$CONSOLE" == true ]]; then
   start_side "$TWIN_CORE" python -m vla_pipeline.console_main "$@"
   CONSOLE_PID="${SIDE_PIDS[-1]}"
 fi
-start_side "$CONTROL_CORE" python -m vla_pipeline.main --no-console "$@"
-CONTROL_PID="${SIDE_PIDS[-1]}"
-unset 'SIDE_PIDS[-1]'
+# Control reads typed commands from stdin under --text-commands. A background
+# job's stdin is /dev/null, so this redirect keeps the script's own stdin.
+if [[ -n "$CONTROL_CORE" ]]; then
+  setsid taskset -c "$CONTROL_CORE" python -m vla_pipeline.main --no-console "$@" <&0 &
+else
+  setsid python -m vla_pipeline.main --no-console "$@" <&0 &
+fi
+CONTROL_PID=$!
 trap 'for pid in "${SIDE_PIDS[@]}"; do stop_group "$pid" TERM; done; stop_group "$CONTROL_PID" TERM' INT
 set +e
 # The window process exits when the window is closed. That exit, or the
