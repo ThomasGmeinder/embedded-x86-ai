@@ -110,15 +110,24 @@ class VoiceSession:
                 if on_busy is not None:
                     on_busy(True)
                 self.transcribing = True
+                cmd = None
                 try:
                     cmd = self.llm.parse_audio(_wav(window, rate))
                 except Exception:
                     logger.exception("Gemma audio request failed")
-                    continue
+                    proc = getattr(self.llm, "_proc", None)
+                    if proc is not None and proc.poll() is not None:
+                        self.error = "llama-server exited"
+                        if on_drop is not None:
+                            on_drop("gemma")
                 finally:
                     self.transcribing = False
                     if on_busy is not None:
                         on_busy(False)
+                if self.error:
+                    return
+                if cmd is None:
+                    continue
                 if not commands.accept(cmd.intent.value, started, ended, time.monotonic()):
                     # An early window often has no command yet. The next hop
                     # can still carry the phrase, so this is not a failed listen.

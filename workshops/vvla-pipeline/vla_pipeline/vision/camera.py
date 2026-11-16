@@ -147,14 +147,46 @@ class DirectCamera(CameraClient):
             self._cap = None
 
 
+_UNREADABLE: set[str] = set()
+
+
 def from_image_msg(msg) -> np.ndarray | None:
-    """Decode a ``bgr8``/``rgb8`` ``sensor_msgs/Image`` into a BGR ndarray (or None)."""
-    if msg.encoding not in ("bgr8", "rgb8"):
+    """Decode one camera image into a BGR ndarray, or None when the encoding is unknown.
+
+    ``bgr8`` and ``rgb8`` are copied. ``yuyv`` and ``uyvy`` are converted, because
+    that is the pixel format the laptop camera reports. Any other encoding is
+    logged once and dropped, so a frame is never handed on half-decoded.
+    """
+    encoding = (msg.encoding or "").lower()
+    if encoding in ("bgr8", "rgb8"):
+        try:
+            frame = np.frombuffer(bytes(msg.data), dtype=np.uint8).reshape(msg.height, msg.width, 3)
+        except ValueError:
+            if encoding not in _UNREADABLE:
+                _UNREADABLE.add(encoding)
+                logger.warning("camera frame encoding %r has the wrong size", msg.encoding)
+            return None
+        if encoding == "rgb8":
+            frame = frame[..., ::-1]
+        return frame.copy()
+    if encoding in ("yuyv", "yuv422_yuy2", "yuyv422"):
+        return _packed_to_bgr(msg, cv2_code="YUV2BGR_YUYV")
+    if encoding in ("uyvy", "yuv422"):
+        return _packed_to_bgr(msg, cv2_code="YUV2BGR_UYVY")
+    if encoding not in _UNREADABLE:
+        _UNREADABLE.add(encoding)
+        logger.warning("camera frame encoding %r is not accepted", msg.encoding)
+    return None
+
+
+def _packed_to_bgr(msg, cv2_code: str) -> np.ndarray | None:
+    import cv2
+
+    packed = np.frombuffer(bytes(msg.data), dtype=np.uint8).reshape(msg.height, msg.width, 2)
+    code = getattr(cv2, "COLOR_" + cv2_code, None)
+    if code is None:
         return None
-    frame = np.frombuffer(bytes(msg.data), dtype=np.uint8).reshape(msg.height, msg.width, 3)
-    if msg.encoding == "rgb8":
-        frame = frame[..., ::-1]
-    return frame.copy()
+    return cv2.cvtColor(packed, code)
 
 
 def to_image_msg(frame_bgr, stamp=None, frame_id: str = ""):
