@@ -7,7 +7,7 @@
 
 """The pipeline's behaviors on the notebook twin, over ROS 2.
 
-The context is the section 5 console's (``TwinRig``): ``MoveItArm`` on the
+The context is the section 4 console's (``TwinRig``): ``MoveItArm`` on the
 MuJoCo bringup, the arm camera behind ``FanoutCamera``, the YOLO eyes, and
 the keyword parser through ``handle_transcript``. Prop poses come from
 ``/free_joint_states``. Joints are radians under the URDF names.

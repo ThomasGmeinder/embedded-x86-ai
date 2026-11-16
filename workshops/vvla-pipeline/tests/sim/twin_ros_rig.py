@@ -142,7 +142,7 @@ def quat_close(a, b, tol: float = 1e-3) -> bool:
 
 
 class TwinRig:
-    """The section 5 console's context, on a :class:`~vvla_workshop.twin_ros.TwinSession`.
+    """The section 4 console's context, on a :class:`~vvla_workshop.twin_ros.TwinSession`.
 
     The arm camera and the mount camera are wrapped in ``FanoutCamera``
     as the console wraps them, and the operator is the notebook's scripted

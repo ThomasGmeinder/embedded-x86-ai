@@ -64,7 +64,7 @@ Jupyter opens `notebooks/`. Read and run them in order: `01_ai_models`,
 
 `bootstrap.sh` registers that kernel with the NPU runtime, ROS 2 Jazzy and
 `ros_ws/` in its `kernel.json`, so JupyterLab and VS Code start it the same
-way and the `02_ros2` notebooks and section 5 of
+way and the `02_ros2` notebooks and section 4 of
 `03_integration/02_digital_twin.ipynb` can import `rclpy`.
 
 After the notebooks, the TODOs are in `project/`. Follow [project/README.md](project/README.md).
