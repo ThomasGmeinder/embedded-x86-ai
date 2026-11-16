@@ -30,7 +30,6 @@ from vla_pipeline.ipc import (
     STATUS,
     VOICE_COMMAND,
     VOICE_STOP,
-    VOICE_TEXT,
     WRIST,
     ClickOutbox,
     ConsoleReset,
@@ -134,7 +133,6 @@ class ControlLink:
         self._state_pub = node.create_publisher(String, STATE, _qos(True, 1, True))
         self._joints_pub = node.create_publisher(String, JOINTS, _qos(True, 1, True))
         node.create_subscription(String, VOICE_COMMAND, self._on_command, _qos(True, 16, True))
-        node.create_subscription(String, VOICE_TEXT, self._on_text, _qos(True, 16, False))
         node.create_subscription(String, VOICE_STOP, self._on_stop, _qos(True, 1, True))
         node.create_subscription(String, CONSOLE_RESET, self._on_reset, _qos(True, 1, True))
         node.create_subscription(String, MOUNT, self._on_mount, _qos(False, 1, False))
@@ -214,12 +212,6 @@ class ControlLink:
         if command is None or not self.ledger.accept_command(command.epoch, command.command_seq):
             return
         self.robot_voice.on_transcript(command.body())
-
-    def _on_text(self, msg) -> None:
-        """A typed line. The control process parses it, the same way stdin does."""
-        text = msg.data.strip()
-        if text:
-            self.robot_voice.on_transcript(text)
 
     def _on_stop(self, msg) -> None:
         stop = self._drops.decode(decode_stop, msg.data)
@@ -373,7 +365,6 @@ class ConsoleLink:
         self._clicks = ClickOutbox()
         self._stop = node.create_publisher(String, VOICE_STOP, _qos(True, 1, True))
         self._reset = node.create_publisher(String, CONSOLE_RESET, _qos(True, 1, True))
-        self._text = node.create_publisher(String, VOICE_TEXT, _qos(True, 16, False))
         node.create_subscription(UInt64, EPOCH, self._on_epoch, _qos(True, 1, True))
         node.create_subscription(String, STATE, self._on_state, _qos(True, 1, True))
         node.create_subscription(String, JOINTS, self._on_joints, _qos(True, 1, True))
@@ -392,10 +383,6 @@ class ConsoleLink:
         """Remember one reset. It replaces an unsent stop, because a reset stops too."""
         self._clicks.offer("reset")
         self._flush()
-
-    def publish_text(self, text: str) -> None:
-        """A typed command. The control process parses it with the keyword parser."""
-        self._text.publish(_string(text))
 
     def _on_epoch(self, msg) -> None:
         self._clicks.set_epoch(int(msg.data))

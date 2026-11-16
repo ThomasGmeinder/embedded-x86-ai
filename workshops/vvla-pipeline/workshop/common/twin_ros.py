@@ -7,9 +7,9 @@
 
 """The digital twin behind ROS 2, for one notebook kernel (PROVIDED).
 
-The digital-twin notebook connects to a twin ``./run_notebooks.sh`` already
-started with ``./run_pipeline.sh --digital-twin``. :meth:`TwinSession.attach`
-does not launch and does not stop that pipeline. The constructor still
+The digital-twin notebook connects to the twin ``./run_notebooks.sh`` already
+started: the camera and arm launches of ``./run_pipeline.sh --digital-twin``.
+:meth:`TwinSession.attach` does not launch and does not stop them. The constructor still
 starts ``launch/so101_control.launch.py hardware_type:=mujoco`` for a test
 that owns its own twin. :class:`~vla_pipeline.robot.moveit_arm.MoveItArm` is
 constructed before this process initializes rclpy: doing that first makes
@@ -334,19 +334,13 @@ class TwinSession:
         domain_id: int | None = None,
         ready_timeout_s: float = 60.0,
     ) -> TwinSession:
-        """Clients for a twin ``./run_pipeline.sh --digital-twin`` already started.
+        """Clients for the twin ``./run_notebooks.sh`` already started.
 
-        This does not launch, take the domain lock, or stop that pipeline.
-        ``run_notebooks.sh`` owns the process. Closing the session closes
-        these clients only.
+        That twin is the camera and arm launches of
+        ``./run_pipeline.sh --digital-twin``. This does not launch, take the
+        domain lock, or stop them. Closing the session closes these clients
+        only.
         """
-        from vla_pipeline.single_instance import running_pipeline
-
-        if not running_pipeline():
-            raise RuntimeError(
-                "the digital twin is not running. Start it with ./run_notebooks.sh, "
-                "which runs ./run_pipeline.sh --digital-twin."
-            )
         self = cls.__new__(cls)
         self.domain_id = twin_domain_id() if domain_id is None else int(domain_id)
         self.config_path = Path(config_path or DEFAULT_CONFIG)
@@ -411,8 +405,7 @@ class TwinSession:
             if self._proc is None:
                 return TimeoutError(
                     f"the twin sent no {what} within {timeout_s:.0f} s. "
-                    "./run_notebooks.sh starts it with ./run_pipeline.sh --digital-twin "
-                    "(workshop/logs/pipeline.log)."
+                    "./run_notebooks.sh starts it before Jupyter (workshop/logs/twin.log)."
                 )
             return TimeoutError(
                 f"the twin node sent no {what} within {timeout_s:.0f} s:\n{_tail(self.log_path)}"
@@ -433,7 +426,7 @@ class TwinSession:
         if not self.armcam.next_frame(0.0, remaining())[0]:
             raise not_ready("arm camera frame")
         logger.info(
-            "twin up on ROS domain %d (pid %d, log %s)", self.domain_id, self.pid, self.log_path
+            "twin up on ROS domain %d (pid %s, log %s)", self.domain_id, self.pid, self.log_path
         )
 
     def _wait_bringup(self, timeout_s: float, not_ready, remaining) -> None:

@@ -56,29 +56,55 @@ def test_the_launcher_uses_the_session_stop():
     assert 'source "${WORKSHOP_DIR}/notebook_session.sh"' in text
     assert "trap stop_session EXIT INT TERM" in text
     assert 'run_notebook_server "$PY" "$LAUNCHER" "$JUPYTER_PORT"' in text
-    # The pipeline starts after the --test exit, the same place the gemma4
-    # branch started the twin: the docs tests own domain 93.
+    # The twin starts after the --test exit and before Jupyter: the docs tests
+    # own domain 93.
     test_exit = text.index("exit 0\nfi\n\n# --- 3.")
-    pipeline = text.index('setsid "${REPO_ROOT}/run_pipeline.sh" --digital-twin')
-    assert test_exit < pipeline
-    session = SESSION.read_text(encoding="utf-8")
-    assert 'kill -TERM "$PIPELINE_PID"' in session
+    twin = text.index("\nstart_digital_twin\n")
+    assert test_exit < twin < text.index('run_notebook_server "$PY"')
     subprocess.run(["bash", "-n", str(LAUNCHER)], check=True)
     subprocess.run(["bash", "-n", str(SESSION)], check=True)
 
 
-def test_an_attached_session_does_not_own_a_launch():
-    from vla_pipeline.single_instance import running_pipeline
+def test_the_notebook_starts_the_pipeline_launch():
+    """The notebook's launches are ``run_pipeline.sh --digital-twin``'s, on the configured cores."""
+    from so101_sim.stack import command, launch_argv
+    from vla_pipeline.utils.config import load_config
+
+    argv = command(arm=True, cameras=False, digital_twin=True, dry_run=False)
+    assert argv[1:] == [
+        "-m", "so101_sim.stack", "--arm", "true", "--cameras", "false",
+        "--digital-twin", "true", "--dry-run", "false",
+    ]
+    cores = load_config()["cores"]
+    text = " ".join(launch_argv(arm=True, cameras=False, digital_twin=True, dry_run=False))
+    assert "strix_vla.launch.py" in text
+    assert "arm:=true" in text and "cameras:=false" in text
+    assert "digital_twin:=true" in text and "dry_run:=false" in text
+    assert f"twin_core:={cores['twin']}" in text
+    assert f"control_core:={cores['control']}" in text
+    assert f"perception_core:={cores['perception']}" in text
+    script = (ROOT / "run_pipeline.sh").read_text(encoding="utf-8")
+    notebooks = LAUNCHER.read_text(encoding="utf-8")
+    assert 'python -m so101_sim.stack --arm "$1" --cameras "$2"' in script
+    assert "-m so101_sim.stack --arm false --cameras true --digital-twin true --dry-run false" in notebooks
+    assert "-m so101_sim.stack --arm true --cameras false --digital-twin true --dry-run false" in notebooks
+    body = notebooks.split("start_digital_twin() {", 1)[1].split("\n}\n", 1)[0]
+    assert "run_pipeline.sh" not in body
+
+
+def test_an_attached_session_does_not_own_a_launch(monkeypatch):
+    """``attach`` starts nothing. With no twin on its domain, it fails on the first joint state."""
+    pytest.importorskip("rclpy")
     from vvla_workshop.twin_ros import TwinSession
 
-    session = TwinSession.__new__(TwinSession)
-    session._proc = None
-    assert session.pid is None
-    assert session._exited() is None
-    if running_pipeline():
-        return
-    with pytest.raises(RuntimeError, match="run_pipeline.sh --digital-twin"):
-        TwinSession.attach({})
+    # attach binds the domain in os.environ; monkeypatch restores these after the test.
+    for name in ("ROS_DOMAIN_ID", "FASTRTPS_DEFAULT_PROFILES_FILE", "ROS_AUTOMATIC_DISCOVERY_RANGE"):
+        if name in os.environ:
+            monkeypatch.setenv(name, os.environ[name])
+        else:
+            monkeypatch.delenv(name, raising=False)
+    with pytest.raises(TimeoutError, match="run_notebooks.sh starts it"):
+        TwinSession.attach({}, domain_id=113, ready_timeout_s=1.0)
 
 
 def test_ctrl_c_stops_the_server_and_the_camera_launch(tmp_path):

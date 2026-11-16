@@ -162,10 +162,10 @@ cores = load_config().get("cores") or {}
 print(cores.get("twin", ""), cores.get("control", ""), cores.get("perception", ""))
 PY
 )
+  # so101_sim.stack is the same launch the notebook starts.
   start_launch() {
-    setsid python "$(command -v ros2)" launch launch/strix_vla.launch.py \
-      arm:="$1" cameras:="$2" digital_twin:="$TWIN" dry_run:="$DRY_ARM" \
-      twin_core:="$TWIN_CORE" control_core:="$CONTROL_CORE" perception_core:="$PERCEPTION_CORE" &
+    python -m so101_sim.stack --arm "$1" --cameras "$2" \
+      --digital-twin "$TWIN" --dry-run "$DRY_ARM" &
     LAUNCH_PIDS+=("$!")
   }
   if [[ "$CAMERA_ROS2" == "true" ]]; then

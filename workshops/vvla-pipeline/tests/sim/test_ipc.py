@@ -320,20 +320,6 @@ def test_a_silent_perception_parks_the_mimic():
     assert ctx.arm.parked is True
 
 
-def test_typed_text_is_the_raw_transcript():
-    """A typed line is not a voice command. The control process parses the words."""
-    from types import SimpleNamespace
-
-    from vla_pipeline.wire import ControlLink
-
-    heard = []
-    link = ControlLink.__new__(ControlLink)
-    link.robot_voice = SimpleNamespace(on_transcript=heard.append)
-    link._on_text(SimpleNamespace(data="  pick up the toothbrush  "))
-    link._on_text(SimpleNamespace(data="   "))
-    assert heard == ["pick up the toothbrush"]
-
-
 def test_a_mailbox_returns_one_new_frame_and_then_times_out():
     box = Mailbox(Ledger())
     frame = MountObservation("mount", 1.0, 1, 4, 4, (), None)

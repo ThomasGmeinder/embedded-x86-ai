@@ -106,55 +106,57 @@ def test_readme_lists_every_notebook_folder():
     assert ORDER == folders, f"workshop/README.md says run {ORDER}; the notebooks are in {folders}"
 
 
-def _start_digital_twin(log_path: Path) -> subprocess.Popen:
-    """``./run_pipeline.sh --digital-twin``, the startup ``run_notebooks.sh`` uses.
+def _start_digital_twin(log) -> list[subprocess.Popen]:
+    """The ``python -m so101_sim.stack`` commands ``run_notebooks.sh`` runs before Jupyter.
 
-    The docs run does not start it for every notebook. This notebook's test
-    starts it on the test domain and stops it before the next notebook, which
+    They are the launches of ``./run_pipeline.sh --digital-twin``. The docs
+    run does not start them for every notebook. This notebook's test starts
+    them on the test domain and stops them before the next notebook, which
     launches a twin of its own.
     """
-    log = open(log_path, "w")
-    proc = subprocess.Popen(
-        ["setsid", str(PIPE_ROOT / "run_pipeline.sh"), "--digital-twin"],
-        cwd=PIPE_ROOT,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
-        stdout=log,
-        stderr=subprocess.STDOUT,
-    )
-    proc.log_file = log
-    proc.log_path = log_path
-    return proc
+    from so101_sim.stack import command
+
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    return [
+        subprocess.Popen(
+            command(arm=arm, cameras=not arm, digital_twin=True, dry_run=False),
+            cwd=PIPE_ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
+        )
+        for arm in (False, True)
+    ]
 
 
-def _stop_digital_twin(proc: subprocess.Popen) -> None:
-    """SIGTERM so the script's EXIT cleanup runs. A background script ignores SIGINT."""
-    if proc.poll() is None:
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=60)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=10)
-    proc.log_file.close()
+def _stop_digital_twin(procs: list[subprocess.Popen]) -> None:
+    """SIGINT each launch, then its exit. A launch that already called ``setsid`` is its own group."""
+    for proc in procs:
+        if proc.poll() is not None:
+            continue
+        if os.getpgid(proc.pid) == proc.pid:
+            os.killpg(proc.pid, signal.SIGINT)
+        else:
+            proc.send_signal(signal.SIGINT)
+    for proc in procs:
+        proc.wait()
 
 
 @pytest.mark.parametrize("path", PATHS, ids=lambda p: f"{p.parent.name}/{p.stem}")
 def test_notebook_runs(path: Path, tmp_path):
     join_test_domain()
     twin = None
-    pipeline = None
+    launches = []
     if path.stem == "01_behavior":
         from vla_pipeline.utils.config import load_config
         from vvla_workshop.twin_ros import TwinSession
 
         twin = TwinSession(load_config())
+    twin_log = open(tmp_path / "twin.log", "wb")
     if path.stem == "02_digital_twin":
-        pipeline = _start_digital_twin(tmp_path / "pipeline.log")
+        launches = _start_digital_twin(twin_log)
     try:
         run = run_notebook(path, SCRIPTS.get(path.stem), TOLERATE.get(path.stem))
     finally:
-        if pipeline is not None:
-            _stop_digital_twin(pipeline)
+        _stop_digital_twin(launches)
+        twin_log.close()
         if twin is not None:
             twin.close()
     fallback = [line.strip() for line in run.output.splitlines() if CPU_FALLBACK.search(line)]

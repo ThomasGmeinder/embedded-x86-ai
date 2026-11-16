@@ -25,8 +25,10 @@
 #      stops when you quit Jupyter.
 #   3. Opens the always-on-top resource HUD (CPU% / GPU% / NPU inf/s) so you
 #      can watch the devices light up while a cell runs. It closes with Jupyter.
-#   4. Launches Jupyter Lab in workshop/ (browse the notebooks/ folder).
-#      Ctrl-C shuts that server's kernels down and releases the webcam.
+#   4. Starts the digital twin (the camera and arm launches of
+#      ../run_pipeline.sh --digital-twin) and launches Jupyter Lab in
+#      workshop/ (browse the notebooks/ folder). Ctrl-C stops the twin, shuts
+#      that server's kernels down and releases the webcam.
 #
 # Usage:
 #   ./run_notebooks.sh                 # launch Jupyter Lab (+ llama server + HUD)
@@ -110,13 +112,11 @@ say "Installing vla_pipeline from this clone"
 VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/ensure_voice.sh"
 
 # --- 2. llama-server on the iGPU (component 1's brain, torn down on exit) ----
-# notebook_session.sh owns Ctrl-C. It SIGTERMs PIPELINE_PID so run_pipeline.sh
-# runs its own cleanup, SIGTERMs the notebook server, and SIGINTs any camera
-# launch left in LAUNCH_PIDS. This script starts no camera launch of its own.
+# notebook_session.sh owns Ctrl-C. It SIGTERMs the notebook server and
+# SIGINTs the digital-twin launches in LAUNCH_PIDS.
 LLAMA_PID=""
 MONITOR_PID=""
 JUPYTER_PID=""
-PIPELINE_PID=""
 LAUNCH_PIDS=()
 # shellcheck disable=SC1091
 source "${WORKSHOP_DIR}/notebook_session.sh"
@@ -192,20 +192,27 @@ with open(path, "w") as fh:
     fh.write("\n")
 PY
 
-# The digital twin. Same startup as ./run_pipeline.sh --digital-twin, before
-# the kernel. Not started during --test: the docs tests start their own twin
-# on ROS domain 93, and this shell's domain is often 93, so a pipeline already
-# running makes those tests see it.
-# The notebook connects on TWIN_ROS_DOMAIN_ID (default 87). The pipeline has
-# to be on that same domain, with the same localhost discovery profile.
+# The digital twin. Same two Python launches as ./run_pipeline.sh --digital-twin,
+# before the kernel. Not started during --test: the docs tests start their
+# own twin on ROS domain 93, and this shell's domain is often 93.
+# The notebook connects on TWIN_ROS_DOMAIN_ID (default 87), with the
+# localhost discovery profile.
+start_digital_twin() {
+  cd "$REPO_ROOT"
+  "$PY" -m so101_sim.stack --arm false --cameras true --digital-twin true --dry-run false \
+    >>"${WORKSHOP_DIR}/logs/twin.log" 2>&1 &
+  LAUNCH_PIDS+=("$!")
+  "$PY" -m so101_sim.stack --arm true --cameras false --digital-twin true --dry-run false \
+    >>"${WORKSHOP_DIR}/logs/twin.log" 2>&1 &
+  LAUNCH_PIDS+=("$!")
+}
 export TWIN_ROS_DOMAIN_ID="${TWIN_ROS_DOMAIN_ID:-87}"
 export ROS_DOMAIN_ID="${TWIN_ROS_DOMAIN_ID}"
 export FASTRTPS_DEFAULT_PROFILES_FILE="${WORKSHOP_DIR}/common/twin_localhost.xml"
 mkdir -p "${WORKSHOP_DIR}/logs"
-say "Starting the digital twin: ./run_pipeline.sh --digital-twin"
-say "  log: ${WORKSHOP_DIR}/logs/pipeline.log"
-setsid "${REPO_ROOT}/run_pipeline.sh" --digital-twin >"${WORKSHOP_DIR}/logs/pipeline.log" 2>&1 &
-PIPELINE_PID=$!
+say "Starting the digital twin: the camera and arm launches of ./run_pipeline.sh --digital-twin"
+say "  log: ${WORKSHOP_DIR}/logs/twin.log"
+start_digital_twin
 
 say "Launching Jupyter ${LAUNCHER} - the workshop kernel is auto-selected"
 cd "$WORKSHOP_DIR"

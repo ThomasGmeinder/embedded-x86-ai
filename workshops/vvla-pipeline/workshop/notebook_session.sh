@@ -54,13 +54,6 @@ release_webcam() {
 
 stop_session() {
   trap '' INT TERM EXIT
-  # run_pipeline.sh is its own session, and a background job ignores SIGINT.
-  # SIGTERM runs that script's EXIT cleanup: perception and the console, then
-  # control, then the launches. LAUNCH_PIDS stay the camera-style SIGINT path.
-  if [[ -n "${PIPELINE_PID:-}" ]] && kill -0 "$PIPELINE_PID" 2>/dev/null; then
-    kill -TERM "$PIPELINE_PID" 2>/dev/null || true
-    wait "$PIPELINE_PID" 2>/dev/null || true
-  fi
   release_webcam
   if [[ -n "${LLAMA_PID:-}" ]]; then
     kill -INT "$LLAMA_PID" 2>/dev/null || true
