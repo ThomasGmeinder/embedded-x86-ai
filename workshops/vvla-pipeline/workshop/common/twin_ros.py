@@ -7,12 +7,13 @@
 
 """The digital twin behind ROS 2, for one notebook kernel (PROVIDED).
 
-Section 5 of ``notebooks/03_integration/02_digital_twin.ipynb`` drives the
-twin the way the pipeline does. :class:`TwinSession` starts
-``launch/so101_control.launch.py hardware_type:=mujoco`` on a ROS domain of
-its own. :class:`~vla_pipeline.robot.moveit_arm.MoveItArm` is constructed
-before this process initializes rclpy: doing that first makes ``MoveItPy``
-not return. Props are ``/free_joint_states``.
+The digital-twin notebook connects to a twin ``./run_notebooks.sh`` already
+started with ``./run_pipeline.sh --digital-twin``. :meth:`TwinSession.attach`
+does not launch and does not stop that pipeline. The constructor still
+starts ``launch/so101_control.launch.py hardware_type:=mujoco`` for a test
+that owns its own twin. :class:`~vla_pipeline.robot.moveit_arm.MoveItArm` is
+constructed before this process initializes rclpy: doing that first makes
+``MoveItPy`` not return. Props are ``/free_joint_states``.
 """
 
 from __future__ import annotations
@@ -47,6 +48,14 @@ _domain_context = None  # the private context that holds _domain_node, when used
 def twin_domain_id() -> int:
     """The ROS domain the twin runs on: ``TWIN_ROS_DOMAIN_ID``, else 87."""
     return int(os.environ.get("TWIN_ROS_DOMAIN_ID", DEFAULT_DOMAIN_ID))
+
+
+def _bind_domain(domain_id: int) -> None:
+    """The domain and the localhost discovery profile, before rclpy starts."""
+    os.environ["ROS_DOMAIN_ID"] = str(domain_id)
+    if os.environ.get("ROS_AUTOMATIC_DISCOVERY_RANGE") == "LOCALHOST":
+        del os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"]
+    os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = str(_LOCALHOST_PROFILE)
 
 
 def use_private_domain(domain_id: int, *, private_context: bool = False) -> None:
@@ -84,10 +93,7 @@ def use_private_domain(domain_id: int, *, private_context: bool = False) -> None
                 f"domain {domain_id}. Restart the kernel and run the notebook from the top."
             )
     else:
-        os.environ["ROS_DOMAIN_ID"] = str(domain_id)
-        if os.environ.get("ROS_AUTOMATIC_DISCOVERY_RANGE") == "LOCALHOST":
-            del os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"]
-        os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = str(_LOCALHOST_PROFILE)
+        _bind_domain(domain_id)
         if private_context:
             if _domain_node is None:
                 _domain_context = rclpy.Context()
@@ -287,10 +293,7 @@ class TwinSession:
         self._domain_lock = None
 
         # Environment only. rclpy.init before MoveItPy makes that constructor not return.
-        os.environ["ROS_DOMAIN_ID"] = str(self.domain_id)
-        if os.environ.get("ROS_AUTOMATIC_DISCOVERY_RANGE") == "LOCALHOST":
-            del os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"]
-        os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = str(_LOCALHOST_PROFILE)
+        _bind_domain(self.domain_id)
         self._refuse_if_owned()
         from so101_sim.domain_lock import acquire
 
@@ -321,6 +324,54 @@ class TwinSession:
             self.close()
             raise
 
+    @classmethod
+    def attach(
+        cls,
+        cfg: dict,
+        *,
+        config_path: str | os.PathLike | None = None,
+        scene: dict | None = None,
+        domain_id: int | None = None,
+        ready_timeout_s: float = 60.0,
+    ) -> TwinSession:
+        """Clients for a twin ``./run_pipeline.sh --digital-twin`` already started.
+
+        This does not launch, take the domain lock, or stop that pipeline.
+        ``run_notebooks.sh`` owns the process. Closing the session closes
+        these clients only.
+        """
+        from vla_pipeline.single_instance import running_pipeline
+
+        if not running_pipeline():
+            raise RuntimeError(
+                "the digital twin is not running. Start it with ./run_notebooks.sh, "
+                "which runs ./run_pipeline.sh --digital-twin."
+            )
+        self = cls.__new__(cls)
+        self.domain_id = twin_domain_id() if domain_id is None else int(domain_id)
+        self.config_path = Path(config_path or DEFAULT_CONFIG)
+        self._arm_topic = (cfg.get("cameras") or {}).get("arm", {}).get(
+            "topic", "/cameras/arm/image_raw"
+        )
+        self._scene_topic = (cfg.get("cameras") or {}).get("scene", {}).get(
+            "topic", "/cameras/scene/image_raw"
+        )
+        self.arm = self.armcam = self.view = self.scene = None
+        self._proc = None
+        self._closed = False
+        self._scene = scene
+        self._domain_lock = None
+        self.log_path = Path()
+        self.controllers_log_path = self.log_path
+        _bind_domain(self.domain_id)
+        atexit.register(self.close)
+        try:
+            self._wait_ready(ready_timeout_s, cfg)
+        except BaseException:
+            self.close()
+            raise
+        return self
+
     @property
     def pid(self) -> int | None:
         return None if self._proc is None else self._proc.pid
@@ -339,7 +390,7 @@ class TwinSession:
             raise DomainTaken(self.domain_id, pid)
 
     def _exited(self) -> RuntimeError | None:
-        if self._proc.poll() is None:
+        if self._proc is None or self._proc.poll() is None:
             return None
         return RuntimeError(f"the twin node exited with code {self._proc.returncode}:\n{_tail(self.log_path)}")
 
@@ -354,7 +405,16 @@ class TwinSession:
             return max(deadline - time.time(), 0.0)
 
         def not_ready(what: str) -> Exception:
-            return self._exited() or TimeoutError(
+            exited = self._exited()
+            if exited is not None:
+                return exited
+            if self._proc is None:
+                return TimeoutError(
+                    f"the twin sent no {what} within {timeout_s:.0f} s. "
+                    "./run_notebooks.sh starts it with ./run_pipeline.sh --digital-twin "
+                    "(workshop/logs/pipeline.log)."
+                )
+            return TimeoutError(
                 f"the twin node sent no {what} within {timeout_s:.0f} s:\n{_tail(self.log_path)}"
             )
 

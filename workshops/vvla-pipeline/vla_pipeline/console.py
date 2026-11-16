@@ -451,6 +451,12 @@ class TwinConsole:
         if say:
             self._add(f"robot: {say}", GREEN)
 
+    @property
+    def said(self) -> str:
+        """The latest sentence painted from the control process."""
+        with self._lock:
+            return self._say
+
     def apply_joints(self, joints: dict, gripper_load: float | None = None) -> None:
         """The latest joint sample and gripper current in milliamps. Neither adds a voice-log line."""
         with self._lock:

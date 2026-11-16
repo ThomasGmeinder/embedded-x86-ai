@@ -56,8 +56,29 @@ def test_the_launcher_uses_the_session_stop():
     assert 'source "${WORKSHOP_DIR}/notebook_session.sh"' in text
     assert "trap stop_session EXIT INT TERM" in text
     assert 'run_notebook_server "$PY" "$LAUNCHER" "$JUPYTER_PORT"' in text
+    # The pipeline starts after the --test exit, the same place the gemma4
+    # branch started the twin: the docs tests own domain 93.
+    test_exit = text.index("exit 0\nfi\n\n# --- 3.")
+    pipeline = text.index('setsid "${REPO_ROOT}/run_pipeline.sh" --digital-twin')
+    assert test_exit < pipeline
+    session = SESSION.read_text(encoding="utf-8")
+    assert 'kill -TERM "$PIPELINE_PID"' in session
     subprocess.run(["bash", "-n", str(LAUNCHER)], check=True)
     subprocess.run(["bash", "-n", str(SESSION)], check=True)
+
+
+def test_an_attached_session_does_not_own_a_launch():
+    from vla_pipeline.single_instance import running_pipeline
+    from vvla_workshop.twin_ros import TwinSession
+
+    session = TwinSession.__new__(TwinSession)
+    session._proc = None
+    assert session.pid is None
+    assert session._exited() is None
+    if running_pipeline():
+        return
+    with pytest.raises(RuntimeError, match="run_pipeline.sh --digital-twin"):
+        TwinSession.attach({})
 
 
 def test_ctrl_c_stops_the_server_and_the_camera_launch(tmp_path):

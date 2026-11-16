@@ -182,7 +182,7 @@ The same three cores, by program. On the real arm the controller node shares cor
 </tbody>
 </table>
 
-The digital-twin notebook starts these same programs and passes no core, so each one may use any core. Its kernel holds the arm client, the behaviors, and the console together. `run_notebooks.sh` starts `llama-server` before the kernel, and that server keeps every core.
+The digital-twin notebook uses this same placement. `./run_notebooks.sh` starts `./run_pipeline.sh --digital-twin` before the kernel, and the notebook only connects. `run_notebooks.sh` starts `llama-server` before that pipeline, and that server keeps every core.
 
 A hop window goes to Gemma while the person is still talking. [Voice latency](#voice-latency) is that hop, and the samples in it are not denoised.
 

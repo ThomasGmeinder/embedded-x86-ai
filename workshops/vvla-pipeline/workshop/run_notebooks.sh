@@ -110,12 +110,13 @@ say "Installing vla_pipeline from this clone"
 VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/ensure_voice.sh"
 
 # --- 2. llama-server on the iGPU (component 1's brain, torn down on exit) ----
-# notebook_session.sh owns Ctrl-C: it shuts the notebook server's kernels
-# down (a kernel that opened the webcam closes it) and stops any camera
-# launch in LAUNCH_PIDS. This script starts none; the list stays empty.
+# notebook_session.sh owns Ctrl-C. It SIGTERMs PIPELINE_PID so run_pipeline.sh
+# runs its own cleanup, SIGTERMs the notebook server, and SIGINTs any camera
+# launch left in LAUNCH_PIDS. This script starts no camera launch of its own.
 LLAMA_PID=""
 MONITOR_PID=""
 JUPYTER_PID=""
+PIPELINE_PID=""
 LAUNCH_PIDS=()
 # shellcheck disable=SC1091
 source "${WORKSHOP_DIR}/notebook_session.sh"
@@ -190,6 +191,21 @@ with open(path, "w") as fh:
     json.dump(data, fh, indent=2)
     fh.write("\n")
 PY
+
+# The digital twin. Same startup as ./run_pipeline.sh --digital-twin, before
+# the kernel. Not started during --test: the docs tests start their own twin
+# on ROS domain 93, and this shell's domain is often 93, so a pipeline already
+# running makes those tests see it.
+# The notebook connects on TWIN_ROS_DOMAIN_ID (default 87). The pipeline has
+# to be on that same domain, with the same localhost discovery profile.
+export TWIN_ROS_DOMAIN_ID="${TWIN_ROS_DOMAIN_ID:-87}"
+export ROS_DOMAIN_ID="${TWIN_ROS_DOMAIN_ID}"
+export FASTRTPS_DEFAULT_PROFILES_FILE="${WORKSHOP_DIR}/common/twin_localhost.xml"
+mkdir -p "${WORKSHOP_DIR}/logs"
+say "Starting the digital twin: ./run_pipeline.sh --digital-twin"
+say "  log: ${WORKSHOP_DIR}/logs/pipeline.log"
+setsid "${REPO_ROOT}/run_pipeline.sh" --digital-twin >"${WORKSHOP_DIR}/logs/pipeline.log" 2>&1 &
+PIPELINE_PID=$!
 
 say "Launching Jupyter ${LAUNCHER} - the workshop kernel is auto-selected"
 cd "$WORKSHOP_DIR"
