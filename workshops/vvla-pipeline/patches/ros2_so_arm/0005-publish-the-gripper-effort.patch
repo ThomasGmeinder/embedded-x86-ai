@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: tgmeinde <tgmeinde@amd.com>
+Date: Mon, 16 Nov 2026 17:45:00 +0100
+Subject: [PATCH] so_arm101: publish the gripper effort
+
+The console's gripper-current meter reads the gripper's effort on
+/joint_states. The joint state broadcaster only publishes the state
+interfaces the hardware exports, so the gripper exports effort.
+Position control stays the command.
+
+---
+
+diff --git a/so_arm101_description/control/so_arm101.ros2_control.xacro b/so_arm101_description/control/so_arm101.ros2_control.xacro
+index ec96c38..fcf9299 100644
+--- a/so_arm101_description/control/so_arm101.ros2_control.xacro
++++ b/so_arm101_description/control/so_arm101.ros2_control.xacro
+@@ -91,6 +91,8 @@
+         <command_interface name="position" />
+         <state_interface name="position" />
+         <state_interface name="velocity" />
++        <!-- The gripper-current meter reads this. Position control stays the command. -->
++        <state_interface name="effort" />
+       </joint>
+     </ros2_control>
+   </xacro:macro>

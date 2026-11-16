@@ -309,3 +309,29 @@ def test_rest_is_home_with_the_jaws_closed(arm, ros_node):
     joints = arm.get_joints()
     assert off(joints, arm.named_state("home")) < 0.01
     assert abs(_jaw(ros_node, arm.gripper_joint) - arm.named_state("close")[arm.gripper_joint]) < 0.01
+
+
+@launch
+def test_the_arm_feeds_the_gripper_current_meter_from_the_twins_effort(arm):
+    """MuJoCo's gripper effort on ``/joint_states`` reaches the console through
+    one call: ``on_cached_joints(joints, gripper_load)``, in milliamps.
+    ``n/a`` on the bar means that call never carried a current."""
+    from vla_pipeline.robot.moveit_arm import torque_nm_to_milliamps
+
+    fed: list = []
+    carried = threading.Event()
+
+    def feed(joints: dict, gripper_load) -> None:
+        fed.append((joints, gripper_load))
+        if gripper_load is not None:
+            carried.set()
+
+    arm.on_cached_joints = feed
+    try:
+        assert carried.wait(5.0), f"{len(fed)} joint samples, none with a gripper current"
+    finally:
+        arm.on_cached_joints = None
+    joints, load = next((j, g) for j, g in fed if g is not None)
+    print(f"meter fed {load:.0f} mA with {len(joints)} joints")
+    assert arm.gripper_joint in joints
+    assert load >= torque_nm_to_milliamps(0.0)

@@ -240,6 +240,40 @@ REPLY_S = 5.0
 # The arm waits this long for the controllers at start: a spawner whose
 # list_controllers reply DDS drops tries again 10 s later; this allows two.
 BRING_UP_S = 30.0
+# STS3215 datasheet line, the same numbers as the Gemma 4 branch's CurrentModel.
+# The meter draws milliamps and is full at stall.
+_IDLE_A = 0.006
+_RATED_NM = 0.49
+_RATED_A = 0.65
+_STALL_A = 2.5
+_STALL_NM = 1.91
+GRIPPER_STALL_MA = _STALL_A * 1000.0
+# The contact tick. 120 Present_Current counts at the datasheet 6.5 mA per count.
+GRIPPER_CONTACT_MA = 120.0 * 6.5
+
+
+def torque_nm_to_milliamps(torque_nm: float) -> float:
+    """N·m to gripper current in milliamps, along the STS3215 datasheet line."""
+    tau = float(torque_nm)
+    if tau <= _RATED_NM:
+        amps = _IDLE_A + tau / _RATED_NM * (_RATED_A - _IDLE_A)
+    else:
+        amps = _RATED_A + (tau - _RATED_NM) / (_STALL_NM - _RATED_NM) * (_STALL_A - _RATED_A)
+    return amps * 1000.0
+
+
+def _gripper_current(msg, joint: str) -> float | None:
+    """Gripper current in milliamps from this joint-state sample, or None when it has no effort."""
+    try:
+        index = list(msg.name).index(joint)
+    except ValueError:
+        return None
+    if index >= len(msg.effort):
+        return None
+    effort = float(msg.effort[index])
+    if effort != effort:
+        return None
+    return torque_nm_to_milliamps(abs(effort))
 # MoveIt's execution status, as the arm reports a move.
 # A plan starts from a still arm: MoveIt rejects a start state more than its
 # allowed_start_tolerance (0.01 rad) from where the arm is when it executes.
@@ -537,11 +571,9 @@ def _sim_bringup(timeout_s: float) -> None:
 
     The planning scene copies every TF frame that is not a robot link, and warns
     while that camera frame is a tree of its own. The state monitor warns once a
-    second until the first joint state. Both are already true when this returns.
-    The budget is the caller's one bring-up wait, not a second one.
+    second until the first joint state. Each wait returns when its message
+    arrives. ``timeout_s`` is the error when that message does not.
     """
-    import time
-
     import rclpy
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.parameter import Parameter
@@ -552,7 +584,6 @@ def _sim_bringup(timeout_s: float) -> None:
     frame = _wrist_optical_frame()
     context = rclpy.Context()
     context.init(initialize_logging=False)
-    deadline = time.monotonic() + timeout_s
     try:
         clear_rcutils_error()
         node = rclpy.create_node(
@@ -572,9 +603,9 @@ def _sim_bringup(timeout_s: float) -> None:
         spinner = threading.Thread(target=executor.spin, daemon=True)
         spinner.start()
         try:
-            if not state.wait(max(0.0, deadline - time.monotonic())):
+            if not state.wait(timeout_s):
                 raise RuntimeError(f"no /joint_states within {timeout_s} s")
-            if not tf_done.wait(max(0.0, deadline - time.monotonic())):
+            if not tf_done.wait(timeout_s):
                 raise RuntimeError(f"{frame} is not connected to world within {timeout_s} s")
             error = future.exception()
             if error is not None:
@@ -697,6 +728,10 @@ class MoveItArm:
         self._attach_link = None  # the SRDF end effector's parent link, read once
         self._stops = 0
         self._active: set[str] = set()  # controllers the manager's activity says are active
+        # Called with (joint positions, gripper current in mA or None) for every
+        # /joint_states, outside the state lock. The console's only feed.
+        self.on_cached_joints = None
+        self._gripper_load = None  # gripper current in mA, or None
 
         # The node keeps the system clock: it times nothing itself (waits use the
         # states' stamps), and on the twin's clock it would take every /clock
@@ -776,12 +811,23 @@ class MoveItArm:
             self._cond.notify_all()
 
     def _on_state(self, msg) -> None:
+        load = _gripper_current(msg, self.gripper_joint)
         with self._cond:
             joints = dict(self._state[1]) if self._state else {}
             joints.update(zip(msg.name, msg.position))
             self._speeds = dict(zip(msg.name, msg.velocity))
             self._state = (msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9, joints)
+            self._gripper_load = load
+            cached = dict(joints)
+            hook = self.on_cached_joints
             self._cond.notify_all()
+        if hook is not None:
+            hook(cached, load)
+
+    def get_gripper_load(self):
+        """The gripper current in milliamps, from the latest joint-state effort."""
+        with self._cond:
+            return self._gripper_load
 
     def _settle(self) -> bool:
         """Wait until the arm is still, and until the controller has taken a streamed setpoint.
@@ -815,6 +861,13 @@ class MoveItArm:
         Python is busy; it only paces :meth:`wait_state`.
         """
         return current_joints(self.robot)
+
+    def cached_joints(self) -> dict | None:
+        """The joint positions the state subscription last stored, or None before the first one."""
+        with self._cond:
+            if self._state is None:
+                return None
+            return dict(self._state[1])
 
     def state_time(self) -> float:
         """The stamp (seconds, the arm's clock) of the latest ``/joint_states``."""
@@ -1834,6 +1887,8 @@ class MoveItArm:
                 self._executor.spin_once()
             except (ExternalShutdownException, ShutdownException):
                 return
+            except Exception:
+                logger.exception("arm callback")
 
     def close(self) -> None:
         import rclpy
