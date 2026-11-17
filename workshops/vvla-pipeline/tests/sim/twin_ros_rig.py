@@ -43,6 +43,21 @@ def join_test_domain() -> None:
     use_private_domain(TEST_DOMAIN_ID)
 
 
+def launch_env() -> dict:
+    """The environment a twin launch inherits from a test.
+
+    This process keeps the localhost discovery profile, so its own nodes stay
+    on this machine. That profile turns multicast off, and the MuJoCo
+    controller then never receives ``robot_description``. ``run_pipeline.sh``
+    and ``run_notebooks.sh`` do not set the profile. The launch keeps this
+    process's ``ROS_DOMAIN_ID``.
+    """
+    env = os.environ.copy()
+    env.pop("FASTRTPS_DEFAULT_PROFILES_FILE", None)
+    env["PYTHONUNBUFFERED"] = "1"
+    return env
+
+
 def process_gone(pid: int) -> bool:
     """``pid`` has exited (a zombie counts)."""
     try:

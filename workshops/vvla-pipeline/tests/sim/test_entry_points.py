@@ -27,7 +27,7 @@ import sys
 import pytest
 
 from notebook_harness import PIPE_ROOT
-from twin_ros_rig import assert_domain_free, join_test_domain
+from twin_ros_rig import assert_domain_free, join_test_domain, launch_env
 
 pytestmark = [pytest.mark.sim, pytest.mark.hw, pytest.mark.slow, pytest.mark.timeout(600)]
 pexpect = pytest.importorskip("pexpect")
@@ -55,7 +55,7 @@ def _spawn(command: str, cwd, log_path):
     """``command`` on pipes, not a pty (a pty fork in this multi-threaded process
     may deadlock), in a session of its own, so :func:`_close` can stop all of it."""
     child = popen_spawn.PopenSpawn(
-        ["setsid", "bash", "-c", command], cwd=str(cwd), env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        ["setsid", "bash", "-c", command], cwd=str(cwd), env=launch_env(),
         encoding="utf-8", codec_errors="replace", timeout=None,
     )
     child.logfile_read = open(log_path, "w")

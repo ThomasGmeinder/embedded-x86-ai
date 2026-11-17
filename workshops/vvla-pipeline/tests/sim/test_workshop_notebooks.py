@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 
 from notebook_harness import CPU_FALLBACK, NOTEBOOKS, PIPE_ROOT, run_notebook
-from twin_ros_rig import join_test_domain
+from twin_ros_rig import join_test_domain, launch_env
 
 pytestmark = [pytest.mark.sim, pytest.mark.hw, pytest.mark.docs, pytest.mark.slow, pytest.mark.timeout(900)]
 pytest.importorskip("rclpy")
@@ -116,7 +116,7 @@ def _start_digital_twin(log) -> list[subprocess.Popen]:
     """
     from so101_sim.stack import command
 
-    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    env = launch_env()
     return [
         subprocess.Popen(
             command(arm=arm, cameras=not arm, digital_twin=True, dry_run=False),

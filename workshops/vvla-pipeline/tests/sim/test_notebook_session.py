@@ -65,6 +65,17 @@ def test_the_launcher_uses_the_session_stop():
     subprocess.run(["bash", "-n", str(SESSION)], check=True)
 
 
+def test_a_launch_does_not_inherit_the_localhost_profile(monkeypatch):
+    """The profile keeps this process local. A twin launch that inherits it never publishes joint states."""
+    monkeypatch.setenv("FASTRTPS_DEFAULT_PROFILES_FILE", "/tmp/twin_localhost.xml")
+    monkeypatch.setenv("ROS_DOMAIN_ID", "93")
+    from twin_ros_rig import launch_env
+
+    env = launch_env()
+    assert "FASTRTPS_DEFAULT_PROFILES_FILE" not in env
+    assert env["ROS_DOMAIN_ID"] == "93"
+
+
 def test_the_notebook_starts_the_pipeline_launch():
     """The notebook's launches are ``run_pipeline.sh --digital-twin``'s, on the configured cores."""
     from so101_sim.stack import command, launch_argv
