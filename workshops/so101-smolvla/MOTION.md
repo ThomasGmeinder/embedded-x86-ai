@@ -2,7 +2,7 @@
 
 The checkpoint `Harrysunshine/so101-smolvla-sim-real-10task` has `chunk_size` 50 and `n_action_steps` 50 in its `config.json`. `empty_cameras` is 0. One inference is 50 absolute joint targets. This run plays them at 30 Hz and records how far the arm lags. It does not score a grasp.
 
-The pickup in `outputs/harry/poweron-wrist.mp4` set `n_action_steps` to 1, kept only the first target, held it for 4 ticks (0.133 s), and inferred again. The position actuator in `assets/robotstudio_so101/so101.xml` is `kp="998.22"` with `kv="2.731"`, joint `damping="0.60"`, and `forcerange="-2.94 2.94"`. The proportional term hits that force limit at about 0.17 degrees of error. Past that, speed is limited to about 50 degrees per second, so a large step is unfinished when the next picture is taken and the new first target yaws the hand past the cube.
+The pickup in `scripted_testing/harry/poweron-wrist.mp4` set `n_action_steps` to 1, kept only the first target, held it for 4 ticks (0.133 s), and inferred again. The position actuator in `assets/robotstudio_so101/so101.xml` is `kp="998.22"` with `kv="2.731"`, joint `damping="0.60"`, and `forcerange="-2.94 2.94"`. The proportional term hits that force limit at about 0.17 degrees of error. Past that, speed is limited to about 50 degrees per second, so a large step is unfinished when the next picture is taken and the new first target yaws the hand past the cube.
 
 ## Loop
 

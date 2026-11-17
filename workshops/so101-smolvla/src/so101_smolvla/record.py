@@ -1,7 +1,7 @@
 """Record one successful grasp per distinct cube position into a LeRobot dataset.
 
 Each kept episode gets its own directory. The combined
-outputs/episodes/all-top.mp4 and all-wrist.mp4 are written once, after the
+scripted_testing/episodes/all-top.mp4 and all-wrist.mp4 are written once, after the
 last episode.
 """
 
@@ -19,9 +19,9 @@ import yaml
 from so101_smolvla.task import TASK
 
 ROOT = Path(__file__).resolve().parents[2]
-DATASET = ROOT / "outputs" / "dataset"
-RAW = ROOT / "outputs" / "raw"
-EPISODES = ROOT / "outputs" / "episodes"
+DATASET = ROOT / "scripted_testing" / "dataset"
+RAW = ROOT / "scripted_testing" / "raw"
+EPISODES = ROOT / "scripted_testing" / "episodes"
 
 NAMES = [
     "shoulder_pan.pos",
@@ -132,7 +132,7 @@ def record() -> Path:
         use_videos=True,
         rgb_encoder=RGBEncoderConfig(vcodec="h264", preset="ultrafast"),
     )
-    log_path = ROOT / "outputs" / "cube_positions.jsonl"
+    log_path = ROOT / "scripted_testing" / "cube_positions.jsonl"
     kept = 0
     try:
         for position in positions:

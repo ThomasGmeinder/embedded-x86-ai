@@ -101,7 +101,7 @@ def main() -> None:
         report["stack"] = row
         print(f"stack {row}", flush=True)
     finally:
-        dest = ROOT / "outputs" / "base_probe" / "result.json"
+        dest = ROOT / "scripted_testing" / "base_probe" / "result.json"
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         pick.close()

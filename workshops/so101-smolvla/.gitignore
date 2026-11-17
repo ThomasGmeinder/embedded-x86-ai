@@ -2,5 +2,6 @@
 .toolvenv/
 __pycache__/
 *.egg-info/
-outputs/
+scripted_testing/
+vla_testing/
 .pytest_cache/

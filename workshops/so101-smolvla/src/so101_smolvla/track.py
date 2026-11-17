@@ -23,7 +23,7 @@ POWER_ON = np.array([-5.76, -100.0, 92.97, 63.38, -0.53, 1.90], dtype=np.float64
 CHUNK = 50
 EVAL_STEPS = 500
 ROOT = Path(__file__).resolve().parents[2]
-OUT = ROOT / "outputs" / "track"
+OUT = ROOT / "scripted_testing" / "track"
 
 
 def hold_power_on(sim: ArmSim) -> np.ndarray:

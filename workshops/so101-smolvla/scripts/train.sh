@@ -14,9 +14,9 @@ exec .venv/bin/lerobot-train \
   --policy.n_action_steps=1 \
   --rename_map='{"observation.images.top":"observation.images.camera1","observation.images.wrist":"observation.images.camera2"}' \
   --dataset.repo_id=local/so101_box \
-  --dataset.root=outputs/dataset \
+  --dataset.root=scripted_testing/dataset \
   --dataset.video_backend=pyav \
-  --output_dir=outputs/train \
+  --output_dir=scripted_testing/train \
   --job_name=so101_smolvla \
   --steps=20000 \
   --policy.scheduler_decay_steps=20000 \

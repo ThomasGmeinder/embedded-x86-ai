@@ -9,8 +9,8 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-DATASET = ROOT / "outputs" / "dataset"
-EPISODES = ROOT / "outputs" / "episodes"
+DATASET = ROOT / "scripted_testing" / "dataset"
+EPISODES = ROOT / "scripted_testing" / "episodes"
 FPS = 30
 FRAMES = 189
 DURATION_S = FRAMES / FPS
@@ -61,7 +61,7 @@ def main() -> None:
                 ],
                 check=True, capture_output=True,
             )
-        logged = ROOT / "outputs" / "cube_positions.jsonl"
+        logged = ROOT / "scripted_testing" / "cube_positions.jsonl"
         cube_xy = list(positions[index // 10]) if index // 10 < len(positions) else None
         if logged.exists():
             rows = [json.loads(line) for line in logged.read_text().splitlines() if line.strip()]

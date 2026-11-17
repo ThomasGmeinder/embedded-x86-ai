@@ -2,7 +2,7 @@
 
 This scene is a MuJoCo twin of the arm. The pictures the checkpoint was trained on come from a different simulator. This note records what was copied from that rig, what was measured, and what is still different. The renderer reads `assets/robotstudio_so101/scene_task.xml` and `so101.xml`. `configs/sim.yaml` repeats the camera numbers so they can be read without opening the XML.
 
-The side-by-side frame is `outputs/track/scene-match.png`. Left is episode 484, frame 13, of the training video. Right is this scene at the same recorded joint angles.
+The side-by-side frame is `scripted_testing/track/scene-match.png`. Left is episode 484, frame 13, of the training video. Right is this scene at the same recorded joint angles.
 
 ## Sources
 
@@ -53,7 +53,7 @@ Those two positions are where the recorded hand was. They are not a log of the o
 
 ## What the picture still shows
 
-`outputs/track/scene-match.png` is the same kind of shot on both sides. The overhead view looks from behind the arm toward the bin and the cube. The wrist view looks out between the fingers at the bin.
+`scripted_testing/track/scene-match.png` is the same kind of shot on both sides. The overhead view looks from behind the arm toward the bin and the cube. The wrist view looks out between the fingers at the bin.
 
 Two differences are still visible:
 
@@ -78,10 +78,10 @@ A search over 1344 overhead poses peaked at a correlation of 0.46 and was not wr
 
 ## Checkpoint on their own pixels
 
-`scripts/training_frame.py` feeds episode 484, frame 13, of their video to the checkpoint and compares the 50 predicted targets with the 50 recorded actions. On those pixels the mean absolute error is about 0.7° pan, 8.6° lift, 8.8° elbow, 2.3° wrist flex, 2.0° wrist roll, 3.3 gripper percent. The largest single error is about 13° on lift and elbow. That run held the lift at −100° because the hinge limit at the time was −100°, and the recorded lift is −101.19°. The numbers are in `outputs/track/training-compare.json`. The video is `outputs/track/training-compare.mp4`.
+`scripts/training_frame.py` feeds episode 484, frame 13, of their video to the checkpoint and compares the 50 predicted targets with the 50 recorded actions. On those pixels the mean absolute error is about 0.7° pan, 8.6° lift, 8.8° elbow, 2.3° wrist flex, 2.0° wrist roll, 3.3 gripper percent. The largest single error is about 13° on lift and elbow. That run held the lift at −100° because the hinge limit at the time was −100°, and the recorded lift is −101.19°. The numbers are in `scripted_testing/track/training-compare.json`. The video is `scripted_testing/track/training-compare.mp4`.
 
 ## Pickup on this scene
 
-`python -m so101_smolvla.track rollout` runs 500 steps, a new picture every 50. On this scene the cube ends in the bin. The videos are `outputs/track/rollout-top.mp4` and `outputs/track/rollout-wrist.mp4`. `outputs/track/rollout.json` reports `lifted: false` because that flag is the last step, after the cube has been set down.
+`python -m so101_smolvla.track rollout` runs 500 steps, a new picture every 50. On this scene the cube ends in the bin. The videos are `scripted_testing/track/rollout-top.mp4` and `scripted_testing/track/rollout-wrist.mp4`. `scripted_testing/track/rollout.json` reports `lifted: false` because that flag is the last step, after the cube has been set down.
 
 The arm jitters during that pickup. Across 500 targets the lift reverses direction 167 times and the elbow 181 times. The steps are about 1–2°. The first lift targets of one chunk are `-27, -28.1, -28.3, -28.1, -26.8, -26.5, -25.6, -26.7`. The position actuator follows each of those steps. Chunk boundaries are mostly within a couple of degrees. One boundary jumps the lift by 12°. The actuator gains are unchanged.
