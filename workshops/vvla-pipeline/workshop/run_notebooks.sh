@@ -193,10 +193,12 @@ with open(path, "w") as fh:
 PY
 
 # The digital twin. Same two Python launches as ./run_pipeline.sh --digital-twin,
-# before the kernel. Not started during --test: the docs tests start their
-# own twin on ROS domain 93, and this shell's domain is often 93.
-# The notebook connects on TWIN_ROS_DOMAIN_ID (default 87), with the
-# localhost discovery profile.
+# before the kernel, and the same discovery: no localhost profile. That profile
+# turns multicast off, and with FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA the arm
+# nodes then never see robot_description, so no joint states are published.
+# Not started during --test: the docs tests start their own twin on ROS
+# domain 93, and this shell's domain is often 93.
+# The notebook connects on TWIN_ROS_DOMAIN_ID (default 87).
 start_digital_twin() {
   cd "$REPO_ROOT"
   "$PY" -m so101_sim.stack --arm false --cameras true --digital-twin true --dry-run false \
@@ -208,7 +210,7 @@ start_digital_twin() {
 }
 export TWIN_ROS_DOMAIN_ID="${TWIN_ROS_DOMAIN_ID:-87}"
 export ROS_DOMAIN_ID="${TWIN_ROS_DOMAIN_ID}"
-export FASTRTPS_DEFAULT_PROFILES_FILE="${WORKSHOP_DIR}/common/twin_localhost.xml"
+unset FASTRTPS_DEFAULT_PROFILES_FILE
 mkdir -p "${WORKSHOP_DIR}/logs"
 say "Starting the digital twin: the camera and arm launches of ./run_pipeline.sh --digital-twin"
 say "  log: ${WORKSHOP_DIR}/logs/twin.log"

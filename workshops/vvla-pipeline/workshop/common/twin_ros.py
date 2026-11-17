@@ -338,11 +338,18 @@ class TwinSession:
 
         That twin is the camera and arm launches of
         ``./run_pipeline.sh --digital-twin``. This does not launch, take the
-        domain lock, or stop them. Closing the session closes these clients
-        only.
+        domain lock, or stop them. The notebook call keeps this process's ROS
+        domain and discovery, which are the ones the launches were started
+        with. Closing the session closes these clients only.
         """
         self = cls.__new__(cls)
-        self.domain_id = twin_domain_id() if domain_id is None else int(domain_id)
+        # An explicit domain is a test talking to nothing. The notebook inherits
+        # the domain run_notebooks.sh gave the launches and must keep it.
+        if domain_id is None:
+            self.domain_id = int(os.environ.get("ROS_DOMAIN_ID", "0"))
+        else:
+            self.domain_id = int(domain_id)
+            _bind_domain(self.domain_id)
         self.config_path = Path(config_path or DEFAULT_CONFIG)
         self._arm_topic = (cfg.get("cameras") or {}).get("arm", {}).get(
             "topic", "/cameras/arm/image_raw"
@@ -357,7 +364,6 @@ class TwinSession:
         self._domain_lock = None
         self.log_path = Path()
         self.controllers_log_path = self.log_path
-        _bind_domain(self.domain_id)
         atexit.register(self.close)
         try:
             self._wait_ready(ready_timeout_s, cfg)
