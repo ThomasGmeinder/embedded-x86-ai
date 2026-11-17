@@ -1,0 +1,15 @@
+---
+description: The SO-101 twin matches the real robot and is controlled the same way
+globs: workshops/so101-smolvla/**
+alwaysApply: false
+---
+
+# SO-101 digital twin
+
+The twin in `workshops/so101-smolvla` stays as close as possible to the real SO-101 and is controlled the same way. A difference that only makes a video look smoother is not allowed.
+
+Control matches the published robot. One absolute joint target per tick, in order, from the checkpoint chunk. LeRobot `select_action` queues those raw targets and pops one. Do that. Do not average, filter, or delay a target before `command`. The five-sample average that was added to hide 1–2° reversals was a hack. It is gone.
+
+Geometry, cameras, and lights come from the published KIT description (`so101_sim/envs.py`, `kit_v1_so101.urdf`, `so101_kit_slow.py`). Copy a published limit when one exists. The per-step speed cap in `so101_kit_slow.py` is that limit. Do not invent a second one.
+
+A jitter, a miss, or a pose that looks wrong is reported. It is not patched with a filter the real arm does not run.
