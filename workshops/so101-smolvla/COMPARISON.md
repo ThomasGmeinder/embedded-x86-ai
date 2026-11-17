@@ -58,7 +58,7 @@ Those two positions are where the recorded hand was. They are not a log of the o
 Two differences are still visible:
 
 - The overhead training frame has the KIT base plate and the frame extrusion across the bottom. This scene has neither mesh, so that part of the view is empty table.
-- The wrist training frame looks into the opening of their `bin_2` mesh, with the cube beside it. This wrist view is on the near wall of a box built from five geoms. The cube is only at the top-right edge.
+- The wrist training frame looks across the `bin_2` opening, with the cube beside it as a large face. This wrist view looks down into the tray. A pale wedge that sat on the tray edge in the overhead view was the wrist camera's shadow, from a straight-down light with shadows on. The published lights are now in the scene: ambient 0.3, a direction of (1, 1, −1) with shadows off, and a second light straight down. The overhead frame then shows the cube as its own face beside the tray.
 
 A search over 1344 overhead poses peaked at a correlation of 0.46 and was not written. A wrist move that put the lens into the finger was rendered, looked worse, and was not written.
 
@@ -67,7 +67,8 @@ A search over 1344 overhead poses peaked at a correlation of 0.46 and was not wr
 - Simulator. Theirs is SAPIEN through ManiSkill at 120 Hz physics and 30 Hz control. This twin is MuJoCo at 480 Hz physics and 30 Hz control.
 - Episode cap. Their env stops at 400 steps. `track.py` rolls out 500 steps on this scene.
 - Overhead jitter. On each of their resets the overhead camera is shifted by up to ±0.023 m in optical X and Y. This camera stays on the published mean offset.
-- Bin. Theirs is the `bin_2` mesh, 80 × 100 × 30 mm. This bin is a 100 mm square box with walls about 50 mm tall, dark gray `(0.12, 0.12, 0.12)`.
+- Lighting. Theirs is ambient (0.3, 0.3, 0.3), a directional light along (1, 1, −1) with `shadow=False`, and a second directional light straight down. This scene now uses those two directions, with the camera headlight off and neither light casting a shadow.
+- Bin placement. Both use the `bin_2` tray, 80 × 100 × 30 mm, vertex color (20, 20, 20). Their pose is the env's spawned bin. This one sits at the frame-200 gripper site, (0.249, 0.071) m, with the floor on the table.
 - Cube mass. Their density is 200 kg/m³, so a 40 mm cube is 12.8 g. This geom mass is 0.04 kg.
 - Shoulder lift. Their URDF limit is −110° to +100°. This hinge is ±110°.
 - Wrist-roll range. Their URDF range is about −67° to +253°. This hinge stays at the Menagerie range, about ±160°. Episode 484 stays inside −33° to −2°, so that episode is not clipped.
