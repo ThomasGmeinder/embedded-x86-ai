@@ -19,7 +19,6 @@ notebook must show Gemma's parse of a typed command.
 
 from __future__ import annotations
 
-import os
 import re
 import signal
 import subprocess
@@ -127,13 +126,14 @@ def _start_digital_twin(log) -> list[subprocess.Popen]:
 
 
 def _stop_digital_twin(procs: list[subprocess.Popen]) -> None:
-    """SIGINT each launch, then its exit. A launch that already called ``setsid`` is its own group."""
+    """SIGINT each launch process, then its exit.
+
+    The launch signals the camera once. A signal to the whole group hits the
+    camera as well, and the launch's forwarded SIGINT wedges the AMD ISP
+    driver in its stop call.
+    """
     for proc in procs:
-        if proc.poll() is not None:
-            continue
-        if os.getpgid(proc.pid) == proc.pid:
-            os.killpg(proc.pid, signal.SIGINT)
-        else:
+        if proc.poll() is None:
             proc.send_signal(signal.SIGINT)
     for proc in procs:
         proc.wait()

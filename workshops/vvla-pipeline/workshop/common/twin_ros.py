@@ -417,12 +417,27 @@ class TwinSession:
                 f"the twin node sent no {what} within {timeout_s:.0f} s:\n{_tail(self.log_path)}"
             )
 
-        self._wait_bringup(timeout_s, not_ready, remaining)
+        # A launch this process started is waited on here. A launch
+        # run_notebooks.sh started is the pipeline's arm client: MoveItArm
+        # does that bring-up. A second participant here is what made the
+        # notebook time out while run_pipeline.sh did not.
+        if self._proc is not None:
+            self._wait_bringup(timeout_s, not_ready, remaining)
+        else:
+            from so101_sim.domain_lock import owner
+
+            if owner(self.domain_id) is None:
+                raise RuntimeError(
+                    "the digital twin is not running. Start it with ./run_notebooks.sh "
+                    "(workshop/logs/twin.log)."
+                )
         try:
             from vla_pipeline.robot.moveit_arm import MoveItArm
 
             self.arm = MoveItArm(cfg, sim=True)
         except RuntimeError as e:
+            if self._proc is None:
+                raise
             raise TimeoutError(f"{e}\n{_tail(self.log_path)}") from None
         if self._scene is not None:
             self._place(self._scene)

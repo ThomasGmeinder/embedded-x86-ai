@@ -99,22 +99,21 @@ def test_the_notebook_starts_the_pipeline_launch():
     assert 'python -m so101_sim.stack --arm "$1" --cameras "$2"' in script
     assert "-m so101_sim.stack --arm false --cameras true --digital-twin true --dry-run false" in notebooks
     assert "-m so101_sim.stack --arm true --cameras false --digital-twin true --dry-run false" in notebooks
+    assert '"so101_sim.bringup", "kernel"' in notebooks
     body = notebooks.split("start_digital_twin() {", 1)[1].split("\n}\n", 1)[0]
     assert "run_pipeline.sh" not in body
 
 
 def test_an_attached_session_does_not_own_a_launch(monkeypatch):
-    """``attach`` starts nothing. With no twin on its domain, it fails on the first joint state."""
-    pytest.importorskip("rclpy")
+    """``attach`` starts nothing. With no arm launch holding the domain, it fails at once."""
     from vvla_workshop.twin_ros import TwinSession
 
-    # attach binds the domain in os.environ; monkeypatch restores these after the test.
     for name in ("ROS_DOMAIN_ID", "FASTRTPS_DEFAULT_PROFILES_FILE", "ROS_AUTOMATIC_DISCOVERY_RANGE"):
         if name in os.environ:
             monkeypatch.setenv(name, os.environ[name])
         else:
             monkeypatch.delenv(name, raising=False)
-    with pytest.raises(TimeoutError, match="run_notebooks.sh starts it"):
+    with pytest.raises(RuntimeError, match="run_notebooks.sh"):
         TwinSession.attach({}, domain_id=113, ready_timeout_s=1.0)
 
 

@@ -83,11 +83,29 @@ def accept_stop_signals() -> None:
     libc.signal(signal.SIGQUIT, 0)
 
 
+def hold_domain_lock() -> None:
+    """Hold this domain's twin lock across the exec, until the launch exits.
+
+    The notebook checks the lock instead of waiting to see whether joint states
+    show up. The file descriptor has to stay open in the launched process.
+    """
+    from so101_sim.domain_lock import acquire
+
+    domain_id = int(os.environ.get("ROS_DOMAIN_ID", "0"))
+    handle = acquire(domain_id)
+    os.set_inheritable(handle.fileno(), True)
+    # Referenced until exec. A dropped reference closes the descriptor.
+    global _DOMAIN_LOCK
+    _DOMAIN_LOCK = handle
+
+
 def exec_launch(**kwargs) -> None:
     """Replace this process with the launch. The process dies with its parent."""
     from so101_sim.parent_death import die_with_parent
 
     die_with_parent()
+    if kwargs.get("arm"):
+        hold_domain_lock()
     argv = launch_argv(**kwargs)
     accept_stop_signals()
     os.execvp(argv[0], argv)

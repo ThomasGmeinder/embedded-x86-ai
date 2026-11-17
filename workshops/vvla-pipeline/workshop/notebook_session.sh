@@ -20,11 +20,13 @@
 # notebook that opened the webcam holds it in the kernel, and the kernel's
 # exit closes the device.
 #
-# Each camera launch leads its own session. SIGINT is the signal
-# so101_sim.stack armed that session with. One SIGINT releases the device.
-# A second signal while the node is releasing it drops the AMD ISP driver
-# into an uninterruptible stop and /dev/video0 stays open, so this stop
-# ignores a further Ctrl-C until the launches and the server have exited.
+# Each camera launch leads its own session. SIGINT goes to that launch
+# process only. The launch then signals the camera once. A signal to the
+# whole group hits the camera as well, and the launch's own forwarded
+# SIGINT arrives while the AMD ISP driver is in its stop call. That second
+# signal leaves the driver in isp4sd_stop_stream, which does not respond to
+# any further signal, and /dev/video0 stays open. This stop ignores a
+# further Ctrl-C until the launches and the server have exited.
 
 # The caller sets JUPYTER_PID="" and LAUNCH_PIDS=() before the trap.
 # LLAMA_PID and MONITOR_PID are optional.
@@ -37,8 +39,8 @@ release_webcam() {
   fi
   for pid in "${launches[@]}"; do
     if kill -0 "$pid" 2>/dev/null; then
-      # The pid leads the launch session, so the group id is the pid.
-      kill -INT -- "-$pid" 2>/dev/null || true
+      # The launch process only. It signals the camera once.
+      kill -INT "$pid" 2>/dev/null || true
     fi
   done
   if [[ -n "${JUPYTER_PID:-}" ]] && kill -0 "$JUPYTER_PID" 2>/dev/null; then

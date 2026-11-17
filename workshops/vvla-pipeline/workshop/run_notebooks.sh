@@ -84,6 +84,24 @@ say "Python: $("$PY" -c 'import sys; print(sys.version.split()[0], "@", sys.exec
 # The kernel.json is per user and shared by every clone, so register it from
 # this clone on every launch.
 "${REPO_ROOT}/scripts/register_kernel.sh" || die "could not register the '${KERNEL_NAME}' kernel - run ./bootstrap.sh from the repo root."
+# ipykernel install resets the launcher command. The bringup prefix is applied
+# after that returns. The kernel creates its DDS participant before any cell,
+# so a Vitis session cannot start first. MoveItPy still owns the default context.
+KERNEL_JSON="${HOME}/.local/share/jupyter/kernels/${KERNEL_NAME}/kernel.json"
+"$PY" - "$KERNEL_JSON" <<'PY'
+import json, sys
+path = sys.argv[1]
+spec = json.load(open(path))
+argv = spec["argv"]
+i = argv.index("-m")
+rest = argv[i + 2:]
+if rest[:1] == ["kernel"]:
+    rest = rest[1:]
+spec["argv"] = [*argv[: i + 1], "so101_sim.bringup", "kernel", *rest]
+with open(path, "w") as fh:
+    json.dump(spec, fh, indent=1)
+    fh.write("\n")
+PY
 say "Kernel '${KERNEL_NAME}' registered for this clone (NPU runtime and ROS 2 in its kernel.json)"
 
 say "Sourcing scripts/ryzen_ai_env.sh (NPU runtime, llama.cpp GPU target)"
