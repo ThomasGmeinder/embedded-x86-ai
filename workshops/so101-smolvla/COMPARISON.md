@@ -80,4 +80,8 @@ A search over 1344 overhead poses peaked at a correlation of 0.46 and was not wr
 
 `scripts/training_frame.py` feeds episode 484, frame 13, of their video to the checkpoint and compares the 50 predicted targets with the 50 recorded actions. On those pixels the mean absolute error is about 0.7° pan, 8.6° lift, 8.8° elbow, 2.3° wrist flex, 2.0° wrist roll, 3.3 gripper percent. The largest single error is about 13° on lift and elbow. That run held the lift at −100° because the hinge limit at the time was −100°, and the recorded lift is −101.19°. The numbers are in `outputs/track/training-compare.json`. The video is `outputs/track/training-compare.mp4`.
 
-Playing the same model on this scene is a separate question. The arm tracks a commanded target within a few degrees. The scene the policy sees is the one in `scene-match.png`.
+## Pickup on this scene
+
+`python -m so101_smolvla.track rollout` runs 500 steps, a new picture every 50. On this scene the cube ends in the bin. The videos are `outputs/track/rollout-top.mp4` and `outputs/track/rollout-wrist.mp4`. `outputs/track/rollout.json` reports `lifted: false` because that flag is the last step, after the cube has been set down.
+
+The arm jitters during that pickup. Across 500 targets the lift reverses direction 167 times and the elbow 181 times. The steps are about 1–2°. The first lift targets of one chunk are `-27, -28.1, -28.3, -28.1, -26.8, -26.5, -25.6, -26.7`. The position actuator follows each of those steps. Chunk boundaries are mostly within a couple of degrees. One boundary jumps the lift by 12°. The actuator gains are unchanged.
