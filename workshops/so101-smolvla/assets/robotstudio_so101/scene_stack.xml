@@ -1,0 +1,47 @@
+<mujoco model="so101 stack">
+  <include file="so101.xml"/>
+
+  <statistic center="0.25 0 0.12" extent="0.6"/>
+
+  <visual>
+    <headlight diffuse="0.55 0.55 0.55" ambient="0.45 0.45 0.45" specular="0.02 0.02 0.02"/>
+    <rgba haze="0.85 0.88 0.9 1"/>
+    <global azimuth="180" elevation="-90" offwidth="640" offheight="480"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.82 0.84 0.86" rgb2="0.55 0.58 0.62"
+      width="512" height="3072"/>
+    <texture type="2d" name="table_tex" builtin="flat" rgb1="0.86 0.84 0.80" rgb2="0.80 0.78 0.74"
+      width="512" height="512"/>
+    <material name="table_mat" texture="table_tex" texuniform="true" rgba="0.86 0.84 0.80 1"/>
+    <material name="cube_mat" rgba="0.85 0.15 0.12 1" specular="0.1"/>
+    <material name="cube_blue_mat" rgba="0.20 0.35 0.75 1" specular="0.1"/>
+  </asset>
+
+  <worldbody>
+    <light name="ceiling" pos="0.25 0 1.4" dir="0 0 -1" directional="true" diffuse="0.7 0.7 0.7"
+      specular="0.02 0.02 0.02" castshadow="true"/>
+
+    <geom name="floor" type="plane" pos="0 0 -0.4" size="0 0 0.05" rgba="0.75 0.75 0.75 1"/>
+
+    <body name="table" pos="0.22 0 -0.02">
+      <geom name="table_top" type="box" size="0.40 0.32 0.02" material="table_mat"/>
+    </body>
+
+    <body name="top_look" pos="0.22 0 0.02"/>
+    <camera name="top" mode="targetbody" target="top_look" pos="0.22 0.0 0.95" fovy="70"/>
+
+    <body name="cube" pos="0.18 0.08 0.02">
+      <freejoint name="cube_joint"/>
+      <geom name="cube_geom" type="box" size="0.015 0.015 0.015" mass="0.03" material="cube_mat"
+        friction="1.4 0.02 0.002" condim="4" solref="0.01 1"/>
+    </body>
+
+    <body name="cube_blue" pos="0.26 -0.02 0.02">
+      <freejoint name="cube_blue_joint"/>
+      <geom name="cube_blue_geom" type="box" size="0.015 0.015 0.015" mass="0.03" material="cube_blue_mat"
+        friction="1.4 0.02 0.002" condim="4" solref="0.01 1"/>
+    </body>
+  </worldbody>
+</mujoco>

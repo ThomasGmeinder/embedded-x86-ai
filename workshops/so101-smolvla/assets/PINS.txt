@@ -1,0 +1,3 @@
+menagerie 370c43965323c0944b433b202aac5058b5f907a9
+so-arm100 a758567c3978dfeefe282ede0500085a48fe8f78
+timestep override 1/480 s

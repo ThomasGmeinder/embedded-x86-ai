@@ -1,0 +1,32 @@
+checkpoint:
+  path: lerobot/smolvla_base
+  state_shape:
+  - 6
+  action_shape:
+  - 6
+  absolute: true
+  camera_keys:
+  - observation.images.camera1
+  - observation.images.camera2
+  - observation.images.camera3
+  resize:
+  - 512
+  - 512
+  normalization:
+    VISUAL: NormalizationMode.IDENTITY
+    STATE: NormalizationMode.MEAN_STD
+    ACTION: NormalizationMode.MEAN_STD
+  chunk_size: 50
+  loaded_n_action_steps: 50
+project:
+  n_action_steps: 1
+  empty_cameras: 1
+  rename_map:
+    observation.images.top: observation.images.camera1
+    observation.images.wrist: observation.images.camera2
+  arm_unit: degrees
+  gripper_unit: 0_closed_100_open
+  inference_budget_s: 0.1656
+  first_forward_s: 1.2199
+  load_s: 2.96
+  device: cuda
