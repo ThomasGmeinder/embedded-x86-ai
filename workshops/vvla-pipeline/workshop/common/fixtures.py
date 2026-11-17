@@ -243,12 +243,19 @@ def open_webcam(cfg: dict):
         hands = QuietHands(HandTracker(cfg))
         hands.process(np.zeros((64, 64, 3), np.uint8))
     cam = make_camera(cfg, "mount")
-    if cam.read()[0]:
+    mount = cfg["cameras"]["mount"]
+    # Ros2Camera caches frames as they arrive. One read before the first
+    # message looks like a dead camera and drops the real stream.
+    if getattr(cam, "next_frame", None) is not None:
+        ok = cam.next_frame(0.0, float(mount.get("stale_after_s", 1.0)))[0]
+    else:
+        ok = cam.read()[0]
+    if ok:
         return cam, pose, hands
     cam.close()
     hands.close()
-    device = cfg["cameras"]["mount"].get("device")
-    print(f"webcam: no frames from {device} (in use by another kernel?) - a scripted person stands in")
+    where = mount.get("topic") if mount.get("use_ros2") else mount.get("device")
+    print(f"webcam: no frames from {where} - a scripted person stands in")
     return SyntheticCamera(), ScriptedPose(), ScriptedHands()
 
 

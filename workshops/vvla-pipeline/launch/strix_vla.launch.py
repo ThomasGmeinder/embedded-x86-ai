@@ -74,8 +74,13 @@ def _cameras(context):
     config = LaunchConfiguration("config").perform(context)
     with open(config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+    from so101_sim.device_stop import command_prefix
+
     core = str(LaunchConfiguration("perception_core").perform(context) or "").strip()
-    prefix = f"taskset -c {core}" if core else ""
+    # The guard takes the launch's signals. The webcam is its child, in another
+    # session, and receives one SIGINT. A follow-up SIGTERM or a signal to this
+    # launch's process group does not reach the driver while it is stopping.
+    prefix = command_prefix(core)
     nodes = []
     roles = ("mount",) if twin else ("mount", "arm")
     for role in roles:
@@ -87,8 +92,7 @@ def _cameras(context):
             executable="v4l2_camera_node",
             name=f"camera_{role}",
         )
-        if prefix:
-            node["prefix"] = prefix
+        node["prefix"] = prefix
         nodes.append(Node(
             **node,
             parameters=[{

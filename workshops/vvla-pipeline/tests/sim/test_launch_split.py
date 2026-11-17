@@ -77,6 +77,10 @@ def _node_name(node) -> str:
     return node._Node__node_name
 
 
+def _prefix(node) -> str:
+    return "".join(getattr(part, "text", "") for part in node._ExecuteLocal__process_description.prefix)
+
+
 def test_the_twin_camera_launch_starts_only_the_mount_webcam(tmp_path):
     """``arm:=false cameras:=true digital_twin:=true`` is the camera half of ``run_pipeline.sh``."""
     from launch_ros.actions import Node
@@ -87,6 +91,7 @@ def test_the_twin_camera_launch_starts_only_the_mount_webcam(tmp_path):
     assert len(nodes) == 1 and isinstance(nodes[0], Node)
     assert nodes[0].node_package == "v4l2_camera"
     assert _node_name(nodes[0]) == "camera_mount"
+    assert "so101_sim.device_stop" in _prefix(nodes[0])
 
 
 def test_the_twin_arm_launch_with_cameras_starts_the_mount_webcam_not_the_arm(tmp_path):

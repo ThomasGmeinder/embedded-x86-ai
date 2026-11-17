@@ -89,6 +89,7 @@ def test_the_notebook_starts_the_pipeline_launch():
     cores = load_config()["cores"]
     text = " ".join(launch_argv(arm=True, cameras=False, digital_twin=True, dry_run=False))
     assert "strix_vla.launch.py" in text
+    assert "--noninteractive" in text
     assert "arm:=true" in text and "cameras:=false" in text
     assert "digital_twin:=true" in text and "dry_run:=false" in text
     assert f"twin_core:={cores['twin']}" in text

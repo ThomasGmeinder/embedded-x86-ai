@@ -67,7 +67,7 @@ def launch_argv(
         raise RuntimeError("ros2 is not on PATH: source /opt/ros/jazzy/setup.bash first")
     cores = load_config(config).get("cores") or {}
     argv = [
-        sys.executable, ros2, "launch", str(LAUNCH),
+        sys.executable, ros2, "launch", "--noninteractive", str(LAUNCH),
         f"arm:={str(arm).lower()}",
         f"cameras:={str(cameras).lower()}",
         f"digital_twin:={str(digital_twin).lower()}",

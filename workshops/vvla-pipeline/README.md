@@ -182,7 +182,7 @@ The same three cores, by program. On the real arm the controller node shares cor
 </tbody>
 </table>
 
-The digital-twin notebook runs on the same launches. `./run_pipeline.sh --digital-twin` and `./run_notebooks.sh` both start the twin with `python -m so101_sim.stack` (the camera launch, then the arm launch), so MuJoCo is on core 2, `move_group` and MoveIt Servo on core 3, and the mount webcam on core 4. The notebook kernel takes the place of the control and perception processes and the console window: it runs the models, the voice, and the behaviors itself, and it is not pinned. `run_notebooks.sh` starts `llama-server` first, and that server keeps every core.
+The digital-twin notebook runs on the same launches. `./run_pipeline.sh --digital-twin` execs `python -m so101_sim.stack serve`. The notebook's body cell calls `so101_sim.stack.start_digital_twin()`, which starts the same camera launch and arm launch. MuJoCo is on core 2, `move_group` and MoveIt Servo on core 3, and the mount webcam on core 4. The notebook kernel takes the place of the control and perception processes and the console window: it runs the models, the voice, and the behaviors itself, and it is not pinned. `run_notebooks.sh` starts `llama-server` first, and that server keeps every core. It does not start the launches; the kernel's exit stops them.
 
 A hop window goes to Gemma while the person is still talking. [Voice latency](#voice-latency) is that hop, and the samples in it are not denoised.
 
