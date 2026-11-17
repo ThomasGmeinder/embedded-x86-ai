@@ -16,13 +16,11 @@
 #                                         #   shown in the twin console window
 #   ./run_pipeline.sh --headless          # no preview windows
 #
-# Starts launch/strix_vla.launch.py in the background, as two independent
-# launches: the webcam nodes when a camera's use_ros2 is set, and the arm
-# bringup (MuJoCo twin, mock hardware, or the Feetech bus) when robot.use_ros2
-# is set. ros2 launch ends everything in a launch when one of its parts raises
-# (a missing xacro, an absent arm), so the cameras never share a launch with
-# the arm. Then it runs the orchestrator, whose MoveIt arm waits for the
-# controllers.
+# Execs ``python -m so101_sim.stack serve``. That process starts the webcam
+# launch and the arm launch (they stay apart: ros2 launch ends a whole launch
+# when one part raises), then perception, the OpenCV console, and control, on
+# the cores in config/pipeline.yaml. It stops them when the console window is
+# closed, when control exits, or on Ctrl-C.
 set -eo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
@@ -85,147 +83,6 @@ if [[ "$NPU_CONFIGURED" == "yes" ]]; then
   }
 fi
 
-USE_ROS2="$(python - <<'PY'
-from vla_pipeline.utils.config import load_config
-cfg = load_config()
-robot = str(cfg["robot"].get("use_ros2", False)).lower()
-cams = cfg.get("cameras") or {}
-cam_ros2 = any(str((cams.get(r) or {}).get("use_ros2", False)).lower() == "true"
-               for r in ("mount", "arm"))
-print(f"{robot} {str(cam_ros2).lower()}")
-PY
-)"
-ROBOT_ROS2="${USE_ROS2%% *}"
-CAMERA_ROS2="${USE_ROS2##* }"
-
-LAUNCH_PIDS=()
-SIDE_PIDS=()
-CONTROL_PID=""
-stop_group() {
-  local pid="$1" sig="${2:-TERM}"
-  if kill -0 "$pid" 2>/dev/null; then
-    # setsid makes this pid the group leader, so the signal also reaches
-    # llama-server, which perception started.
-    kill -"$sig" -- "-$pid" 2>/dev/null || kill -"$sig" "$pid" 2>/dev/null || true
-  fi
-}
-# Returns when this process has exited. No clock is involved.
-reap() {
-  wait "$1" 2>/dev/null || true
-}
-cleanup() {
-  # Perception and the console go first, so a late command cannot arrive while
-  # the control process is parking the arm. Then the launches. Each launch is
-  # a background job, so it and the servo wrapper inherit SIGINT ignored.
-  # SIGTERM is the signal the wrapper traps. Control is its own session, so
-  # the terminal's Ctrl-C does not reach it; this function does.
-  trap '' INT
-  local pid
-  for pid in "${SIDE_PIDS[@]}"; do
-    stop_group "$pid" TERM
-  done
-  for pid in "${SIDE_PIDS[@]}"; do
-    reap "$pid"
-  done
-  if [[ -n "${CONTROL_PID:-}" ]]; then
-    stop_group "$CONTROL_PID" TERM
-    reap "$CONTROL_PID"
-  fi
-  for pid in "${LAUNCH_PIDS[@]}"; do
-    stop_group "$pid" TERM
-  done
-  for pid in "${LAUNCH_PIDS[@]}"; do
-    reap "$pid"
-  done
-}
-trap cleanup EXIT
-
-DRY=""
-SIM=""
-for a in "$@"; do
-  [[ "$a" == "--dry-run" ]] && DRY="--dry-run"
-  [[ "$a" == "--digital-twin" ]] && SIM="--digital-twin"
-done
-
-if [[ "$ROBOT_ROS2" == "true" || "$CAMERA_ROS2" == "true" ]]; then
-  command -v ros2 >/dev/null || { echo "ROS 2 not found - install ROS 2 Jazzy (/opt/ros/jazzy)." >&2; exit 1; }
-  # On the twin the wrist and scene images come from the MuJoCo plugins.
-  # The camera launch still starts the real mount webcam.
-  TWIN=false
-  [[ -n "$SIM" && -z "$DRY" && "$ROBOT_ROS2" == "true" ]] && TWIN=true
-  DRY_ARM=false
-  [[ -n "$DRY" ]] && DRY_ARM=true
-  # start_launch ARM CAMERAS: one strix_vla.launch.py in a session of its own.
-  read -r TWIN_CORE CONTROL_CORE PERCEPTION_CORE < <(python - <<'PY'
-from vla_pipeline.utils.config import load_config
-cores = load_config().get("cores") or {}
-print(cores.get("twin", ""), cores.get("control", ""), cores.get("perception", ""))
-PY
-)
-  # so101_sim.stack is the same launch the notebook starts.
-  start_launch() {
-    python -m so101_sim.stack --arm "$1" --cameras "$2" \
-      --digital-twin "$TWIN" --dry-run "$DRY_ARM" &
-    LAUNCH_PIDS+=("$!")
-  }
-  if [[ "$CAMERA_ROS2" == "true" ]]; then
-    echo "Starting the camera nodes..."
-    start_launch false true
-  fi
-  if [[ "$ROBOT_ROS2" == "true" ]]; then
-    echo "Starting the arm nodes (digital twin: $TWIN)..."
-    start_launch true false
-  fi
-fi
-
-# setsid so the stored pid is a process group. A backgrounded shell function
-# would make $! the shell, and a signal to it would leave python and
-# llama-server running.
-start_side() {
-  if [[ -n "${1:-}" ]]; then
-    setsid taskset -c "$1" "${@:2}" &
-  else
-    setsid "${@:2}" &
-  fi
-  SIDE_PIDS+=("$!")
-}
-# The cores are read with the launches. A run with neither arm nor cameras
-# still reads them here.
-if [[ -z "${TWIN_CORE+x}" ]]; then
-  read -r TWIN_CORE CONTROL_CORE PERCEPTION_CORE < <(python - <<'PY'
-from vla_pipeline.utils.config import load_config
-cores = load_config().get("cores") or {}
-print(cores.get("twin", ""), cores.get("control", ""), cores.get("perception", ""))
-PY
-)
-fi
-start_side "$PERCEPTION_CORE" python -m vla_pipeline.perception "$@"
-CONSOLE=true
-CONSOLE_PID=""
-for a in "$@"; do
-  [[ "$a" == "--no-console" || "$a" == "--headless" ]] && CONSOLE=false
-done
-if [[ -n "$SIM" && "$CONSOLE" == true ]]; then
-  start_side "$TWIN_CORE" python -m vla_pipeline.console_main "$@"
-  CONSOLE_PID="${SIDE_PIDS[-1]}"
-fi
-# Control reads typed commands from stdin under --text-commands. A background
-# job's stdin is /dev/null, so this redirect keeps the script's own stdin.
-if [[ -n "$CONTROL_CORE" ]]; then
-  setsid taskset -c "$CONTROL_CORE" python -m vla_pipeline.main --no-console "$@" <&0 &
-else
-  setsid python -m vla_pipeline.main --no-console "$@" <&0 &
-fi
-CONTROL_PID=$!
-trap 'for pid in "${SIDE_PIDS[@]}"; do stop_group "$pid" TERM; done; stop_group "$CONTROL_PID" TERM' INT
-set +e
-# The window process exits when the window is closed. That exit, or the
-# control process exiting, ends this script. cleanup then stops the rest.
-if [[ -n "$CONSOLE_PID" ]]; then
-  wait -n "$CONSOLE_PID" "$CONTROL_PID"
-else
-  wait "$CONTROL_PID"
-fi
-status=$?
-set -e
-exit "$status"
+# so101_sim.stack serve is the process that starts the stack and stops it.
+# exec so Ctrl-C reaches that process, and typed commands stay on its stdin.
+exec python -m so101_sim.stack serve "$@"

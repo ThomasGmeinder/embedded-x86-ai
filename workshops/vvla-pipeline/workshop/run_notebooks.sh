@@ -25,10 +25,11 @@
 #      stops when you quit Jupyter.
 #   3. Opens the always-on-top resource HUD (CPU% / GPU% / NPU inf/s) so you
 #      can watch the devices light up while a cell runs. It closes with Jupyter.
-#   4. Starts the digital twin (the camera and arm launches of
-#      ../run_pipeline.sh --digital-twin) and launches Jupyter Lab in
-#      workshop/ (browse the notebooks/ folder). Ctrl-C stops the twin, shuts
-#      that server's kernels down and releases the webcam.
+#   4. Launches Jupyter Lab in workshop/ (browse the notebooks/ folder).
+#      The digital-twin notebook starts the camera and arm launches, the same
+#      startup as ../run_pipeline.sh. Ctrl-C shuts
+#      that server's kernels down; the kernel's exit stops those launches
+#      and releases the webcam.
 #
 # Usage:
 #   ./run_notebooks.sh                 # launch Jupyter Lab (+ llama server + HUD)
@@ -130,8 +131,8 @@ say "Installing vla_pipeline from this clone"
 VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/ensure_voice.sh"
 
 # --- 2. llama-server on the iGPU (component 1's brain, torn down on exit) ----
-# notebook_session.sh owns Ctrl-C. It SIGTERMs the notebook server and
-# SIGINTs the digital-twin launches in LAUNCH_PIDS.
+# notebook_session.sh owns Ctrl-C. It SIGTERMs the notebook server. The
+# kernel's exit stops the digital-twin launches the notebook started.
 LLAMA_PID=""
 MONITOR_PID=""
 JUPYTER_PID=""
@@ -210,29 +211,14 @@ with open(path, "w") as fh:
     fh.write("\n")
 PY
 
-# The digital twin. Same two Python launches as ./run_pipeline.sh --digital-twin,
-# before the kernel, and the same discovery: no localhost profile. That profile
-# turns multicast off, and with FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA the arm
-# nodes then never see robot_description, so no joint states are published.
-# Not started during --test: the docs tests start their own twin on ROS
-# domain 93, and this shell's domain is often 93.
-# The notebook connects on TWIN_ROS_DOMAIN_ID (default 87).
-start_digital_twin() {
-  cd "$REPO_ROOT"
-  "$PY" -m so101_sim.stack --arm false --cameras true --digital-twin true --dry-run false \
-    >>"${WORKSHOP_DIR}/logs/twin.log" 2>&1 &
-  LAUNCH_PIDS+=("$!")
-  "$PY" -m so101_sim.stack --arm true --cameras false --digital-twin true --dry-run false \
-    >>"${WORKSHOP_DIR}/logs/twin.log" 2>&1 &
-  LAUNCH_PIDS+=("$!")
-}
+# The digital-twin notebook starts the launches, and they inherit this domain
+# and this discovery. The localhost profile turns multicast off, and with
+# FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA the arm nodes then never see
+# robot_description, so no joint states are published. The notebook connects
+# on TWIN_ROS_DOMAIN_ID (default 87). --test exits above and uses its own domain.
 export TWIN_ROS_DOMAIN_ID="${TWIN_ROS_DOMAIN_ID:-87}"
 export ROS_DOMAIN_ID="${TWIN_ROS_DOMAIN_ID}"
 unset FASTRTPS_DEFAULT_PROFILES_FILE
-mkdir -p "${WORKSHOP_DIR}/logs"
-say "Starting the digital twin: the camera and arm launches of ./run_pipeline.sh --digital-twin"
-say "  log: ${WORKSHOP_DIR}/logs/twin.log"
-start_digital_twin
 
 say "Launching Jupyter ${LAUNCHER} - the workshop kernel is auto-selected"
 cd "$WORKSHOP_DIR"

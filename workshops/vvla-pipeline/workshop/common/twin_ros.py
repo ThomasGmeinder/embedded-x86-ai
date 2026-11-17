@@ -7,9 +7,10 @@
 
 """The digital twin behind ROS 2, for one notebook kernel (PROVIDED).
 
-The digital-twin notebook connects to the twin ``./run_notebooks.sh`` already
-started: the camera and arm launches of ``./run_pipeline.sh --digital-twin``.
-:meth:`TwinSession.attach` does not launch and does not stop them. The constructor still
+The digital-twin notebook starts the twin with
+:func:`so101_sim.stack.start_digital_twin`: the camera and arm launches of
+``./run_pipeline.sh --digital-twin``. :meth:`TwinSession.attach` does not
+launch and does not stop them. The kernel's exit stops the launches. The constructor still
 starts ``launch/so101_control.launch.py hardware_type:=mujoco`` for a test
 that owns its own twin. :class:`~vla_pipeline.robot.moveit_arm.MoveItArm` is
 constructed before this process initializes rclpy: doing that first makes
@@ -334,13 +335,14 @@ class TwinSession:
         domain_id: int | None = None,
         ready_timeout_s: float = 60.0,
     ) -> TwinSession:
-        """Clients for the twin ``./run_notebooks.sh`` already started.
+        """Clients for the twin :func:`so101_sim.stack.start_digital_twin` started.
 
         That twin is the camera and arm launches of
         ``./run_pipeline.sh --digital-twin``. This does not launch, take the
         domain lock, or stop them. The notebook call keeps this process's ROS
         domain and discovery, which are the ones the launches were started
-        with. Closing the session closes these clients only.
+        with. Closing the session closes these clients only. The kernel's
+        exit stops the launches.
         """
         self = cls.__new__(cls)
         # An explicit domain is a test talking to nothing. The notebook inherits
@@ -411,7 +413,7 @@ class TwinSession:
             if self._proc is None:
                 return TimeoutError(
                     f"the twin sent no {what} within {timeout_s:.0f} s. "
-                    "./run_notebooks.sh starts it before Jupyter (workshop/logs/twin.log)."
+                    "so101_sim.stack.start_digital_twin starts it (workshop/logs/twin.log)."
                 )
             return TimeoutError(
                 f"the twin node sent no {what} within {timeout_s:.0f} s:\n{_tail(self.log_path)}"
@@ -428,8 +430,8 @@ class TwinSession:
 
             if owner(self.domain_id) is None:
                 raise RuntimeError(
-                    "the digital twin is not running. Start it with ./run_notebooks.sh "
-                    "(workshop/logs/twin.log)."
+                    "the digital twin is not running. Start it with "
+                    "so101_sim.stack.start_digital_twin (workshop/logs/twin.log)."
                 )
         try:
             from vla_pipeline.robot.moveit_arm import MoveItArm

@@ -56,11 +56,11 @@ def test_the_launcher_uses_the_session_stop():
     assert 'source "${WORKSHOP_DIR}/notebook_session.sh"' in text
     assert "trap stop_session EXIT INT TERM" in text
     assert 'run_notebook_server "$PY" "$LAUNCHER" "$JUPYTER_PORT"' in text
-    # The twin starts after the --test exit and before Jupyter: the docs tests
-    # own domain 93.
+    # The notebook starts the twin. This shell only sets the domain, after --test,
+    # so the docs tests keep domain 93.
     test_exit = text.index("exit 0\nfi\n\n# --- 3.")
-    twin = text.index("\nstart_digital_twin\n")
-    assert test_exit < twin < text.index('run_notebook_server "$PY"')
+    assert test_exit < text.index("export TWIN_ROS_DOMAIN_ID") < text.index('run_notebook_server "$PY"')
+    assert "so101_sim.stack" not in text
     subprocess.run(["bash", "-n", str(LAUNCHER)], check=True)
     subprocess.run(["bash", "-n", str(SESSION)], check=True)
 
@@ -96,12 +96,11 @@ def test_the_notebook_starts_the_pipeline_launch():
     assert f"perception_core:={cores['perception']}" in text
     script = (ROOT / "run_pipeline.sh").read_text(encoding="utf-8")
     notebooks = LAUNCHER.read_text(encoding="utf-8")
-    assert 'python -m so101_sim.stack --arm "$1" --cameras "$2"' in script
-    assert "-m so101_sim.stack --arm false --cameras true --digital-twin true --dry-run false" in notebooks
-    assert "-m so101_sim.stack --arm true --cameras false --digital-twin true --dry-run false" in notebooks
+    notebook = (ROOT / "workshop/notebooks/03_integration/02_digital_twin.ipynb").read_text(encoding="utf-8")
+    assert "python -m so101_sim.stack serve" in script
+    assert "start_digital_twin()" in notebook
     assert '"so101_sim.bringup", "kernel"' in notebooks
-    body = notebooks.split("start_digital_twin() {", 1)[1].split("\n}\n", 1)[0]
-    assert "run_pipeline.sh" not in body
+    assert "so101_sim.stack" not in notebooks
 
 
 def test_an_attached_session_does_not_own_a_launch(monkeypatch):
@@ -113,7 +112,7 @@ def test_an_attached_session_does_not_own_a_launch(monkeypatch):
             monkeypatch.setenv(name, os.environ[name])
         else:
             monkeypatch.delenv(name, raising=False)
-    with pytest.raises(RuntimeError, match="run_notebooks.sh"):
+    with pytest.raises(RuntimeError, match="start_digital_twin"):
         TwinSession.attach({}, domain_id=113, ready_timeout_s=1.0)
 
 
