@@ -3,5 +3,5 @@
 __pycache__/
 *.egg-info/
 scripted_testing/
-vla_testing/
+vla_testing/**/*.mp4
 .pytest_cache/

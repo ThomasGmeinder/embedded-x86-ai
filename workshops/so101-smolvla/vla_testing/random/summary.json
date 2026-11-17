@@ -1,0 +1,1702 @@
+[
+  {
+    "scenario": "seed-00000",
+    "cube_start_xy": [
+      0.2974,
+      -0.001
+    ],
+    "cube_end_xyz": [
+      0.3126,
+      0.0582,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -165.25,
+    "seed": 0
+  },
+  {
+    "scenario": "seed-00001",
+    "cube_start_xy": [
+      0.2724,
+      0.1351
+    ],
+    "cube_end_xyz": [
+      0.2591,
+      0.2004,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -128.1,
+    "seed": 1
+  },
+  {
+    "scenario": "seed-00002",
+    "cube_start_xy": [
+      0.2223,
+      0.0047
+    ],
+    "cube_end_xyz": [
+      0.231,
+      0.0503,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 113.12,
+    "seed": 2
+  },
+  {
+    "scenario": "seed-00003",
+    "cube_start_xy": [
+      0.1871,
+      -0.0076
+    ],
+    "cube_end_xyz": [
+      0.2612,
+      0.0714,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 108.46,
+    "seed": 3
+  },
+  {
+    "scenario": "seed-00004",
+    "cube_start_xy": [
+      0.3586,
+      0.0473
+    ],
+    "cube_end_xyz": [
+      0.2598,
+      0.047,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 171.45,
+    "seed": 4
+  },
+  {
+    "scenario": "seed-00005",
+    "cube_start_xy": [
+      0.331,
+      0.1066
+    ],
+    "cube_end_xyz": [
+      0.3769,
+      0.1209,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 5.52,
+    "seed": 5
+  },
+  {
+    "scenario": "seed-00006",
+    "cube_start_xy": [
+      0.2776,
+      0.0137
+    ],
+    "cube_end_xyz": [
+      0.2762,
+      -0.0074,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -47.14,
+    "seed": 6
+  },
+  {
+    "scenario": "seed-00007",
+    "cube_start_xy": [
+      0.295,
+      0.1244
+    ],
+    "cube_end_xyz": [
+      0.3065,
+      0.171,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 99.25,
+    "seed": 7
+  },
+  {
+    "scenario": "seed-00008",
+    "cube_start_xy": [
+      0.2354,
+      0.1425
+    ],
+    "cube_end_xyz": [
+      0.2485,
+      0.0735,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -65.26,
+    "seed": 8
+  },
+  {
+    "scenario": "seed-00009",
+    "cube_start_xy": [
+      0.344,
+      0.0024
+    ],
+    "cube_end_xyz": [
+      0.2454,
+      0.073,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 37.13,
+    "seed": 9
+  },
+  {
+    "scenario": "seed-00010",
+    "cube_start_xy": [
+      0.3612,
+      -0.0135
+    ],
+    "cube_end_xyz": [
+      0.2553,
+      0.06,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 118.24,
+    "seed": 10
+  },
+  {
+    "scenario": "seed-00011",
+    "cube_start_xy": [
+      0.1957,
+      0.0449
+    ],
+    "cube_end_xyz": [
+      0.1754,
+      0.0666,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 36.54,
+    "seed": 11
+  },
+  {
+    "scenario": "seed-00012",
+    "cube_start_xy": [
+      0.2202,
+      0.1344
+    ],
+    "cube_end_xyz": [
+      0.2374,
+      0.1975,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -111.84,
+    "seed": 12
+  },
+  {
+    "scenario": "seed-00013",
+    "cube_start_xy": [
+      0.343,
+      0.1161
+    ],
+    "cube_end_xyz": [
+      0.3432,
+      0.1215,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 111.97,
+    "seed": 13
+  },
+  {
+    "scenario": "seed-00014",
+    "cube_start_xy": [
+      0.3362,
+      0.0172
+    ],
+    "cube_end_xyz": [
+      0.2362,
+      0.0765,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 72.99,
+    "seed": 14
+  },
+  {
+    "scenario": "seed-00015",
+    "cube_start_xy": [
+      0.3085,
+      0.1082
+    ],
+    "cube_end_xyz": [
+      0.3535,
+      0.1307,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -56.01,
+    "seed": 15
+  },
+  {
+    "scenario": "seed-00016",
+    "cube_start_xy": [
+      0.2834,
+      0.0311
+    ],
+    "cube_end_xyz": [
+      0.286,
+      0.0325,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -146.13,
+    "seed": 16
+  },
+  {
+    "scenario": "seed-00017",
+    "cube_start_xy": [
+      0.339,
+      -0.0228
+    ],
+    "cube_end_xyz": [
+      0.2512,
+      0.0691,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 20.79,
+    "seed": 17
+  },
+  {
+    "scenario": "seed-00018",
+    "cube_start_xy": [
+      0.2499,
+      0.0885
+    ],
+    "cube_end_xyz": [
+      0.2499,
+      0.0885,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -78.9,
+    "seed": 18
+  },
+  {
+    "scenario": "seed-00019",
+    "cube_start_xy": [
+      0.2541,
+      0.1302
+    ],
+    "cube_end_xyz": [
+      0.2561,
+      0.1462,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -81.41,
+    "seed": 19
+  },
+  {
+    "scenario": "seed-00020",
+    "cube_start_xy": [
+      0.226,
+      0.0372
+    ],
+    "cube_end_xyz": [
+      0.2393,
+      0.0513,
+      0.0225
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -136.18,
+    "seed": 20
+  },
+  {
+    "scenario": "seed-00021",
+    "cube_start_xy": [
+      0.3262,
+      0.0662
+    ],
+    "cube_end_xyz": [
+      0.2494,
+      0.0741,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 75.53,
+    "seed": 21
+  },
+  {
+    "scenario": "seed-00022",
+    "cube_start_xy": [
+      0.2433,
+      -0.0151
+    ],
+    "cube_end_xyz": [
+      0.2464,
+      -0.017,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -148.12,
+    "seed": 22
+  },
+  {
+    "scenario": "seed-00023",
+    "cube_start_xy": [
+      0.3088,
+      0.0733
+    ],
+    "cube_end_xyz": [
+      0.3173,
+      0.0733,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -133.69,
+    "seed": 23
+  },
+  {
+    "scenario": "seed-00024",
+    "cube_start_xy": [
+      0.2361,
+      0.026
+    ],
+    "cube_end_xyz": [
+      0.2449,
+      0.0448,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 26.91,
+    "seed": 24
+  },
+  {
+    "scenario": "seed-00025",
+    "cube_start_xy": [
+      0.2021,
+      -0.0549
+    ],
+    "cube_end_xyz": [
+      0.2554,
+      0.0465,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -102.02,
+    "seed": 25
+  },
+  {
+    "scenario": "seed-00026",
+    "cube_start_xy": [
+      0.2683,
+      -0.0081
+    ],
+    "cube_end_xyz": [
+      0.2406,
+      0.0565,
+      0.0272
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -155.66,
+    "seed": 26
+  },
+  {
+    "scenario": "seed-00027",
+    "cube_start_xy": [
+      0.3095,
+      0.0078
+    ],
+    "cube_end_xyz": [
+      0.3441,
+      0.0412,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -136.37,
+    "seed": 27
+  },
+  {
+    "scenario": "seed-00028",
+    "cube_start_xy": [
+      0.3404,
+      0.122
+    ],
+    "cube_end_xyz": [
+      0.2463,
+      0.0765,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 95.66,
+    "seed": 28
+  },
+  {
+    "scenario": "seed-00029",
+    "cube_start_xy": [
+      0.18,
+      0.0463
+    ],
+    "cube_end_xyz": [
+      0.2394,
+      0.0786,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 6.92,
+    "seed": 29
+  },
+  {
+    "scenario": "seed-00030",
+    "cube_start_xy": [
+      0.2172,
+      0.0308
+    ],
+    "cube_end_xyz": [
+      0.2321,
+      0.0436,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -146.78,
+    "seed": 30
+  },
+  {
+    "scenario": "seed-00031",
+    "cube_start_xy": [
+      0.3506,
+      -0.0415
+    ],
+    "cube_end_xyz": [
+      0.3173,
+      0.0539,
+      0.0199
+    ],
+    "contact": true,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 62.18,
+    "seed": 31
+  },
+  {
+    "scenario": "seed-00032",
+    "cube_start_xy": [
+      0.202,
+      0.0594
+    ],
+    "cube_end_xyz": [
+      0.1801,
+      0.0641,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -44.23,
+    "seed": 32
+  },
+  {
+    "scenario": "seed-00033",
+    "cube_start_xy": [
+      0.2587,
+      0.0587
+    ],
+    "cube_end_xyz": [
+      0.2587,
+      0.0587,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 146.92,
+    "seed": 33
+  },
+  {
+    "scenario": "seed-00034",
+    "cube_start_xy": [
+      0.1708,
+      0.1194
+    ],
+    "cube_end_xyz": [
+      0.2591,
+      0.0676,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -92.61,
+    "seed": 34
+  },
+  {
+    "scenario": "seed-00035",
+    "cube_start_xy": [
+      0.2376,
+      0.0367
+    ],
+    "cube_end_xyz": [
+      0.2363,
+      0.0483,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 156.6,
+    "seed": 35
+  },
+  {
+    "scenario": "seed-00036",
+    "cube_start_xy": [
+      0.2061,
+      0.0246
+    ],
+    "cube_end_xyz": [
+      0.176,
+      0.0264,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 141.78,
+    "seed": 36
+  },
+  {
+    "scenario": "seed-00037",
+    "cube_start_xy": [
+      0.3108,
+      0.0773
+    ],
+    "cube_end_xyz": [
+      0.3437,
+      0.0963,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -155.16,
+    "seed": 37
+  },
+  {
+    "scenario": "seed-00038",
+    "cube_start_xy": [
+      0.2672,
+      -0.0051
+    ],
+    "cube_end_xyz": [
+      0.2403,
+      0.0674,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 79.34,
+    "seed": 38
+  },
+  {
+    "scenario": "seed-00039",
+    "cube_start_xy": [
+      0.2703,
+      0.0529
+    ],
+    "cube_end_xyz": [
+      0.2587,
+      0.0536,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -131.09,
+    "seed": 39
+  },
+  {
+    "scenario": "seed-00040",
+    "cube_start_xy": [
+      0.316,
+      0.0837
+    ],
+    "cube_end_xyz": [
+      0.3334,
+      0.126,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 159.09,
+    "seed": 40
+  },
+  {
+    "scenario": "seed-00041",
+    "cube_start_xy": [
+      0.3608,
+      0.0986
+    ],
+    "cube_end_xyz": [
+      0.3632,
+      0.1277,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -134.65,
+    "seed": 41
+  },
+  {
+    "scenario": "seed-00042",
+    "cube_start_xy": [
+      0.3248,
+      0.0328
+    ],
+    "cube_end_xyz": [
+      0.3253,
+      0.0345,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 129.1,
+    "seed": 42
+  },
+  {
+    "scenario": "seed-00043",
+    "cube_start_xy": [
+      0.3005,
+      -0.0462
+    ],
+    "cube_end_xyz": [
+      0.3143,
+      0.0812,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -172.79,
+    "seed": 43
+  },
+  {
+    "scenario": "seed-00044",
+    "cube_start_xy": [
+      0.1945,
+      -0.0034
+    ],
+    "cube_end_xyz": [
+      0.2428,
+      0.0794,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -33.92,
+    "seed": 44
+  },
+  {
+    "scenario": "seed-00045",
+    "cube_start_xy": [
+      0.2846,
+      0.0507
+    ],
+    "cube_end_xyz": [
+      0.2669,
+      0.0518,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 94.91,
+    "seed": 45
+  },
+  {
+    "scenario": "seed-00046",
+    "cube_start_xy": [
+      0.3511,
+      -0.0396
+    ],
+    "cube_end_xyz": [
+      0.364,
+      0.0052,
+      0.0263
+    ],
+    "contact": true,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -81.87,
+    "seed": 46
+  },
+  {
+    "scenario": "seed-00047",
+    "cube_start_xy": [
+      0.3184,
+      0.0957
+    ],
+    "cube_end_xyz": [
+      0.3192,
+      0.0953,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -12.54,
+    "seed": 47
+  },
+  {
+    "scenario": "seed-00048",
+    "cube_start_xy": [
+      0.2475,
+      0.0642
+    ],
+    "cube_end_xyz": [
+      0.2475,
+      0.0642,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 4.97,
+    "seed": 48
+  },
+  {
+    "scenario": "seed-00049",
+    "cube_start_xy": [
+      0.2426,
+      0.0636
+    ],
+    "cube_end_xyz": [
+      0.2426,
+      0.0636,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -38.9,
+    "seed": 49
+  },
+  {
+    "scenario": "seed-00050",
+    "cube_start_xy": [
+      0.3275,
+      0.1117
+    ],
+    "cube_end_xyz": [
+      0.3263,
+      0.1087,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 17.25,
+    "seed": 50
+  },
+  {
+    "scenario": "seed-00051",
+    "cube_start_xy": [
+      0.3585,
+      0.0064
+    ],
+    "cube_end_xyz": [
+      0.2489,
+      0.0591,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -88.23,
+    "seed": 51
+  },
+  {
+    "scenario": "seed-00052",
+    "cube_start_xy": [
+      0.2932,
+      0.0598
+    ],
+    "cube_end_xyz": [
+      0.2461,
+      0.0687,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 7.04,
+    "seed": 52
+  },
+  {
+    "scenario": "seed-00053",
+    "cube_start_xy": [
+      0.1722,
+      0.0888
+    ],
+    "cube_end_xyz": [
+      0.1435,
+      0.1247,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -60.79,
+    "seed": 53
+  },
+  {
+    "scenario": "seed-00054",
+    "cube_start_xy": [
+      0.2145,
+      0.0487
+    ],
+    "cube_end_xyz": [
+      0.2317,
+      0.0435,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -151.32,
+    "seed": 54
+  },
+  {
+    "scenario": "seed-00055",
+    "cube_start_xy": [
+      0.3365,
+      0.1191
+    ],
+    "cube_end_xyz": [
+      0.3512,
+      0.1707,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -101.39,
+    "seed": 55
+  },
+  {
+    "scenario": "seed-00056",
+    "cube_start_xy": [
+      0.3152,
+      -0.0516
+    ],
+    "cube_end_xyz": [
+      0.2337,
+      0.055,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 173.09,
+    "seed": 56
+  },
+  {
+    "scenario": "seed-00057",
+    "cube_start_xy": [
+      0.3068,
+      0.0387
+    ],
+    "cube_end_xyz": [
+      0.3185,
+      0.0702,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 122.84,
+    "seed": 57
+  },
+  {
+    "scenario": "seed-00058",
+    "cube_start_xy": [
+      0.2318,
+      0.121
+    ],
+    "cube_end_xyz": [
+      0.2197,
+      0.1824,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -92.49,
+    "seed": 58
+  },
+  {
+    "scenario": "seed-00059",
+    "cube_start_xy": [
+      0.2875,
+      0.1102
+    ],
+    "cube_end_xyz": [
+      0.3141,
+      0.1297,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -137.9,
+    "seed": 59
+  },
+  {
+    "scenario": "seed-00060",
+    "cube_start_xy": [
+      0.2349,
+      -0.0496
+    ],
+    "cube_end_xyz": [
+      0.2256,
+      -0.0174,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -160.3,
+    "seed": 60
+  },
+  {
+    "scenario": "seed-00061",
+    "cube_start_xy": [
+      0.2449,
+      0.0994
+    ],
+    "cube_end_xyz": [
+      0.245,
+      0.092,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 61.61,
+    "seed": 61
+  },
+  {
+    "scenario": "seed-00062",
+    "cube_start_xy": [
+      0.2919,
+      0.0946
+    ],
+    "cube_end_xyz": [
+      0.3142,
+      0.1453,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 101.05,
+    "seed": 62
+  },
+  {
+    "scenario": "seed-00063",
+    "cube_start_xy": [
+      0.282,
+      0.1435
+    ],
+    "cube_end_xyz": [
+      0.2816,
+      0.1449,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -109.19,
+    "seed": 63
+  },
+  {
+    "scenario": "seed-00064",
+    "cube_start_xy": [
+      0.3587,
+      0.0497
+    ],
+    "cube_end_xyz": [
+      0.2417,
+      0.06,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -156.34,
+    "seed": 64
+  },
+  {
+    "scenario": "seed-00065",
+    "cube_start_xy": [
+      0.1795,
+      0.0486
+    ],
+    "cube_end_xyz": [
+      0.1806,
+      0.0539,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -45.05,
+    "seed": 65
+  },
+  {
+    "scenario": "seed-00066",
+    "cube_start_xy": [
+      0.3547,
+      0.0836
+    ],
+    "cube_end_xyz": [
+      0.2371,
+      0.0615,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -153.74,
+    "seed": 66
+  },
+  {
+    "scenario": "seed-00067",
+    "cube_start_xy": [
+      0.2529,
+      -0.0296
+    ],
+    "cube_end_xyz": [
+      0.2476,
+      -0.031,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 5.03,
+    "seed": 67
+  },
+  {
+    "scenario": "seed-00068",
+    "cube_start_xy": [
+      0.2669,
+      0.1147
+    ],
+    "cube_end_xyz": [
+      0.267,
+      0.099,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 62.47,
+    "seed": 68
+  },
+  {
+    "scenario": "seed-00069",
+    "cube_start_xy": [
+      0.2861,
+      0.0504
+    ],
+    "cube_end_xyz": [
+      0.2631,
+      0.0457,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 131.39,
+    "seed": 69
+  },
+  {
+    "scenario": "seed-00070",
+    "cube_start_xy": [
+      0.2461,
+      0.0898
+    ],
+    "cube_end_xyz": [
+      0.2461,
+      0.0898,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -64.01,
+    "seed": 70
+  },
+  {
+    "scenario": "seed-00071",
+    "cube_start_xy": [
+      0.2207,
+      0.0505
+    ],
+    "cube_end_xyz": [
+      0.2311,
+      0.0497,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 93.96,
+    "seed": 71
+  },
+  {
+    "scenario": "seed-00072",
+    "cube_start_xy": [
+      0.3376,
+      -0.0537
+    ],
+    "cube_end_xyz": [
+      0.248,
+      0.0504,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -96.68,
+    "seed": 72
+  },
+  {
+    "scenario": "seed-00073",
+    "cube_start_xy": [
+      0.2685,
+      0.0057
+    ],
+    "cube_end_xyz": [
+      0.2674,
+      0.0005,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -83.32,
+    "seed": 73
+  },
+  {
+    "scenario": "seed-00074",
+    "cube_start_xy": [
+      0.3489,
+      0.0491
+    ],
+    "cube_end_xyz": [
+      0.2486,
+      0.0653,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 63.51,
+    "seed": 74
+  },
+  {
+    "scenario": "seed-00075",
+    "cube_start_xy": [
+      0.2127,
+      -0.0244
+    ],
+    "cube_end_xyz": [
+      0.2635,
+      0.0587,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 59.13,
+    "seed": 75
+  },
+  {
+    "scenario": "seed-00076",
+    "cube_start_xy": [
+      0.3313,
+      0.1421
+    ],
+    "cube_end_xyz": [
+      0.3318,
+      0.1404,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 65.66,
+    "seed": 76
+  },
+  {
+    "scenario": "seed-00077",
+    "cube_start_xy": [
+      0.3272,
+      0.0552
+    ],
+    "cube_end_xyz": [
+      0.2466,
+      0.0772,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -92.2,
+    "seed": 77
+  },
+  {
+    "scenario": "seed-00078",
+    "cube_start_xy": [
+      0.2538,
+      0.128
+    ],
+    "cube_end_xyz": [
+      0.2561,
+      0.1411,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 6.52,
+    "seed": 78
+  },
+  {
+    "scenario": "seed-00079",
+    "cube_start_xy": [
+      0.3539,
+      -0.0407
+    ],
+    "cube_end_xyz": [
+      0.2472,
+      0.0659,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 152.31,
+    "seed": 79
+  },
+  {
+    "scenario": "seed-00080",
+    "cube_start_xy": [
+      0.3173,
+      -0.0513
+    ],
+    "cube_end_xyz": [
+      0.2499,
+      0.0616,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -166.81,
+    "seed": 80
+  },
+  {
+    "scenario": "seed-00081",
+    "cube_start_xy": [
+      0.2568,
+      -0.0127
+    ],
+    "cube_end_xyz": [
+      0.2591,
+      0.0679,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 148.33,
+    "seed": 81
+  },
+  {
+    "scenario": "seed-00082",
+    "cube_start_xy": [
+      0.3695,
+      0.116
+    ],
+    "cube_end_xyz": [
+      0.3786,
+      0.1553,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -101.63,
+    "seed": 82
+  },
+  {
+    "scenario": "seed-00083",
+    "cube_start_xy": [
+      0.2333,
+      -0.0461
+    ],
+    "cube_end_xyz": [
+      0.2733,
+      -0.009,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 46.47,
+    "seed": 83
+  },
+  {
+    "scenario": "seed-00084",
+    "cube_start_xy": [
+      0.3164,
+      0.125
+    ],
+    "cube_end_xyz": [
+      0.3158,
+      0.0751,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 89.74,
+    "seed": 84
+  },
+  {
+    "scenario": "seed-00085",
+    "cube_start_xy": [
+      0.1789,
+      0.0394
+    ],
+    "cube_end_xyz": [
+      0.2403,
+      0.0755,
+      0.029
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -13.35,
+    "seed": 85
+  },
+  {
+    "scenario": "seed-00086",
+    "cube_start_xy": [
+      0.2931,
+      -0.0199
+    ],
+    "cube_end_xyz": [
+      0.2949,
+      -0.0062,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 41.61,
+    "seed": 86
+  },
+  {
+    "scenario": "seed-00087",
+    "cube_start_xy": [
+      0.2842,
+      0.1017
+    ],
+    "cube_end_xyz": [
+      0.262,
+      0.0849,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -117.94,
+    "seed": 87
+  },
+  {
+    "scenario": "seed-00088",
+    "cube_start_xy": [
+      0.2112,
+      0.0856
+    ],
+    "cube_end_xyz": [
+      0.2347,
+      0.0883,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 67.86,
+    "seed": 88
+  },
+  {
+    "scenario": "seed-00089",
+    "cube_start_xy": [
+      0.2852,
+      0.099
+    ],
+    "cube_end_xyz": [
+      0.2668,
+      0.0963,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 83.2,
+    "seed": 89
+  },
+  {
+    "scenario": "seed-00090",
+    "cube_start_xy": [
+      0.2445,
+      0.0814
+    ],
+    "cube_end_xyz": [
+      0.2445,
+      0.0814,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 6.67,
+    "seed": 90
+  },
+  {
+    "scenario": "seed-00091",
+    "cube_start_xy": [
+      0.2266,
+      0.1271
+    ],
+    "cube_end_xyz": [
+      0.2333,
+      0.0795,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 114.95,
+    "seed": 91
+  },
+  {
+    "scenario": "seed-00092",
+    "cube_start_xy": [
+      0.2902,
+      -0.0398
+    ],
+    "cube_end_xyz": [
+      0.2541,
+      0.0887,
+      0.0302
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -53.88,
+    "seed": 92
+  },
+  {
+    "scenario": "seed-00093",
+    "cube_start_xy": [
+      0.3671,
+      0.0536
+    ],
+    "cube_end_xyz": [
+      0.3987,
+      0.0603,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -14.63,
+    "seed": 93
+  },
+  {
+    "scenario": "seed-00094",
+    "cube_start_xy": [
+      0.2179,
+      0.1027
+    ],
+    "cube_end_xyz": [
+      0.231,
+      0.099,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 79.94,
+    "seed": 94
+  },
+  {
+    "scenario": "seed-00095",
+    "cube_start_xy": [
+      0.2783,
+      0.1277
+    ],
+    "cube_end_xyz": [
+      0.2796,
+      0.1627,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": -98.58,
+    "seed": 95
+  },
+  {
+    "scenario": "seed-00096",
+    "cube_start_xy": [
+      0.3158,
+      0.0918
+    ],
+    "cube_end_xyz": [
+      0.3149,
+      0.1394,
+      0.0199
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": false,
+    "cube_yaw_deg": 17.39,
+    "seed": 96
+  },
+  {
+    "scenario": "seed-00097",
+    "cube_start_xy": [
+      0.3049,
+      0.0315
+    ],
+    "cube_end_xyz": [
+      0.2589,
+      0.0768,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 7.01,
+    "seed": 97
+  },
+  {
+    "scenario": "seed-00098",
+    "cube_start_xy": [
+      0.3587,
+      0.1153
+    ],
+    "cube_end_xyz": [
+      0.2452,
+      0.0662,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": -154.01,
+    "seed": 98
+  },
+  {
+    "scenario": "seed-00099",
+    "cube_start_xy": [
+      0.2712,
+      0.058
+    ],
+    "cube_end_xyz": [
+      0.2666,
+      0.0586,
+      0.0224
+    ],
+    "contact": false,
+    "lifted": false,
+    "in_box": true,
+    "cube_yaw_deg": 4.29,
+    "seed": 99
+  }
+]

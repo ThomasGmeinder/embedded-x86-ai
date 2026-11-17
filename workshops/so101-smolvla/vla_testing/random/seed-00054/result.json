@@ -1,0 +1,17 @@
+{
+  "scenario": "seed-00054",
+  "cube_start_xy": [
+    0.2145,
+    0.0487
+  ],
+  "cube_end_xyz": [
+    0.2317,
+    0.0435,
+    0.0224
+  ],
+  "contact": false,
+  "lifted": false,
+  "in_box": true,
+  "cube_yaw_deg": -151.32,
+  "seed": 54
+}

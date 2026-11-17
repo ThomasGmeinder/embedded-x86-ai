@@ -4,7 +4,7 @@ import numpy as np
 
 from so101_smolvla.sim import ArmSim
 from so101_smolvla.track import POWER_ON
-from so101_smolvla.vla_test import VLA_TESTING, prepare, run_scenario, scenarios
+from so101_smolvla.vla_test import VLA_TESTING, draw_cube, prepare, run_scenario, scenarios
 
 
 def test_results_go_to_vla_testing_not_scripted(tmp_path):
@@ -30,6 +30,28 @@ def test_results_go_to_vla_testing_not_scripted(tmp_path):
     assert VLA_TESTING.name == "vla_testing"
     assert "scripted_testing" not in VLA_TESTING.parts
     assert calls
+
+
+def test_a_seed_draws_the_same_cube_twice_and_is_written(tmp_path):
+    first = draw_cube(17)
+    assert draw_cube(17) == first
+    assert draw_cube(18) != first
+    xy, yaw = first
+    assert abs(xy[0] - 0.27) <= 0.10
+    assert abs(xy[1] - 0.045) <= 0.10
+
+    def predict(state, top, wrist):
+        return np.repeat(POWER_ON.reshape(1, 6), 2, axis=0)
+
+    sim = ArmSim()
+    try:
+        run_scenario(sim, predict, "seed-00017", xy, tmp_path, steps=2, yaw_rad=yaw, seed=17)
+    finally:
+        sim.close()
+    saved = json.loads((tmp_path / "seed-00017" / "result.json").read_text(encoding="utf-8"))
+    assert saved["seed"] == 17
+    assert saved["cube_start_xy"] == [round(xy[0], 4), round(xy[1], 4)]
+    assert saved["cube_yaw_deg"] == round(float(np.degrees(yaw)), 2)
 
 
 def test_scenarios_are_the_yaml_list_plus_the_scene():
