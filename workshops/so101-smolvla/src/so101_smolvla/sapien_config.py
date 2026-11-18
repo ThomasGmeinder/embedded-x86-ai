@@ -16,6 +16,21 @@ IMAGE_WIDTH = 640
 IMAGE_SHAPE = (IMAGE_HEIGHT, IMAGE_WIDTH, 3)
 ACTION_SHAPE = (6,)
 
+ROBOT_ORANGE = (1.0, 0.35, 0.0, 1.0)
+MOTOR_BLACK = (0.05, 0.05, 0.05, 1.0)
+ORANGE_ROBOT_LINKS = frozenset(
+    {
+        "base_link",
+        "shoulder_link",
+        "upper_arm_link",
+        "lower_arm_link",
+        "wrist_link",
+        "gripper_link",
+        "moving_jaw_so101_v1_link",
+        "wrist_camera_mount_link",
+    }
+)
+
 ENVIRONMENT_ARGUMENTS = {
     "task": TASK_ID,
     "task_description": None,

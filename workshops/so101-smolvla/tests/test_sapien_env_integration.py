@@ -3,7 +3,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from so101_smolvla.sapien_config import IMAGE_SHAPE, SAPIEN_PYTHON, SAPIEN_SOURCE
+from so101_smolvla.sapien_config import (
+    IMAGE_SHAPE,
+    MOTOR_BLACK,
+    ROBOT_ORANGE,
+    SAPIEN_PYTHON,
+    SAPIEN_SOURCE,
+)
 from so101_smolvla.sapien_env_client import SapienPolicyEnvironment
 
 
@@ -27,6 +33,10 @@ def test_real_sapien_reset_step_and_clean_shutdown():
         assert np.isfinite(outcome.achieved).all()
         assert Path(SAPIEN_SOURCE).is_dir()
         assert env.provenance["backend"] == "sapien"
+        assert env.provenance["robot_appearance"] == {
+            "printed_parts_rgba": list(ROBOT_ORANGE),
+            "motors_rgba": list(MOTOR_BLACK),
+        }
     finally:
         env.close()
     env.close()

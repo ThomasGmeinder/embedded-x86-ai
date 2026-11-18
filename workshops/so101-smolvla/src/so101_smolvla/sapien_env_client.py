@@ -91,6 +91,7 @@ class SapienPolicyEnvironment:
             "protocol_version": PROTOCOL_VERSION,
             "simulator_commit": hello.metadata["simulator_commit"],
             "environment_arguments": hello.metadata["environment_arguments"],
+            "robot_appearance": hello.metadata["robot_appearance"],
         }
 
     def _ensure_open(self) -> None:

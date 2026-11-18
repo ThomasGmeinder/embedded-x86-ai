@@ -7,13 +7,17 @@ import os
 import subprocess
 import sys
 import traceback
+from pathlib import Path
 
 import numpy as np
 
 from so101_smolvla.sapien_config import (
     ACTION_SHAPE,
     ENVIRONMENT_ARGUMENTS,
+    MOTOR_BLACK,
+    ORANGE_ROBOT_LINKS,
     PROTOCOL_VERSION,
+    ROBOT_ORANGE,
     SAPIEN_COMMIT,
     SAPIEN_SOURCE,
 )
@@ -39,6 +43,32 @@ def _observation(obs: dict) -> tuple[dict, np.ndarray, np.ndarray]:
         raise ValueError(f"invalid SAPIEN state {state}")
     metadata = {"state": state.tolist()}
     return metadata, obs["pixels"]["top"], obs["pixels"]["wrist"]
+
+
+def _robot_part_color(link_name: str, mesh_filename: str):
+    if link_name not in ORANGE_ROBOT_LINKS:
+        return None
+    if Path(mesh_filename).stem.startswith("sts3215_"):
+        return MOTOR_BLACK
+    return ROBOT_ORANGE
+
+
+def _configure_robot_appearance(env) -> None:
+    from sapien.render import RenderBodyComponent
+
+    inner = env._env.unwrapped
+    inner.domain_randomization_config.robot_color = None
+    for link in inner.agent.robot.links:
+        for obj in link._objs:
+            render_body = obj.entity.find_component_by_type(RenderBodyComponent)
+            if render_body is None:
+                continue
+            for render_shape in render_body.render_shapes:
+                color = _robot_part_color(link.name, render_shape.filename)
+                if color is None:
+                    continue
+                for part in render_shape.parts:
+                    part.material.set_base_color(list(color))
 
 
 def _scene_facts(env) -> dict:
@@ -99,12 +129,17 @@ def serve() -> None:
                         **ENVIRONMENT_ARGUMENTS,
                         episode_length=horizon + 10,
                     )
+                    _configure_robot_appearance(env)
                     payload = encode_payload(
                         {
                             "protocol_version": PROTOCOL_VERSION,
                             "simulator_commit": actual_commit,
                             "action_shape": list(ACTION_SHAPE),
                             "image_shape": [480, 640, 3],
+                            "robot_appearance": {
+                                "printed_parts_rgba": list(ROBOT_ORANGE),
+                                "motors_rgba": list(MOTOR_BLACK),
+                            },
                             "environment_arguments": {
                                 **ENVIRONMENT_ARGUMENTS,
                                 "episode_length": horizon + 10,
