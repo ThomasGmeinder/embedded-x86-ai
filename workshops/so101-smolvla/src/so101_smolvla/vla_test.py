@@ -337,8 +337,30 @@ def cli(argv: list[str] | None = None) -> None:
     parser.add_argument("mode", nargs="?", choices=("all", "random"), default="all")
     parser.add_argument("count", nargs="?", type=int, default=RANDOM_COUNT)
     parser.add_argument("stamp", nargs="?")
+    parser.add_argument("--backend", choices=("mujoco", "sapien"), default="mujoco")
+    parser.add_argument("--steps", type=int)
     parser.add_argument("--policy-seed-base", type=int, default=10_000)
     args = parser.parse_args(argv)
+
+    if args.backend == "sapien":
+        if args.mode != "random":
+            parser.error("the SAPIEN backend supports policy random evaluation only")
+        from so101_smolvla.sapien_rollout import DEFAULT_STEPS, run_batch
+
+        stamp = args.stamp or datetime.now().strftime("%Y%m%d-%H%M%S")
+        destination = VLA_TESTING / f"random-sapien-{stamp}"
+        rows = run_batch(
+            args.count,
+            destination=destination,
+            steps=DEFAULT_STEPS if args.steps is None else args.steps,
+            environment_seed_base=0,
+            policy_seed_base=args.policy_seed_base,
+        )
+        print(
+            f"succeeded {sum(1 for row in rows if row['success'])} of {len(rows)}",
+            flush=True,
+        )
+        return
 
     if args.mode == "random":
         count = args.count

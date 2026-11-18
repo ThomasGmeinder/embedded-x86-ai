@@ -16,6 +16,7 @@ from so101_smolvla.record import _write_clip, accumulate
 from so101_smolvla.vla_test import (
     VLA_TESTING,
     GripWatch,
+    cli,
     prepare,
     random_directory,
     run_scenario,
@@ -248,4 +249,30 @@ def test_accumulate_joins_every_clip(tmp_path):
     assert (tmp_path / "overall-top.mp4").is_file()
     assert (tmp_path / "overall-wrist.mp4").is_file()
 
-# SAPIEN command routing is tested with the separate SAPIEN backend.
+def test_cli_routes_sapien_without_constructing_mujoco(monkeypatch):
+    calls = []
+
+    def fake_run_batch(count, **kwargs):
+        calls.append((count, kwargs))
+        return [{"success": True}, {"success": False}]
+
+    monkeypatch.setattr("so101_smolvla.sapien_rollout.run_batch", fake_run_batch)
+
+    cli(
+        [
+            "random",
+            "2",
+            "fixed",
+            "--backend",
+            "sapien",
+            "--steps",
+            "3",
+            "--policy-seed-base",
+            "70",
+        ]
+    )
+
+    assert calls[0][0] == 2
+    assert calls[0][1]["steps"] == 3
+    assert calls[0][1]["policy_seed_base"] == 70
+    assert calls[0][1]["destination"].name == "random-sapien-fixed"

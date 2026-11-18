@@ -5,4 +5,5 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export PYTHONPATH=src
 export MUJOCO_GL=egl
-exec .venv/bin/python -u -m so101_smolvla.vla_test random "$@"
+exec .venv/bin/python -u -m so101_smolvla.vla_test random "$@" \
+  --backend "${BACKEND:-mujoco}"
