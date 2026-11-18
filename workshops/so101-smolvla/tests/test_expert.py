@@ -6,7 +6,7 @@ def test_expert_places_cube_and_holds():
     sim = ArmSim()
     try:
         expert = Expert(sim)
-        assert expert.run((0.22, -0.08), azimuth=0.4) is True
+        assert expert.run((0.302, -0.037), azimuth=0.0) is True
         assert sim.in_box()
         assert HOLD_STEPS == int(round(1.5 * 480))
     finally:

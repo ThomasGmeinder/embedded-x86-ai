@@ -1,7 +1,13 @@
 import numpy as np
 
 from so101_smolvla.sim import ArmSim
-from so101_smolvla.track import POWER_ON, hold_power_on, play, rollout
+from so101_smolvla.track import (
+    POWER_ON,
+    hold_power_on,
+    play,
+    rollout,
+    trajectory_metrics,
+)
 
 
 def test_power_on_pose_is_radians_and_leaves_the_cube():
@@ -52,5 +58,22 @@ def test_rollout_takes_a_new_picture_when_the_chunk_is_used():
         sim.close()
     assert out["calls"] == 3
     assert len(calls) == 3
+    assert out["policy_top"].shape == (3, 480, 640, 3)
+    assert out["policy_wrist"].shape == (3, 480, 640, 3)
     assert out["top"].shape[0] == 5
     assert out["wrist"].shape == (5, 480, 640, 3)
+    assert out["target"].shape == (5, 6)
+    assert out["commanded"].shape == (5, 6)
+    assert out["achieved"].shape == (5, 6)
+    assert out["chunk_index"].tolist() == [0, 0, 1, 1, 2]
+
+
+def test_trajectory_metrics_count_only_adjacent_moving_reversals():
+    targets = np.zeros((7, 6), dtype=np.float64)
+    targets[:, 1] = [0.0, 1.0, 2.0, 1.0, 0.95, 2.0, 3.0]
+    measured = trajectory_metrics(targets, movement_epsilon=0.1)["shoulder_lift"]
+    assert measured["moving_steps"] == 5
+    assert measured["reversal_opportunities"] == 3
+    assert measured["reversals"] == 1
+    assert measured["reversal_rate"] == 1 / 3
+    assert measured["median_step"] == 1.0

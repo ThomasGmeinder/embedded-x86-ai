@@ -5,6 +5,7 @@ Videos and results go to ``vla_testing/``. Scripted runs stay in ``scripted_test
 
 from __future__ import annotations
 
+import argparse
 import json
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+from so101_smolvla.layouts import draw_layout
 from so101_smolvla.record import _write_clip, accumulate
 from so101_smolvla.sim import PHYSICS_HZ, ArmSim
 from so101_smolvla.track import (
@@ -21,6 +23,7 @@ from so101_smolvla.track import (
     load_checkpoint,
     predict_chunk,
     rollout,
+    trajectory_metrics,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,200 +40,6 @@ def scenarios(path: Path | None = None) -> list[tuple[str, tuple[float, float] |
         x, y = float(xy[0]), float(xy[1])
         rows.append((f"cube-{x:g}-{y:g}", (x, y)))
     return rows
-
-
-def _camera_table_quad(sim: ArmSim) -> np.ndarray:
-    """Four corners, xy, where the top camera's field meets the table top.
-
-    The top camera is fixed on the base. Its vertical field is the calibrated
-    59.17°, and the 640×480 frame makes the horizontal field wider. That quad is
-    the view used to place the tray and the cube. The wrist camera moves with
-    the hand, so it does not choose the starting spots.
-    """
-    cam = sim.cam_id["top"]
-    origin = sim.data.cam_xpos[cam]
-    rotation = sim.data.cam_xmat[cam].reshape(3, 3)
-    half_vert = np.tan(np.deg2rad(float(sim.model.cam_fovy[cam])) / 2.0)
-    half_horiz = half_vert * (640.0 / 480.0)
-    corners = []
-    for side_x, side_y in ((-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)):
-        direction = rotation @ np.array([side_x * half_horiz, side_y * half_vert, -1.0])
-        direction = direction / np.linalg.norm(direction)
-        if abs(direction[2]) < 1e-8:
-            raise RuntimeError("top camera ray misses the table")
-        distance = (0.0 - origin[2]) / direction[2]
-        point = origin + distance * direction
-        corners.append(point[:2])
-    return np.asarray(corners, dtype=np.float64)
-
-
-def _inside(quad: np.ndarray, point: np.ndarray) -> bool:
-    signs = []
-    for index in range(len(quad)):
-        edge = quad[(index + 1) % len(quad)] - quad[index]
-        rel = point - quad[index]
-        signs.append(edge[0] * rel[1] - edge[1] * rel[0])
-    return all(sign >= -1e-8 for sign in signs) or all(sign <= 1e-8 for sign in signs)
-
-
-def _on_table(sim: ArmSim, point: np.ndarray) -> bool:
-    center = sim.model.body_pos[sim.model.body(name="table").id][:2]
-    half = sim.model.geom(name="table_top").size[:2]
-    return abs(point[0] - center[0]) <= half[0] and abs(point[1] - center[1]) <= half[1]
-
-
-def _corners(xy: np.ndarray, yaw: float, half: np.ndarray) -> np.ndarray:
-    cosine, sine = np.cos(yaw), np.sin(yaw)
-    rotation = np.array([[cosine, -sine], [sine, cosine]])
-    local = np.array([[half[0], half[1]], [half[0], -half[1]], [-half[0], half[1]], [-half[0], -half[1]]])
-    return xy + local @ rotation.T
-
-
-# Fingertip positions measured on the real robot, 174 cube episodes.
-# so101_sim/envs.py: object x p5..p95 is 0.172..0.368, y is -0.099..0.190.
-# That file rejects an IK scan of the same arm because the scan produced false negatives.
-FINGER_X = (0.172, 0.368)
-FINGER_Y = (-0.099, 0.190)
-
-
-def _in_fingers(point: np.ndarray) -> bool:
-    return FINGER_X[0] <= point[0] <= FINGER_X[1] and FINGER_Y[0] <= point[1] <= FINGER_Y[1]
-
-
-def _clear_of_bin(cube_xy: np.ndarray, bin_xy: np.ndarray, bin_yaw: float, bin_half: np.ndarray, cube_half: float) -> bool:
-    """The cube's bounding circle stays outside the tray rim."""
-    cosine, sine = np.cos(-bin_yaw), np.sin(-bin_yaw)
-    delta = cube_xy - bin_xy
-    local = np.array([cosine * delta[0] - sine * delta[1], sine * delta[0] + cosine * delta[1]])
-    reach = cube_half * np.sqrt(2.0) + 0.01
-    return abs(local[0]) >= bin_half[0] + reach or abs(local[1]) >= bin_half[1] + reach
-
-
-def _wrist_clips_cube(sim: ArmSim, xy: np.ndarray, yaw: float, half: float) -> bool:
-    """The power-on wrist cuts this cube with the picture edge.
-
-    The arm is already at the power-on pose. A cube fully inside or fully
-    outside the frame is kept. One that crosses the edge is the corner clip.
-    """
-    cam = sim.cam_id["wrist"]
-    origin = sim.data.cam_xpos[cam]
-    rotation = sim.data.cam_xmat[cam].reshape(3, 3)
-    half_vert = np.tan(np.deg2rad(float(sim.model.cam_fovy[cam])) / 2.0)
-    half_horiz = half_vert * (640.0 / 480.0)
-    cosine, sine = np.cos(yaw), np.sin(yaw)
-    inside = 0
-    outside = False
-    for sx in (-half, half):
-        for sy in (-half, half):
-            for sz in (-half, half):
-                world = np.array(
-                    [
-                        float(xy[0]) + cosine * sx - sine * sy,
-                        float(xy[1]) + sine * sx + cosine * sy,
-                        0.02 + sz,
-                    ]
-                )
-                local = rotation.T @ (world - origin)
-                if local[2] >= -1e-8:
-                    outside = True
-                    continue
-                ndc_x = (local[0] / -local[2]) / half_horiz
-                ndc_y = (local[1] / -local[2]) / half_vert
-                if abs(ndc_x) <= 1.0 and abs(ndc_y) <= 1.0:
-                    inside += 1
-                else:
-                    outside = True
-    # One corner in the frame is a sliver. The corner bug had two or more.
-    return inside >= 2 and outside
-
-
-# Episode 490 frame 80. At this reach pose the training wrist shows the cube and
-# the bin here. A pickup that starts elsewhere shows the checkpoint a different picture.
-REACH_ARM = np.array([-9.0, 1.6, -8.4, 90.1, 20.6, 43.9], dtype=np.float64)
-MATCH_CUBE = np.array([0.308, 0.033])
-MATCH_CUBE_YAW = np.deg2rad(-135.0)
-MATCH_BIN = np.array([0.326, 0.151])
-MATCH_BIN_YAW = np.deg2rad(-45.0)
-TRAIN_CUBE_PX = np.array([376.4, 118.3])
-TRAIN_TRAY_PX = np.array([132.1, 37.6])
-WRIST_PX = 30.0
-
-
-def _blob_center(mask: np.ndarray) -> np.ndarray | None:
-    ys, xs = np.nonzero(mask)
-    if len(xs) == 0:
-        return None
-    return np.array([xs.mean(), ys.mean()])
-
-
-def _reach_wrist_offset(frame: np.ndarray) -> tuple[float, float] | None:
-    """How far the cube and the bin sit from the training wrist, in pixels."""
-    red = frame[:, :, 0].astype(np.int16)
-    green = frame[:, :, 1].astype(np.int16)
-    blue = frame[:, :, 2].astype(np.int16)
-    cube = (blue > 100) & (green > 100) & (blue > red + 8) & (red < 220)
-    arm = (red > 60) & (red > blue + 15) & (green > blue + 8)
-    tray = ((red + green + blue) / 3 < 90) & ~arm & ~cube
-    cube_at = _blob_center(cube)
-    tray_at = _blob_center(tray)
-    if cube_at is None or tray_at is None:
-        return None
-    return (
-        float(np.linalg.norm(cube_at - TRAIN_CUBE_PX)),
-        float(np.linalg.norm(tray_at - TRAIN_TRAY_PX)),
-    )
-
-
-def draw_layout(sim: ArmSim, seed: int) -> dict:
-    """Place the bin and the cube near the training reach picture.
-
-    The bin center stays in the measured finger area. Every bin corner does not,
-    because the training bin's corners stick out of that box. The cube stays
-    outside the bin. A one-corner sliver in the power-on wrist is kept. Two or
-    more corners in that frame is the corner clip and is rejected.
-    """
-    import mujoco
-
-    sim.hold_pose(POWER_ON)
-    quad = _camera_table_quad(sim)
-    rng = np.random.Generator(np.random.PCG64(seed))
-    cube_half = float(sim.model.geom(name="cube_geom").size[0])
-    bin_half = sim.bin_half
-    for _ in range(400):
-        cube = MATCH_CUBE + rng.normal(0.0, 0.006, 2)
-        bin_xy = MATCH_BIN + rng.normal(0.0, 0.006, 2)
-        cube_yaw = float(MATCH_CUBE_YAW + rng.normal(0.0, np.deg2rad(8.0)))
-        bin_yaw = float(MATCH_BIN_YAW + rng.normal(0.0, np.deg2rad(8.0)))
-        cube_corners = _corners(cube, cube_yaw, np.array([cube_half, cube_half]))
-        if not all(_inside(quad, corner) and _on_table(sim, corner) and _in_fingers(corner) for corner in cube_corners):
-            continue
-        if not (_in_fingers(bin_xy) and _inside(quad, bin_xy) and _on_table(sim, bin_xy)):
-            continue
-        if float(np.hypot(bin_xy[0], bin_xy[1])) > 0.38:
-            continue
-        if not _clear_of_bin(cube, bin_xy, bin_yaw, bin_half, cube_half):
-            continue
-        sim.hold_pose(POWER_ON)
-        if _wrist_clips_cube(sim, cube, cube_yaw, cube_half):
-            continue
-        sim.place_bin((float(bin_xy[0]), float(bin_xy[1])), bin_yaw)
-        sim.data.qpos[sim.cube_qadr : sim.cube_qadr + 3] = (float(cube[0]), float(cube[1]), 0.02)
-        half = 0.5 * cube_yaw
-        sim.data.qpos[sim.cube_qadr + 3 : sim.cube_qadr + 7] = (np.cos(half), 0.0, 0.0, np.sin(half))
-        mujoco.mj_forward(sim.model, sim.data)
-        sim.hold_pose(REACH_ARM)
-        if sim.jaw_contains_cube_center() is not None:
-            continue
-        offset = _reach_wrist_offset(sim.render("wrist"))
-        if offset is None or offset[0] > WRIST_PX or offset[1] > WRIST_PX:
-            continue
-        return {
-            "bin_xy": (float(bin_xy[0]), float(bin_xy[1])),
-            "bin_yaw": bin_yaw,
-            "cube_xy": (float(cube[0]), float(cube[1])),
-            "cube_yaw": cube_yaw,
-        }
-    raise RuntimeError(f"seed {seed} could not match the training reach picture")
 
 
 def seed_policy(seed: int) -> None:
@@ -325,19 +134,39 @@ def run_scenario(
     root: Path,
     steps: int = EVAL_STEPS,
     yaw_rad: float | None = None,
-    seed: int | None = None,
+    layout_seed: int | None = None,
+    policy_seed: int | None = None,
     empty_force: float = 0.0,
 ) -> dict:
-    if seed is not None:
-        seed_policy(seed)
+    if policy_seed is not None:
+        seed_policy(policy_seed)
     start = prepare(sim, cube_xy, yaw_rad=yaw_rad)
     watch = GripWatch(empty_force)
-    out = rollout(sim, predict, steps=steps, chunk_size=CHUNK, watch=watch)
+    out = rollout(
+        sim,
+        predict,
+        steps=steps,
+        chunk_size=CHUNK,
+        watch=watch,
+    )
     grip = watch.chosen()
     folder = root / name
     _write_clip(out["top"], folder / "top.mp4")
     _write_clip(out["wrist"], folder / "wrist.mp4")
+    np.savez_compressed(
+        folder / "trajectory.npz",
+        target=out["target"],
+        commanded=out["commanded"],
+        achieved=out["achieved"],
+        chunk_index=out["chunk_index"],
+    )
+    np.savez_compressed(
+        folder / "policy-observations.npz",
+        top=out["policy_top"],
+        wrist=out["policy_wrist"],
+    )
     end = sim.cube_pos()
+    motion = trajectory_metrics(out["target"])
     row = {
         "scenario": name,
         "cube_start_xy": start,
@@ -347,21 +176,39 @@ def run_scenario(
         "in_box": bool(sim.in_box()),
         "cube_yaw_deg": None if yaw_rad is None else round(float(np.degrees(yaw_rad)), 2),
         "bin_xy": [round(float(v), 4) for v in sim.data.xpos[sim.box_body][:2]],
-        "seed": seed,
+        "layout_seed": layout_seed,
+        "policy_seed": policy_seed,
+        "backend": "mujoco",
         "grip": grip["contact"],
         "grip_step": grip["step"],
         "finger_face_deg": grip["finger_face_deg"],
         "grip_roll_deg": grip["roll_deg"],
         "picked_up": watch.picked_up,
         "held": watch.held,
+        "trajectory": motion,
     }
     (folder / "result.json").write_text(json.dumps(row, indent=2) + "\n", encoding="utf-8")
     return row
 
 
-def run_all(sim: ArmSim, predict, root: Path | None = None, steps: int = EVAL_STEPS) -> list[dict]:
+def run_all(
+    sim: ArmSim,
+    predict,
+    root: Path | None = None,
+    steps: int = EVAL_STEPS,
+) -> list[dict]:
     dest = root or VLA_TESTING
-    rows = [run_scenario(sim, predict, name, xy, dest, steps=steps) for name, xy in scenarios()]
+    rows = [
+        run_scenario(
+            sim,
+            predict,
+            name,
+            xy,
+            dest,
+            steps=steps,
+        )
+        for name, xy in scenarios()
+    ]
     dest.mkdir(parents=True, exist_ok=True)
     (dest / "summary.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
     return rows
@@ -402,19 +249,24 @@ def write_report(rows: list[dict], dest: Path) -> Path:
             f"Finger-to-face angle at grip: mean {mean:.1f}°, "
             f"median {float(np.median(angles)):.1f}°, max {max(angles):.1f}°. Ideal is 0°.",
             "",
-            "| Seed | In bin | Picked up | Held | Jaw contact | Finger angle ° |",
-            "|---:|---|---|---|---|---:|",
+            "| Layout seed | Policy seed | In bin | Picked up | Held | Jaw contact | Finger angle ° | Lift reversals | Elbow reversals |",
+            "|---:|---:|---|---|---|---|---:|---:|---:|",
         ]
     )
     for row in rows:
+        lift = row["trajectory"]["shoulder_lift"]["reversal_rate"]
+        elbow = row["trajectory"]["elbow_flex"]["reversal_rate"]
         lines.append(
-            "| {seed} | {box} | {picked} | {held} | {grip} | {angle:.1f} |".format(
-                seed=row["seed"],
+            "| {layout_seed} | {policy_seed} | {box} | {picked} | {held} | {grip} | {angle:.1f} | {lift:.1%} | {elbow:.1%} |".format(
+                layout_seed=row["layout_seed"],
+                policy_seed=row["policy_seed"],
                 box="pass" if row["in_box"] else "fail",
                 picked="pass" if row["picked_up"] else "fail",
                 held="pass" if row["held"] else "fail",
                 grip="pass" if row["grip"] else "fail",
                 angle=row["finger_face_deg"],
+                lift=lift,
+                elbow=elbow,
             )
         )
     path = dest / "REPORT.md"
@@ -428,8 +280,9 @@ def run_random(
     count: int = RANDOM_COUNT,
     root: Path | None = None,
     stamp: str | None = None,
+    policy_seed_base: int = 10_000,
 ) -> list[dict]:
-    """Seeds ``0`` .. ``count - 1``. The same seed draws the same cube."""
+    """Layout seeds ``0`` .. ``count - 1`` with independent policy seeds."""
     dest = random_directory(root or VLA_TESTING, stamp or datetime.now().strftime("%Y%m%d-%H%M%S"))
     baseline = empty_close_force(sim)
     rows = []
@@ -450,7 +303,8 @@ def run_random(
                 layout["cube_xy"],
                 dest,
                 yaw_rad=layout["cube_yaw"],
-                seed=seed,
+                layout_seed=seed,
+                policy_seed=policy_seed_base + seed,
                 empty_force=baseline,
             )
         )
@@ -478,11 +332,17 @@ def main() -> None:
     print(json.dumps(rows), flush=True)
 
 
-if __name__ == "__main__":
-    import sys
+def cli(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", nargs="?", choices=("all", "random"), default="all")
+    parser.add_argument("count", nargs="?", type=int, default=RANDOM_COUNT)
+    parser.add_argument("stamp", nargs="?")
+    parser.add_argument("--policy-seed-base", type=int, default=10_000)
+    args = parser.parse_args(argv)
 
-    if len(sys.argv) > 1 and sys.argv[1] == "random":
-        count = int(sys.argv[2]) if len(sys.argv) > 2 else RANDOM_COUNT
+    if args.mode == "random":
+        count = args.count
+        stamp = args.stamp
         sim = ArmSim()
         try:
             print("loading checkpoint", flush=True)
@@ -491,10 +351,20 @@ if __name__ == "__main__":
             def predict(state, top, wrist):
                 return predict_chunk(policy, pre, post, state, top, wrist)
 
-            rows = run_random(sim, predict, count=count)
+            rows = run_random(
+                sim,
+                predict,
+                count=count,
+                stamp=stamp,
+                policy_seed_base=args.policy_seed_base,
+            )
         finally:
             sim.close()
         placed = sum(1 for row in rows if row["in_box"])
         print(f"placed {placed} of {len(rows)}", flush=True)
     else:
         main()
+
+
+if __name__ == "__main__":
+    cli()

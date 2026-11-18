@@ -3,17 +3,19 @@ from pathlib import Path
 
 import numpy as np
 
+from so101_smolvla.layouts import (
+    _clear_of_bin,
+    _corners,
+    _in_fingers,
+    _wrist_clips_cube,
+    draw_layout,
+)
 from so101_smolvla.sim import ArmSim
 from so101_smolvla.track import POWER_ON
 from so101_smolvla.record import _write_clip, accumulate
 from so101_smolvla.vla_test import (
     VLA_TESTING,
     GripWatch,
-    _clear_of_bin,
-    _corners,
-    _in_fingers,
-    _wrist_clips_cube,
-    draw_layout,
     prepare,
     random_directory,
     run_scenario,
@@ -77,9 +79,11 @@ def test_results_go_to_vla_testing_not_scripted(tmp_path):
         sim.close()
     assert (root / "scene" / "top.mp4").is_file()
     assert (root / "scene" / "wrist.mp4").is_file()
+    assert (root / "scene" / "policy-observations.npz").is_file()
     saved = json.loads((root / "scene" / "result.json").read_text(encoding="utf-8"))
     assert saved["scenario"] == "scene"
     assert saved["cube_start_xy"] == row["cube_start_xy"]
+    assert saved["backend"] == "mujoco"
     assert "scripted_testing" not in root.parts
     assert VLA_TESTING.name == "vla_testing"
     assert "scripted_testing" not in VLA_TESTING.parts
@@ -92,8 +96,10 @@ def test_a_seed_places_the_cube_outside_the_tray_and_is_written(tmp_path):
         first = draw_layout(sim, 17)
         assert draw_layout(sim, 17) == first
         assert draw_layout(sim, 18) != first
+        bins = set()
         for seed in range(40):
             layout = draw_layout(sim, seed)
+            bins.add(tuple(round(value, 4) for value in layout["bin_xy"]))
             assert _clear_of_bin(
                 np.array(layout["cube_xy"]),
                 np.array(layout["bin_xy"]),
@@ -106,6 +112,7 @@ def test_a_seed_places_the_cube_outside_the_tray_and_is_written(tmp_path):
             for corner in _corners(np.array(layout["cube_xy"]), layout["cube_yaw"], np.array([0.02, 0.02])):
                 assert _in_fingers(corner)
             assert not _wrist_clips_cube(sim, np.array(layout["cube_xy"]), layout["cube_yaw"], 0.02)
+        assert len(bins) > 30
         assert not _in_fingers(np.array([0.4573, -0.1392]))
         sim.hold_pose(POWER_ON)
         assert _wrist_clips_cube(sim, np.array([0.2909, 0.1118]), np.deg2rad(15.7), 0.02)
@@ -114,12 +121,24 @@ def test_a_seed_places_the_cube_outside_the_tray_and_is_written(tmp_path):
         def predict(state, top, wrist):
             return np.repeat(POWER_ON.reshape(1, 6), 2, axis=0)
 
-        run_scenario(sim, predict, "seed-00017", xy, tmp_path, steps=2, yaw_rad=yaw, seed=17)
+        run_scenario(
+            sim,
+            predict,
+            "seed-00017",
+            xy,
+            tmp_path,
+            steps=2,
+            yaw_rad=yaw,
+            layout_seed=17,
+            policy_seed=10017,
+        )
     finally:
         sim.close()
     saved = json.loads((tmp_path / "seed-00017" / "result.json").read_text(encoding="utf-8"))
-    assert saved["seed"] == 17
+    assert saved["layout_seed"] == 17
+    assert saved["policy_seed"] == 10017
     assert "finger_face_deg" in saved
+    assert "trajectory" in saved
     assert saved["grip"] in (True, False)
     assert saved["cube_start_xy"] == [round(xy[0], 4), round(xy[1], 4)]
     assert saved["cube_yaw_deg"] == round(float(np.degrees(yaw)), 2)
@@ -164,20 +183,30 @@ def test_finger_face_angle_follows_the_cube_yaw():
 def test_the_report_links_the_video_and_scores_each_seed(tmp_path):
     rows = [
         {
-            "seed": 0,
+            "layout_seed": 0,
+            "policy_seed": 10000,
             "in_box": True,
             "picked_up": True,
             "held": False,
             "grip": True,
             "finger_face_deg": 0.0,
+            "trajectory": {
+                "shoulder_lift": {"reversal_rate": 0.05},
+                "elbow_flex": {"reversal_rate": 0.1},
+            },
         },
         {
-            "seed": 1,
+            "layout_seed": 1,
+            "policy_seed": 10001,
             "in_box": False,
             "picked_up": False,
             "held": False,
             "grip": False,
             "finger_face_deg": 35.0,
+            "trajectory": {
+                "shoulder_lift": {"reversal_rate": 0.4},
+                "elbow_flex": {"reversal_rate": 0.5},
+            },
         },
     ]
     path = write_report(rows, tmp_path)
@@ -188,11 +217,23 @@ def test_the_report_links_the_video_and_scores_each_seed(tmp_path):
     assert "| Cube picked up | 1 | 1 |" in text
     assert "| Cube held | 0 | 2 |" in text
     assert "Ideal is 0°" in text
-    assert "| 1 | fail | fail | fail | fail | 35.0 |" in text
+    assert "| 1 | 10001 | fail | fail | fail | fail | 35.0 | 40.0% | 50.0% |" in text
 
 
 def test_random_directory_carries_the_timestamp():
     assert random_directory(Path("/tmp/vla"), "20261118-090200") == Path("/tmp/vla/random-20261118-090200")
+
+
+def test_prepare_moves_only_the_requested_cube():
+    sim = ArmSim()
+    try:
+        default = prepare(sim, None)
+        moved = prepare(sim, (0.14, 0.18))
+    finally:
+        sim.close()
+    assert abs(moved[0] - 0.14) < 1e-4
+    assert abs(moved[1] - 0.18) < 1e-4
+    assert default != moved
 
 
 def test_accumulate_joins_every_clip(tmp_path):
@@ -207,14 +248,4 @@ def test_accumulate_joins_every_clip(tmp_path):
     assert (tmp_path / "overall-top.mp4").is_file()
     assert (tmp_path / "overall-wrist.mp4").is_file()
 
-
-def test_prepare_moves_only_the_requested_cube():
-    sim = ArmSim()
-    try:
-        default = prepare(sim, None)
-        moved = prepare(sim, (0.14, 0.18))
-    finally:
-        sim.close()
-    assert abs(moved[0] - 0.14) < 1e-4
-    assert abs(moved[1] - 0.18) < 1e-4
-    assert default != moved
+# SAPIEN command routing is tested with the separate SAPIEN backend.

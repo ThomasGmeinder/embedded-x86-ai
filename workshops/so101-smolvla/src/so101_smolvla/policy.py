@@ -7,36 +7,19 @@ import time
 import numpy as np
 import torch
 
-from pathlib import Path
-
-from so101_smolvla.action_scale import dataset_stats
 from so101_smolvla.task import TASK
 
-_STATS = (
-    "models--lerobot--smolvla_base/snapshots/"
-    "c83c3163b8ca9b7e67c509fffd9121e66cb96205/"
-    "policy_postprocessor_step_0_unnormalizer_processor.safetensors"
-)
+DEFAULT_CHECKPOINT = "lerobot/smolvla_base"
 
 
-def _checkpoint_stats() -> dict:
-    from safetensors.torch import load_file
-
-    path = Path.home() / ".cache/huggingface/hub" / _STATS
-    if not path.is_file():
-        raise FileNotFoundError(path)
-    return dataset_stats(load_file(path))
-
-
-def load_policy(device: str = "cuda"):
-    from lerobot.policies.smolvla import make_smolvla_pre_post_processors
+def load_policy(device: str = "cuda", checkpoint: str = DEFAULT_CHECKPOINT):
+    from lerobot.policies.factory import make_pre_post_processors
     from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
-    policy = SmolVLAPolicy.from_pretrained("lerobot/smolvla_base").to(device).eval()
+    policy = SmolVLAPolicy.from_pretrained(checkpoint).to(device).eval()
     policy.config.device = device
     policy.config.n_action_steps = 1
-    policy.config.empty_cameras = 1
-    pre, post = make_smolvla_pre_post_processors(policy.config, dataset_stats=_checkpoint_stats())
+    pre, post = make_pre_post_processors(policy.config, pretrained_path=checkpoint)
     policy.reset()
     return policy, pre, post, device
 

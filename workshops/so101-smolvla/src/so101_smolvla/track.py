@@ -22,6 +22,14 @@ TASK = "Pick up a cube and place in the bin"
 POWER_ON = np.array([-5.76, -100.0, 92.97, 63.38, -0.53, 1.90], dtype=np.float64)
 CHUNK = 50
 EVAL_STEPS = 500
+JOINT_NAMES = (
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "wrist_flex",
+    "wrist_roll",
+    "gripper",
+)
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "scripted_testing" / "track"
 
@@ -95,32 +103,82 @@ def predict_chunk(policy, pre, post, state: np.ndarray, top: np.ndarray, wrist: 
     return actions
 
 
-def rollout(sim: ArmSim, predict, steps: int = EVAL_STEPS, chunk_size: int = CHUNK, watch=None) -> dict:
+def rollout(
+    sim: ArmSim,
+    predict,
+    steps: int = EVAL_STEPS,
+    chunk_size: int = CHUNK,
+    watch=None,
+) -> dict:
     """Take a new picture only when the previous chunk has been commanded."""
     if steps < 1 or chunk_size < 1:
         raise ValueError((steps, chunk_size))
     tops = []
     wrists = []
+    policy_tops = []
+    policy_wrists = []
+    targets = []
+    commands = []
+    achieved = []
+    chunk_index = []
     calls = 0
     done = 0
     while done < steps:
+        policy_top, policy_wrist = sim.render("top"), sim.render("wrist")
+        policy_tops.append(policy_top)
+        policy_wrists.append(policy_wrist)
         actions = np.asarray(
-            predict(sim.read_state(), sim.render("top"), sim.render("wrist")), dtype=np.float64
+            predict(sim.read_state(), policy_top, policy_wrist), dtype=np.float64
         ).reshape(-1, 6)
         calls += 1
         take = min(chunk_size, steps - done, actions.shape[0])
         played = play(sim, actions[:take], watch=watch)
         tops.append(played["top"])
         wrists.append(played["wrist"])
+        targets.append(played["target"])
+        commands.append(played["commanded"])
+        achieved.append(played["achieved"])
+        chunk_index.append(np.full(take, calls - 1, dtype=np.int64))
         done += take
     return {
         "top": np.concatenate(tops),
         "wrist": np.concatenate(wrists),
+        "policy_top": np.stack(policy_tops),
+        "policy_wrist": np.stack(policy_wrists),
+        "target": np.concatenate(targets),
+        "commanded": np.concatenate(commands),
+        "achieved": np.concatenate(achieved),
+        "chunk_index": np.concatenate(chunk_index),
         "calls": calls,
         "cube": sim.cube_pos().copy(),
         "contact": bool(sim.jaw_contact()),
         "lifted": bool(sim.above_table()),
     }
+
+
+def trajectory_metrics(targets: np.ndarray, movement_epsilon: float = 0.1) -> dict[str, dict[str, float | int]]:
+    """Measure raw target changes and adjacent direction reversals per joint."""
+    rows = np.asarray(targets, dtype=np.float64)
+    if rows.ndim != 2 or rows.shape[1] != len(JOINT_NAMES):
+        raise ValueError(f"target shape {rows.shape}")
+    delta = np.diff(rows, axis=0)
+    metrics: dict[str, dict[str, float | int]] = {}
+    for index, name in enumerate(JOINT_NAMES):
+        change = delta[:, index]
+        moving = np.abs(change) >= movement_epsilon
+        adjacent = moving[:-1] & moving[1:]
+        reversals = adjacent & (np.signbit(change[:-1]) != np.signbit(change[1:]))
+        opportunities = int(np.count_nonzero(adjacent))
+        magnitude = np.abs(change[moving])
+        metrics[name] = {
+            "moving_steps": int(np.count_nonzero(moving)),
+            "reversals": int(np.count_nonzero(reversals)),
+            "reversal_opportunities": opportunities,
+            "reversal_rate": float(np.count_nonzero(reversals) / opportunities) if opportunities else 0.0,
+            "median_step": float(np.median(magnitude)) if magnitude.size else 0.0,
+            "p95_step": float(np.percentile(magnitude, 95)) if magnitude.size else 0.0,
+        }
+    return metrics
 
 
 def write_report(path: Path, pose: np.ndarray, played: dict[str, np.ndarray]) -> None:
