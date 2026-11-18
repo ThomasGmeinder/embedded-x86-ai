@@ -151,3 +151,17 @@ This twin's wrist photo is not enough. Each random number is only partly removed
 The wrist photo fails because, at the same arm joints, it does not show the cube and the bin where the demonstration had them. The dataset does not record those positions. At the reach, episode 490 frame 80, putting them where the training wrist shows them cut the shoulder error from 7.86° to 2.41°. The training photo at that frame is 1.22°. The new videos look a bit calmer for that reason, and only for that part of the motion. The overhead photo of the same bin is still about 60 pixels off, so the photo is still not the demonstration.
 
 The grasp is a different photo. The hand is on the cube, and moving the cube and the bin does not turn that photo into a training photo. Episode 490 frame 160 stays about 6° off. Episode 486 frame 246 stays about 51° off. The pickup takes a new photo every 50 steps, so those later photos put the random numbers back into the shoulder command. That is the jitter still in the video. The yellow arm is not the cause: painting it black left the reversals in place, and the fingers already cover the same part of the photo as in training.
+
+## Final image comparison — object arrangement is primary; the overhead arm is a secondary gap
+
+Fourteen training grasps and the ten MuJoCo grasps were measured. In the training wrist, the cube center is typically at pixel (346, 265) and covers 12,620 pixels. In the MuJoCo wrist, it is typically at (377, 319) and covers 23,549 pixels. The MuJoCo grasp therefore shows the cube about 31 pixels farther right, 54 pixels lower, and almost twice as large.
+
+The cube and the bin were then removed from both pictures. At episode 490 frame 160, the remaining MuJoCo wrist scores 3.03° and the remaining training wrist scores 2.89°. The fingers, background, camera projection, and wrist renderer are not the remaining grasp difference.
+
+The overhead picture does retain a smaller simulator difference after the objects are removed. With the object-free training wrist held fixed, the object-free training overhead scores 2.89° and the object-free MuJoCo overhead scores 11.57°. Changing the yellow MuJoCo arm to the training dark color reduces that to 4.08°. The Robot Studio arm in the overhead view is therefore a real secondary domain gap.
+
+It is not the pickup fix. On the full pictures, changing the arm to black does not reduce the error: frame 80 changes from 7.86° to 9.83°, frame 160 from 6.24° to 6.20°, and frame 246 from 51.21° to 63.37°. The cube and bin still dominate those pictures.
+
+Other renderer differences were tested and did not fix the output: matching brightness and color, converting to grayscale, applying a one-pixel blur, encoding and decoding through H.264, and registering the arm silhouette to the training silhouette.
+
+Root cause: the fine-tuned checkpoint is overfit to the visual combinations in the SAPIEN training set. This MuJoCo pickup presents a different cube and bin arrangement in the wrist, plus a different arm appearance in the overhead view. On those out-of-distribution pictures, the flow sampler does not remove its separate random value from each of the 50 action steps. The servo performs the resulting 1–2° direction reversals. The camera mount, controller, and servo are not creating the jitter.
