@@ -1,10 +1,24 @@
 import json
+from pathlib import Path
 
 import numpy as np
 
 from so101_smolvla.sim import ArmSim
 from so101_smolvla.track import POWER_ON
-from so101_smolvla.vla_test import VLA_TESTING, draw_cube, prepare, run_scenario, scenarios
+from so101_smolvla.record import _write_clip, accumulate
+from so101_smolvla.vla_test import (
+    VLA_TESTING,
+    _clear_of_bin,
+    _corners,
+    _in_fingers,
+    _wrist_clips_cube,
+    draw_layout,
+    prepare,
+    random_directory,
+    run_scenario,
+    scenarios,
+    write_report,
+)
 
 
 def test_results_go_to_vla_testing_not_scripted(tmp_path):
@@ -32,24 +46,41 @@ def test_results_go_to_vla_testing_not_scripted(tmp_path):
     assert calls
 
 
-def test_a_seed_draws_the_same_cube_twice_and_is_written(tmp_path):
-    first = draw_cube(17)
-    assert draw_cube(17) == first
-    assert draw_cube(18) != first
-    xy, yaw = first
-    assert abs(xy[0] - 0.27) <= 0.10
-    assert abs(xy[1] - 0.045) <= 0.10
-
-    def predict(state, top, wrist):
-        return np.repeat(POWER_ON.reshape(1, 6), 2, axis=0)
-
+def test_a_seed_places_the_cube_outside_the_tray_and_is_written(tmp_path):
     sim = ArmSim()
     try:
+        first = draw_layout(sim, 17)
+        assert draw_layout(sim, 17) == first
+        assert draw_layout(sim, 18) != first
+        for seed in range(40):
+            layout = draw_layout(sim, seed)
+            assert _clear_of_bin(
+                np.array(layout["cube_xy"]),
+                np.array(layout["bin_xy"]),
+                layout["bin_yaw"],
+                sim.bin_half,
+                0.02,
+            )
+            for corner in _corners(np.array(layout["bin_xy"]), layout["bin_yaw"], sim.bin_half):
+                assert _in_fingers(corner)
+            for corner in _corners(np.array(layout["cube_xy"]), layout["cube_yaw"], np.array([0.02, 0.02])):
+                assert _in_fingers(corner)
+            assert not _wrist_clips_cube(sim, np.array(layout["cube_xy"]), layout["cube_yaw"], 0.02)
+        assert not _in_fingers(np.array([0.4573, -0.1392]))
+        sim.hold_pose(POWER_ON)
+        assert _wrist_clips_cube(sim, np.array([0.2909, 0.1118]), np.deg2rad(15.7), 0.02)
+        xy, yaw = first["cube_xy"], first["cube_yaw"]
+
+        def predict(state, top, wrist):
+            return np.repeat(POWER_ON.reshape(1, 6), 2, axis=0)
+
         run_scenario(sim, predict, "seed-00017", xy, tmp_path, steps=2, yaw_rad=yaw, seed=17)
     finally:
         sim.close()
     saved = json.loads((tmp_path / "seed-00017" / "result.json").read_text(encoding="utf-8"))
     assert saved["seed"] == 17
+    assert "finger_face_deg" in saved
+    assert saved["grip"] in (True, False)
     assert saved["cube_start_xy"] == [round(xy[0], 4), round(xy[1], 4)]
     assert saved["cube_yaw_deg"] == round(float(np.degrees(yaw)), 2)
 
@@ -74,6 +105,67 @@ def test_prepare_yaws_the_cube_about_vertical():
     assert abs(quat[0] - np.cos(np.pi / 4)) < 1e-6
     assert abs(quat[3] - np.sin(np.pi / 4)) < 1e-6
     assert abs(quat[1]) < 1e-6 and abs(quat[2]) < 1e-6
+
+
+def test_finger_face_angle_follows_the_cube_yaw():
+    sim = ArmSim()
+    try:
+        prepare(sim, (0.18, -0.06), yaw_rad=0.0)
+        square = sim.finger_face_deg()
+        prepare(sim, (0.18, -0.06), yaw_rad=np.pi / 4)
+        turned = sim.finger_face_deg()
+    finally:
+        sim.close()
+    assert 0.0 <= square <= 90.0
+    assert 0.0 <= turned <= 90.0
+    assert abs(square - turned) > 1.0
+
+
+def test_the_report_links_the_video_and_scores_each_seed(tmp_path):
+    rows = [
+        {
+            "seed": 0,
+            "in_box": True,
+            "picked_up": True,
+            "held": False,
+            "grip": True,
+            "finger_face_deg": 0.0,
+        },
+        {
+            "seed": 1,
+            "in_box": False,
+            "picked_up": False,
+            "held": False,
+            "grip": False,
+            "finger_face_deg": 35.0,
+        },
+    ]
+    path = write_report(rows, tmp_path)
+    text = path.read_text(encoding="utf-8")
+    assert "overall-top.mp4" in text
+    assert "overall-wrist.mp4" in text
+    assert "| Cube in the bin at the end | 1 | 1 |" in text
+    assert "| Cube picked up | 1 | 1 |" in text
+    assert "| Cube held | 0 | 2 |" in text
+    assert "Ideal is 0°" in text
+    assert "| 1 | fail | fail | fail | fail | 35.0 |" in text
+
+
+def test_random_directory_carries_the_timestamp():
+    assert random_directory(Path("/tmp/vla"), "20261118-090200") == Path("/tmp/vla/random-20261118-090200")
+
+
+def test_accumulate_joins_every_clip(tmp_path):
+    frame = np.zeros((2, 480, 640, 3), dtype=np.uint8)
+    folders = []
+    for name in ("a", "b"):
+        folder = tmp_path / name
+        _write_clip(frame, folder / "top.mp4")
+        _write_clip(frame, folder / "wrist.mp4")
+        folders.append(folder)
+    accumulate(folders, tmp_path, "overall")
+    assert (tmp_path / "overall-top.mp4").is_file()
+    assert (tmp_path / "overall-wrist.mp4").is_file()
 
 
 def test_prepare_moves_only_the_requested_cube():

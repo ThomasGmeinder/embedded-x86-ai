@@ -63,12 +63,14 @@ class ArmSim:
             "top": _name_id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "top"),
             "wrist": _name_id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist_cam"),
         }
-        self.cube_qadr = int(
-            self.model.jnt_qposadr[_name_id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "cube_joint")]
-        )
+        cube_joint = _name_id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "cube_joint")
+        self.cube_qadr = int(self.model.jnt_qposadr[cube_joint])
+        self.cube_body = int(self.model.jnt_bodyid[cube_joint])
         self.cube_geom = _name_id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "cube_geom")
-        box = _name_id(self.model, mujoco.mjtObj.mjOBJ_BODY, "place_box")
-        self.box_xy = np.array(self.model.body_pos[box][:2], dtype=np.float64)
+        self.box_body = _name_id(self.model, mujoco.mjtObj.mjOBJ_BODY, "place_box")
+        self.box_xy = np.array(self.model.body_pos[self.box_body][:2], dtype=np.float64)
+        # Outer half-size of bin_2, 80 mm by 100 mm.
+        self.bin_half = np.array([0.04, 0.05], dtype=np.float64)
         self.tip_a = _name_id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "moving_jaw_sph_tip1")
         self.tip_b = _name_id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "fixed_jaw_sph_tip1")
         self.site = _name_id(self.model, mujoco.mjtObj.mjOBJ_SITE, "gripperframe")
@@ -181,13 +183,59 @@ class ArmSim:
         self.data.qpos[self.cube_qadr + 3 : self.cube_qadr + 7] = (1.0, 0.0, 0.0, 0.0)
         mujoco.mj_forward(self.model, self.data)
 
+    def _point_inside_geom(self, point: np.ndarray, gid: int) -> bool:
+        local = self.data.geom_xmat[gid].reshape(3, 3).T @ (point - self.data.geom_xpos[gid])
+        size = self.model.geom_size[gid]
+        kind = int(self.model.geom_type[gid])
+        if kind == mujoco.mjtGeom.mjGEOM_BOX:
+            return bool(np.all(np.abs(local) <= size))
+        if kind == mujoco.mjtGeom.mjGEOM_SPHERE:
+            return float(np.linalg.norm(local)) <= float(size[0])
+        if kind == mujoco.mjtGeom.mjGEOM_CAPSULE:
+            along = float(np.clip(local[2], -size[1], size[1]))
+            return float(np.linalg.norm(local - np.array([0.0, 0.0, along]))) <= float(size[0])
+        return False
+
+    def jaw_contains_cube_center(self) -> str | None:
+        """The cube center is inside a jaw solid. Contact at the surface is not this."""
+        point = self.cube_pos()
+        for gid in self.jaw_geoms:
+            if self._point_inside_geom(point, gid):
+                return mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, gid) or str(gid)
+        return None
+
     def render(self, which: str) -> np.ndarray:
+        buried = self.jaw_contains_cube_center()
+        if buried is not None:
+            raise RuntimeError(f"cube center is inside {buried}")
         self.renderer.update_scene(self.data, camera=self.cam_id[which])
         frame = self.renderer.render()
         return np.ascontiguousarray(frame)
 
     def cube_pos(self) -> np.ndarray:
         return np.array(self.data.qpos[self.cube_qadr : self.cube_qadr + 3], dtype=np.float64)
+
+    def finger_face_deg(self) -> float:
+        """Angle between the fingertip line and the nearest vertical face of the cube.
+
+        Zero means the jaws close straight onto a face. The cube orientation is
+        the live body orientation, so a yaw during the episode is included.
+        """
+        pinch = self.data.geom_xpos[self.tip_b][:2] - self.data.geom_xpos[self.tip_a][:2]
+        pinch_norm = float(np.linalg.norm(pinch))
+        if pinch_norm < 1e-9:
+            return 90.0
+        pinch = pinch / pinch_norm
+        axes = self.data.xmat[self.cube_body].reshape(3, 3)[:2, :2]
+        errors = []
+        for column in range(2):
+            face = axes[:, column]
+            face_norm = float(np.linalg.norm(face))
+            if face_norm < 1e-9:
+                continue
+            cosine = abs(float(np.dot(pinch, face / face_norm)))
+            errors.append(float(np.degrees(np.arccos(min(1.0, cosine)))))
+        return min(errors) if errors else 90.0
 
     def jaw_contact(self) -> bool:
         for index in range(self.data.ncon):
@@ -207,9 +255,24 @@ class ArmSim:
     def above_table(self) -> bool:
         return float(self.cube_pos()[2]) > LIFT_MARGIN_M
 
+    def place_bin(self, xy: tuple[float, float], yaw: float) -> None:
+        """Move the tray. ``box_xy`` follows this body, which is the place target."""
+        self.model.body_pos[self.box_body][0] = float(xy[0])
+        self.model.body_pos[self.box_body][1] = float(xy[1])
+        half = 0.5 * float(yaw)
+        self.model.body_quat[self.box_body] = (np.cos(half), 0.0, 0.0, np.sin(half))
+        self.box_xy = np.array(xy, dtype=np.float64)
+        mujoco.mj_forward(self.model, self.data)
+
     def in_box(self) -> bool:
-        pos = self.cube_pos()
-        return abs(pos[0] - self.box_xy[0]) < 0.04 and abs(pos[1] - self.box_xy[1]) < 0.04 and pos[2] < 0.06
+        origin = self.data.xpos[self.box_body]
+        rotation = self.data.xmat[self.box_body].reshape(3, 3)
+        local = rotation.T @ (self.cube_pos() - origin)
+        return (
+            abs(local[0]) < self.bin_half[0]
+            and abs(local[1]) < self.bin_half[1]
+            and float(self.cube_pos()[2]) < 0.06
+        )
 
     def close(self) -> None:
         self.renderer.close()

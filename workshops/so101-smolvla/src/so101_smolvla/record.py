@@ -96,10 +96,11 @@ def _write_clip(frames: np.ndarray, path: Path) -> None:
         raise RuntimeError(f"ffmpeg failed for {path}")
 
 
-def _accumulate() -> None:
+def accumulate(folders: list[Path], dest: Path, prefix: str) -> None:
+    """Join each camera across ``folders``, in the order given, into one clip."""
+    dest.mkdir(parents=True, exist_ok=True)
     for camera in ("top", "wrist"):
-        folders = sorted(path for path in EPISODES.glob("episode-*") if (path / f"{camera}.mp4").exists())
-        listing = EPISODES / f"all-{camera}.txt"
+        listing = dest / f"{prefix}-{camera}.txt"
         listing.write_text(
             "".join(f"file '{(folder / f'{camera}.mp4').resolve()}'\n" for folder in folders),
             encoding="utf-8",
@@ -107,10 +108,15 @@ def _accumulate() -> None:
         subprocess.run(
             [
                 "ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
-                "-i", str(listing), "-c", "copy", str(EPISODES / f"all-{camera}.mp4"),
+                "-i", str(listing), "-c", "copy", str(dest / f"{prefix}-{camera}.mp4"),
             ],
             check=True,
         )
+
+
+def _accumulate() -> None:
+    folders = sorted(path for path in EPISODES.glob("episode-*") if (path / "top.mp4").exists())
+    accumulate(folders, EPISODES, "all")
 
 
 def record() -> Path:

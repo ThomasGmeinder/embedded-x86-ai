@@ -32,7 +32,7 @@ def hold_power_on(sim: ArmSim) -> np.ndarray:
     return sim.read_state()
 
 
-def play(sim: ArmSim, targets: np.ndarray) -> dict[str, np.ndarray]:
+def play(sim: ArmSim, targets: np.ndarray, watch=None) -> dict[str, np.ndarray]:
     """Command each target for one tick. Return target, clipped command, achieved, and frames."""
     rows = np.asarray(targets, dtype=np.float64).reshape(-1, 6)
     commanded = np.zeros_like(rows)
@@ -42,6 +42,8 @@ def play(sim: ArmSim, targets: np.ndarray) -> dict[str, np.ndarray]:
     for index, target in enumerate(rows):
         sim.command(target)
         sim.step(TICK_STEPS)
+        if watch is not None:
+            watch.observe(sim)
         commanded[index] = sim.commanded()
         achieved[index] = sim.read_state()
         top.append(sim.render("top"))
@@ -93,7 +95,7 @@ def predict_chunk(policy, pre, post, state: np.ndarray, top: np.ndarray, wrist: 
     return actions
 
 
-def rollout(sim: ArmSim, predict, steps: int = EVAL_STEPS, chunk_size: int = CHUNK) -> dict:
+def rollout(sim: ArmSim, predict, steps: int = EVAL_STEPS, chunk_size: int = CHUNK, watch=None) -> dict:
     """Take a new picture only when the previous chunk has been commanded."""
     if steps < 1 or chunk_size < 1:
         raise ValueError((steps, chunk_size))
@@ -107,7 +109,7 @@ def rollout(sim: ArmSim, predict, steps: int = EVAL_STEPS, chunk_size: int = CHU
         ).reshape(-1, 6)
         calls += 1
         take = min(chunk_size, steps - done, actions.shape[0])
-        played = play(sim, actions[:take])
+        played = play(sim, actions[:take], watch=watch)
         tops.append(played["top"])
         wrists.append(played["wrist"])
         done += take

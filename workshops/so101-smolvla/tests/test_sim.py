@@ -1,5 +1,6 @@
 import time
 
+import mujoco
 import numpy as np
 
 from so101_smolvla.sim import HOLD_STEPS, PHYSICS_HZ, TICK_S, TICK_STEPS, ArmSim
@@ -46,6 +47,25 @@ def test_each_arm_actuator_moves():
         moved = sim.read_state()
         assert np.all(np.abs(moved[:5] - start[:5]) > 1.0)
         assert moved[5] < 80.0
+    finally:
+        sim.close()
+
+
+def test_render_refuses_a_cube_center_inside_a_jaw():
+    sim = ArmSim()
+    try:
+        sim.reset((0.22, 0.08))
+        sim.render("wrist")
+        jaw = next(iter(sim.jaw_geoms))
+        sim.data.qpos[sim.cube_qadr : sim.cube_qadr + 3] = sim.data.geom_xpos[jaw]
+        mujoco.mj_forward(sim.model, sim.data)
+        assert sim.jaw_contains_cube_center() is not None
+        try:
+            sim.render("top")
+            raised = False
+        except RuntimeError:
+            raised = True
+        assert raised
     finally:
         sim.close()
 
