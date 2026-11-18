@@ -1,10 +1,11 @@
 import io
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-from so101_smolvla.policy_env import create_policy_environment
+from so101_smolvla.policy_env import create_policy_environment, random_output_directory
 from so101_smolvla.sapien_config import IMAGE_SHAPE
 from so101_smolvla.sapien_protocol import (
     RESPONSE_HEADER,
@@ -63,3 +64,5 @@ def test_worker_error_is_not_a_success_response():
 def test_backend_factory_rejects_unknown_backend():
     with pytest.raises(ValueError, match="unknown policy backend"):
         create_policy_environment("other")
+    with pytest.raises(ValueError, match="unknown policy backend"):
+        random_output_directory(Path("/tmp"), "other", "stamp")

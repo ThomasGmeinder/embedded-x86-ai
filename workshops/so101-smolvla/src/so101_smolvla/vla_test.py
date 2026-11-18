@@ -14,6 +14,7 @@ import numpy as np
 import yaml
 
 from so101_smolvla.layouts import draw_layout
+from so101_smolvla.policy_env import random_output_directory
 from so101_smolvla.record import _write_clip, accumulate
 from so101_smolvla.sim import PHYSICS_HZ, ArmSim
 from so101_smolvla.track import (
@@ -110,10 +111,6 @@ class GripWatch:
 
     def chosen(self) -> dict:
         return self.grip if self.grip is not None else self.closest
-
-
-def random_directory(root: Path, stamp: str) -> Path:
-    return root / f"random-{stamp}"
 
 
 def empty_close_force(sim: ArmSim) -> float:
@@ -281,9 +278,14 @@ def run_random(
     root: Path | None = None,
     stamp: str | None = None,
     policy_seed_base: int = 10_000,
+    steps: int = EVAL_STEPS,
 ) -> list[dict]:
     """Layout seeds ``0`` .. ``count - 1`` with independent policy seeds."""
-    dest = random_directory(root or VLA_TESTING, stamp or datetime.now().strftime("%Y%m%d-%H%M%S"))
+    dest = random_output_directory(
+        root or VLA_TESTING,
+        "mujoco",
+        stamp or datetime.now().strftime("%Y%m%d-%H%M%S"),
+    )
     baseline = empty_close_force(sim)
     rows = []
     for seed in range(count):
@@ -306,6 +308,7 @@ def run_random(
                 layout_seed=seed,
                 policy_seed=policy_seed_base + seed,
                 empty_force=baseline,
+                steps=steps,
             )
         )
     dest.mkdir(parents=True, exist_ok=True)
@@ -348,7 +351,7 @@ def cli(argv: list[str] | None = None) -> None:
         from so101_smolvla.sapien_rollout import DEFAULT_STEPS, run_batch
 
         stamp = args.stamp or datetime.now().strftime("%Y%m%d-%H%M%S")
-        destination = VLA_TESTING / f"random-sapien-{stamp}"
+        destination = random_output_directory(VLA_TESTING, "sapien", stamp)
         rows = run_batch(
             args.count,
             destination=destination,
@@ -379,6 +382,7 @@ def cli(argv: list[str] | None = None) -> None:
                 count=count,
                 stamp=stamp,
                 policy_seed_base=args.policy_seed_base,
+                steps=EVAL_STEPS if args.steps is None else args.steps,
             )
         finally:
             sim.close()

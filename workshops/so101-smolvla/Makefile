@@ -1,12 +1,11 @@
-# Random VLA regression. From this directory: make random
-# COUNT=10 runs ten seeds. Omit COUNT for the default of 100.
-.PHONY: random sapien sapien-setup
+# Random VLA regression. BACKEND is mujoco or sapien.
+BACKEND ?= mujoco
+COUNT ?= 100
+
+.PHONY: random sapien-setup
 
 random:
-	BACKEND=$(BACKEND) ./scripts/run_random_regression.sh $(COUNT)
-
-sapien:
-	BACKEND=sapien ./scripts/run_random_regression.sh $(COUNT)
+	./scripts/run_random_regression.sh $(COUNT) --backend $(BACKEND) $(if $(STEPS),--steps $(STEPS),)
 
 sapien-setup:
 	./scripts/setup_sapien_env.sh

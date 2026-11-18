@@ -10,6 +10,7 @@ from so101_smolvla.layouts import (
     _wrist_clips_cube,
     draw_layout,
 )
+from so101_smolvla.policy_env import random_output_directory
 from so101_smolvla.sim import ArmSim
 from so101_smolvla.track import POWER_ON
 from so101_smolvla.record import _write_clip, accumulate
@@ -18,7 +19,6 @@ from so101_smolvla.vla_test import (
     GripWatch,
     cli,
     prepare,
-    random_directory,
     run_scenario,
     scenarios,
     write_report,
@@ -222,7 +222,13 @@ def test_the_report_links_the_video_and_scores_each_seed(tmp_path):
 
 
 def test_random_directory_carries_the_timestamp():
-    assert random_directory(Path("/tmp/vla"), "20261118-090200") == Path("/tmp/vla/random-20261118-090200")
+    root = Path("/tmp/vla")
+    assert random_output_directory(root, "mujoco", "20261118-090200") == (
+        root / "random-MuJoCo-20261118-090200"
+    )
+    assert random_output_directory(root, "sapien", "20261118-090200") == (
+        root / "random-sapien-20261118-090200"
+    )
 
 
 def test_prepare_moves_only_the_requested_cube():
@@ -276,3 +282,33 @@ def test_cli_routes_sapien_without_constructing_mujoco(monkeypatch):
     assert calls[0][1]["steps"] == 3
     assert calls[0][1]["policy_seed_base"] == 70
     assert calls[0][1]["destination"].name == "random-sapien-fixed"
+
+
+def test_cli_forwards_steps_to_mujoco_random(monkeypatch):
+    calls = []
+
+    class FakeSim:
+        def close(self):
+            pass
+
+    def fake_run_random(sim, predict, **kwargs):
+        calls.append(kwargs)
+        return [{"in_box": True}]
+
+    monkeypatch.setattr("so101_smolvla.vla_test.ArmSim", FakeSim)
+    monkeypatch.setattr(
+        "so101_smolvla.vla_test.load_checkpoint",
+        lambda: (object(), object(), object()),
+    )
+    monkeypatch.setattr("so101_smolvla.vla_test.run_random", fake_run_random)
+
+    cli(["random", "10", "fixed", "--backend", "mujoco", "--steps", "300"])
+
+    assert calls == [
+        {
+            "count": 10,
+            "stamp": "fixed",
+            "policy_seed_base": 10_000,
+            "steps": 300,
+        }
+    ]

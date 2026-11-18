@@ -3,9 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import numpy as np
+
+BACKEND_DIRECTORY_NAMES = {"mujoco": "MuJoCo", "sapien": "sapien"}
+
+
+def random_output_directory(root: Path, backend: str, stamp: str) -> Path:
+    """Return the backend-labelled directory for one random regression."""
+    try:
+        label = BACKEND_DIRECTORY_NAMES[backend]
+    except KeyError as exc:
+        raise ValueError(f"unknown policy backend {backend!r}") from exc
+    return root / f"random-{label}-{stamp}"
 
 
 @dataclass(frozen=True)

@@ -15,7 +15,11 @@ import numpy as np
 import torch
 from huggingface_hub import snapshot_download
 
-from so101_smolvla.policy_env import PolicyObservation, create_policy_environment
+from so101_smolvla.policy_env import (
+    PolicyObservation,
+    create_policy_environment,
+    random_output_directory,
+)
 from so101_smolvla.record import _write_clip, accumulate
 from so101_smolvla.sapien_config import TASK_TEXT
 from so101_smolvla.track import CHECKPOINT, JOINT_NAMES, trajectory_metrics
@@ -349,8 +353,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--policy-seed-base", type=int, default=0)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    destination = args.output or VLA_TESTING / (
-        "random-sapien-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+    destination = args.output or random_output_directory(
+        VLA_TESTING,
+        "sapien",
+        datetime.now().strftime("%Y%m%d-%H%M%S"),
     )
     rows = run_batch(
         args.count,

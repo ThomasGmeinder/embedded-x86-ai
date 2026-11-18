@@ -49,8 +49,12 @@ policy-evaluation backend:
 
 ```bash
 ./scripts/setup_sapien_env.sh
-make sapien COUNT=1
+make random BACKEND=sapien COUNT=10 STEPS=300
+make random BACKEND=mujoco COUNT=10 STEPS=300
 ```
+
+Random regressions are written to timestamped `random-sapien-*` and
+`random-MuJoCo-*` directories.
 
 On this AMD machine the two engines run in separate processes:
 

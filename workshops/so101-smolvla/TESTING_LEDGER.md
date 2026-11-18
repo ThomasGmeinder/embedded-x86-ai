@@ -73,3 +73,25 @@ Result: seed 0 first succeeded at step 244. Raw lift/elbow targets reversed
 40.1%/33.2%; SAPIEN achieved joints reversed 5.6%/3.4%. The result names backend
 `sapien`, records the pinned simulator commit and complete environment
 arguments, and has episode and batch completion markers.
+
+## 2026-11-18 — Ten random layouts per backend, 300 steps
+
+One command shape now selects either backend:
+
+`make random BACKEND=mujoco COUNT=10 STEPS=300`
+
+`make random BACKEND=sapien COUNT=10 STEPS=300`
+
+The naming and 300-step forwarding changes passed the complete project suite:
+32 passed in 9.99 s.
+
+MuJoCo wrote `vla_testing/random-MuJoCo-20261118-221817/`. Four of ten cubes
+ended in the bin; seven were picked up and held; all ten had jaw contact.
+
+SAPIEN wrote `vla_testing/random-sapien-20261118-221953/`. Nine of ten episodes
+reached native task success. All ten picked up the item; nine held it.
+
+Both runs used environment seeds 0–9 and policy seeds 10000–10009. Each twin
+generated its own deterministic random layouts, so equal seed numbers do not
+mean equal cube/bin coordinates across the two independently implemented
+environments.

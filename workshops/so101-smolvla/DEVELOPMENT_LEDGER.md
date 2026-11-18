@@ -317,3 +317,16 @@ joints reversed only 5.6%/3.4%.
 
 Bottom line: neither twin removes jagged model output. SAPIEN visibly suppresses
 most of it through its controller; MuJoCo follows it more directly.
+
+## 2026-11-18 — Ten random SAPIEN layouts
+
+The unchanged checkpoint ran for 300 steps on SAPIEN environment seeds 0–9,
+with independent policy seeds 10000–10009. All ten cubes were lifted. Nine were
+held and nine episodes reached SAPIEN's native task-success condition. Seed 3
+was lifted but not kept in the gripper and did not complete the task.
+
+The result is `vla_testing/random-sapien-20261118-221953/`. This is strong
+evidence that the checkpoint works with random cube/bin combinations in its
+original SAPIEN twin. It does not change the jitter conclusion: raw model
+targets still reversed frequently, while the SAPIEN controller substantially
+reduced achieved-joint reversals.
