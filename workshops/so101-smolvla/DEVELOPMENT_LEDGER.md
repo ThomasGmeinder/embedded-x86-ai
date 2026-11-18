@@ -90,3 +90,19 @@ The disabled collision was hiding a real grasp failure. `Expert.run((0.22, -0.08
 ### The arm sits still after the cube is in the bin
 
 `rollout` plays until `EVAL_STEPS` (500) and does not look at `in_box`. `in_box` is recorded after the loop. 500 steps is 16.7 s on every seed. On seed 1 the top picture matches the final frame from 8.9 s on, so the last 7.8 s are the open gripper over the cube in the bin. Seeds 5 and 8 hold the same way for 6.9 s and 8.3 s. The later 50-step chunks leave the arm there, and the loop keeps commanding them. The published training env stops at 400 steps. This runner uses 500, and it does not stop when the cube is down.
+
+## Conclusion — the finetuned model does not generalize to this digital twin
+
+The checkpoint `Harrysunshine/so101-smolvla-sim-real-10task` was trained in the SAPIEN simulation that produced `Harrysunshine/so101-sim-pickplace-v2`. It does not generalize to this MuJoCo digital twin.
+
+Shown a training picture, it follows the recorded lift to about 1°. Shown this twin’s pictures, the same checkpoint reverses direction by 1–2° and the arm jiggles. A pick can still finish. In the ten-seed run, 6 of 10 cubes ended in the bin.
+
+## Comparison — the training simulation and this simulation
+
+The training simulation is SAPIEN through ManiSkill, environment `SO101PickPlaceCube40-v1`. Physics is 120 Hz. Control is 30 Hz. An episode stops at 400 steps. The arm color in that rig is (0.05, 0.05, 0.05). A training top frame has no yellow pixels. The cube is 40 mm and 12.8 g.
+
+This simulation is MuJoCo. Physics is 480 Hz. Control is 30 Hz. A rollout here is 500 steps. `so101.xml` is the Robot Studio model, so the arm is yellow. One top frame from the ten-seed run has 18,432 yellow pixels, about (247, 242, 54). Painting those pixels the training black and asking the checkpoint again left the lift reversals at 54% and 67%. The yellow arm is a visible difference. It is not what makes the targets reverse.
+
+Same joints, episode 490. On the training pictures the lift error is 0.88° at frame 80 and 1.04° at frame 160. On this twin’s pictures at those same joints the lift error is 6.71° and 4.85°. The dataset stores no cube pose and no bin pose, so the cube in this render is not where the training frame shows it. The training wrist shows the cube between black fingers. This wrist shows the cube off to the side of yellow fingers.
+
+The cameras match: 640×480, 59.17° vertical field, wrist lens on the KIT optical frame. Both use absolute joint targets, the same task string, and the same 40 mm pale-blue cube. The recorded training motion does not jiggle. The lift reverses on 1.45% of 167,804 steps, and on 0% of the busiest 50 steps in all 498 episodes. A training clip’s picture never reverses direction (0 of 129 moving frames). This twin’s ten-seed video reverses on 27–53% of moving frames.
