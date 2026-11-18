@@ -4,6 +4,24 @@ This scene is a MuJoCo twin of the arm. The pictures the checkpoint was trained 
 
 The side-by-side frame is `scripted_testing/track/scene-match.png`. Left is episode 484, frame 13, of the training video. Right is this scene at the same recorded joint angles.
 
+## Two separate digital twins
+
+This repository now supports two complete policy-evaluation environments. They
+are not one robot model switched between physics engines.
+
+- The MuJoCo twin loads this repository's MJCF robot and scene. MuJoCo owns its
+  geometry, collisions, state, physics, position actuators, cameras, and local
+  placement check.
+- The SAPIEN twin loads the pinned upstream KIT URDF and constructs its own
+  scene and collisions. SAPIEN/PhysX owns its state, physics, damped
+  proportional-derivative controller, cameras, and native task-success check.
+
+The twins expose the same six policy values—five joint angles in degrees and
+gripper travel from 0 to 100—and use the same checkpoint and task text. Those
+shared interfaces do not make their dynamics equivalent. The unchanged
+checkpoint emits jagged targets in both; SAPIEN's controller attenuates most of
+the achieved-joint reversals while MuJoCo follows them more directly.
+
 ## Sources
 
 The training code is public. It is not on a mounted NAS path.
