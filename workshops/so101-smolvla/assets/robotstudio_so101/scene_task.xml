@@ -17,7 +17,8 @@
     <material name="table_mat" texture="table_tex" texuniform="true" rgba="0.90 0.90 0.90 1"/>
     <mesh name="bin_2" file="bin_2_visual.obj"/>
     <material name="box_mat" rgba="0.078 0.078 0.078 1" specular="0.05"/>
-    <material name="cube_mat" rgba="0.612 0.733 0.820 1" specular="0.1"/>
+    <!-- rgba * emission is the published pale blue. The emission keeps the two directional lights from splitting the faces into white and gray. -->
+    <material name="cube_mat" rgba="0.02550 0.03054 0.03417 1" emission="24" specular="0" shininess="0" reflectance="0"/>
   </asset>
 
   <worldbody>
@@ -27,8 +28,9 @@
 
     <geom name="floor" type="plane" pos="0 0 -0.4" size="0 0 0.05" rgba="0.75 0.75 0.75 1"/>
 
-    <body name="table" pos="0.22 0 -0.02">
-      <geom name="table_top" type="box" size="0.40 0.32 0.02" material="table_mat"/>
+    <!-- Covers the top camera's view of z=0. The camera pose is unchanged. -->
+    <body name="table" pos="0.36 0.12 -0.02">
+      <geom name="table_top" type="box" size="0.55 0.75 0.02" material="table_mat"/>
     </body>
 
     <!-- KIT top optical frame on base_link, plus the published (-0.002, 0.027, 0) shift. -->
