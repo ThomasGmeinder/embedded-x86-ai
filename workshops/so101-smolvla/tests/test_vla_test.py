@@ -8,6 +8,7 @@ from so101_smolvla.track import POWER_ON
 from so101_smolvla.record import _write_clip, accumulate
 from so101_smolvla.vla_test import (
     VLA_TESTING,
+    GripWatch,
     _clear_of_bin,
     _corners,
     _in_fingers,
@@ -19,6 +20,45 @@ from so101_smolvla.vla_test import (
     scenarios,
     write_report,
 )
+
+
+class _Pose:
+    """One simulator reading: the cube is either up, gripped, both, or neither."""
+
+    def __init__(self, up: bool, gripping: bool) -> None:
+        self.tip_a = 0
+        self.tip_b = 1
+        self.data = type("Data", (), {"geom_xpos": np.zeros((2, 3))})()
+        self._up = up
+        self._gripping = gripping
+
+    def cube_pos(self) -> np.ndarray:
+        return np.zeros(3)
+
+    def finger_face_deg(self) -> float:
+        return 0.0
+
+    def read_state(self) -> np.ndarray:
+        return np.zeros(6)
+
+    def jaw_contact(self) -> bool:
+        return self._gripping
+
+    def above_table(self) -> bool:
+        return self._up
+
+    def held(self, empty_force: float) -> bool:
+        return self._gripping
+
+
+def test_a_squeeze_without_a_lift_is_not_held():
+    watch = GripWatch()
+    watch.observe(_Pose(up=False, gripping=True))
+    assert watch.picked_up is False
+    assert watch.held is False
+    watch.observe(_Pose(up=True, gripping=True))
+    assert watch.picked_up is True
+    assert watch.held is True
 
 
 def test_results_go_to_vla_testing_not_scripted(tmp_path):

@@ -55,3 +55,38 @@ Checked, and not the cause:
 The dataset stores no cube pose and no bin pose. The digital twin’s cube and bin are the hand positions inferred for episode 484. A wrist frame can therefore show a different arrangement than the training frame at the same joints, even though the lens is on the published mount.
 
 Lesson: the checkpoint follows a smooth demonstration when the wrist picture is one it was trained on. It does not carry that smooth trajectory over to the digital twin’s wrist picture. A pick can still finish. With the cube at (0.206, 0.150) and the bin at (0.297, −0.021), seed 0 ends in the bin and the arm is still jittery.
+
+## 2026-11-18 — Finger contact, ten seeds, the pause after the drop
+
+### Mistake — the finger contact was turned off, then the wrong file was restored
+
+The Robot Studio file `so101_new_calib.xml` collides with the finger meshes `wrist_roll_follower_so101_v1` and `moving_jaw_so101_v1`. Those geoms use class `collision`. They are the pinch surfaces.
+
+Commit `d0cdaca` replaced that with a local class `collision_gripper_mesh` whose geoms are `contype="0"` and `conaffinity="0"`. The comment in that commit says the hull was batting the cube out of the jaws, and that the finger boxes are the pinch surfaces. The boxes that actually met the cube were 1 mm thick (`fixed_jaw_box4`–`fixed_jaw_box7`, `moving_jaw_box2`, `moving_jaw_box3`). The visible finger mesh could pass into the cube. The thin box stopped on the cube face. That was a local change. It was not in the published model.
+
+Asked to put `so101.xml` back to the original, the restore used `git checkout`. That brought back the commit, which still had the disabled mesh. The original is the Robot Studio file, not `HEAD`. The file was then edited again on top of that commit. That edit was the wrong baseline.
+
+`so101.xml` is now the Robot Studio file. The finger collision geoms are those two meshes, class `collision`. The `contype="0"` finger class and the 1 mm pinch boxes are gone. Four pieces from this digital twin stay on that file, because the published file does not have them and the twin already uses them: the KIT gripper quaternion, the KIT wrist camera and its mount, the two 0.75 mm fingertip spheres the code reads, and the physics timestep of 1/480 s.
+
+The disabled collision was hiding a real grasp failure. `Expert.run((0.22, -0.08), azimuth=0.4)` returns false. The cube is at z 0.085 m and the jaws are not touching it. The mesh knocks the cube out of the fingers. `tests/test_expert.py` fails on that. The collision disable is not going back in.
+
+### Ten seeds on the published finger mesh
+
+`./scripts/run_random_regression.sh 10` exited 0 in 39 s. Seeds 0–9. Six cubes ended in the bin. All ten were picked up. The jaws touched the cube on every seed. Seed 3 was the only one not held. Finger-to-face angle at grip: mean 8.4°, median 7.4°, max 19.0° on seed 9. Those rows used the old hold flag, which became true on a squeeze even while the cube was still on the table. A hold now requires the cube off the table on the same step, still in the jaws.
+
+| Seed | In bin | Held | Finger angle |
+|---:|---|---|---:|
+| 0 | fail | pass | 7.1° |
+| 1 | pass | pass | 5.8° |
+| 2 | pass | pass | 7.7° |
+| 3 | fail | fail | 9.8° |
+| 4 | pass | pass | 6.4° |
+| 5 | pass | pass | 1.3° |
+| 6 | fail | pass | 9.6° |
+| 7 | fail | pass | 10.4° |
+| 8 | pass | pass | 6.8° |
+| 9 | pass | pass | 19.0° |
+
+### The arm sits still after the cube is in the bin
+
+`rollout` plays until `EVAL_STEPS` (500) and does not look at `in_box`. `in_box` is recorded after the loop. 500 steps is 16.7 s on every seed. On seed 1 the top picture matches the final frame from 8.9 s on, so the last 7.8 s are the open gripper over the cube in the bin. Seeds 5 and 8 hold the same way for 6.9 s and 8.3 s. The later 50-step chunks leave the arm there, and the loop keeps commanding them. The published training env stops at 400 steps. This runner uses 500, and it does not stop when the cube is down.

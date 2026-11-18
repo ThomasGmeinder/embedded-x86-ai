@@ -245,7 +245,9 @@ class GripWatch:
             self.closest = sample
         if sim.above_table():
             self.picked_up = True
-        if sim.held(self.empty_force):
+        # A squeeze on the table is not a hold. The cube has to be off the table
+        # on this same step, still in the jaws.
+        if sim.above_table() and sim.held(self.empty_force):
             self.held = True
         self.step += 1
 

@@ -56,7 +56,7 @@ def test_render_refuses_a_cube_center_inside_a_jaw():
     try:
         sim.reset((0.22, 0.08))
         sim.render("wrist")
-        jaw = next(iter(sim.jaw_geoms))
+        jaw = sim.tip_b
         sim.data.qpos[sim.cube_qadr : sim.cube_qadr + 3] = sim.data.geom_xpos[jaw]
         mujoco.mj_forward(sim.model, sim.data)
         assert sim.jaw_contains_cube_center() is not None
