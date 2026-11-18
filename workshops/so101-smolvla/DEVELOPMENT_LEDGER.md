@@ -95,7 +95,7 @@ The disabled collision was hiding a real grasp failure. `Expert.run((0.22, -0.08
 
 The checkpoint `Harrysunshine/so101-smolvla-sim-real-10task` was trained in the SAPIEN simulation that produced `Harrysunshine/so101-sim-pickplace-v2`. It does not generalize to this MuJoCo digital twin.
 
-Shown a training picture, it follows the recorded lift to about 1°. Shown this twin’s pictures, the same checkpoint reverses direction by 1–2° and the arm jiggles. A pick can still finish. In the ten-seed run, 6 of 10 cubes ended in the bin.
+Shown a training picture, it follows the recorded shoulder command to about 1°. Shown this twin’s pictures, the same checkpoint reverses direction by 1–2° and the arm jiggles. A pick can still finish. In the ten-seed run, 6 of 10 cubes ended in the bin. That success count has not improved.
 
 ## Comparison — the training simulation and this simulation
 
@@ -106,3 +106,28 @@ This simulation is MuJoCo. Physics is 480 Hz. Control is 30 Hz. A rollout here i
 Same joints, episode 490. On the training pictures the lift error is 0.88° at frame 80 and 1.04° at frame 160. On this twin’s pictures at those same joints the lift error is 6.71° and 4.85°. The dataset stores no cube pose and no bin pose, so the cube in this render is not where the training frame shows it. The training wrist shows the cube between black fingers. This wrist shows the cube off to the side of yellow fingers.
 
 The cameras match: 640×480, 59.17° vertical field, wrist lens on the KIT optical frame. Both use absolute joint targets, the same task string, and the same 40 mm pale-blue cube. The recorded training motion does not jiggle. The lift reverses on 1.45% of 167,804 steps, and on 0% of the busiest 50 steps in all 498 episodes. A training clip’s picture never reverses direction (0 of 129 moving frames). This twin’s ten-seed video reverses on 27–53% of moving frames.
+
+## 2026-11-18 — I reported that the pickups did not get better
+
+That report was my failure. I had been asked what causes the jitter, and then what got better. I had not changed a pickup. The ten-seed run was still 6 of 10 cubes in the bin because I left it alone. I wrote that unchanged run down as the bottom line.
+
+The picture test below is a measurement on one frame. It was not applied to a pickup.
+
+## One reach frame, with the cube and the bin moved
+
+The ten-seed run is still 6 of 10 cubes in the bin. The arm still jiggles. This picture test did not change the scene, the controller, or that run.
+
+The test asked one question. Freeze the arm on a training pose. Show the checkpoint the original training photos, then show it this digital twin. How far is the commanded shoulder from the recorded demonstration?
+
+Episode 490, frame 80 is the arm reaching toward the cube, before the grasp.
+
+- Training photos: the shoulder command is 1.22° off the demonstration.
+- This digital twin, cube and bin left where the scene puts them: 7.86° off.
+- Same arm pose, cube and bin moved so the wrist photo shows them where the training wrist photo shows them: 2.41° off.
+
+That is the only improvement, and it is one frame of a test render. The cube was at (0.308, 0.033) m. The bin was at (0.326, 0.151) m. In the wrist photo the cube sits on the same spot as in training, and the bin is within about 1 pixel. The fingers already covered the same part of that photo. Painting the yellow arm black does not remove the jiggle.
+
+Two limits:
+
+- The hand-on-the-cube moment does not improve. Episode 490, frame 160 stays about 6° off, against 2° on the training photos. Episode 486, frame 246 stays about 51° off, against 1.3° on the training photos.
+- The bin position that looks right to the wrist camera looks wrong to the overhead camera, by about 60 pixels across and 45 pixels down. Moving the bin to fix the overhead view makes the wrist view wrong again. There is no single spot on the table that looks right in both photos, which is why 2.41° did not reach 1.22°.
