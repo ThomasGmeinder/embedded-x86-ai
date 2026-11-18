@@ -111,11 +111,11 @@ The cameras match: 640×480, 59.17° vertical field, wrist lens on the KIT optic
 
 That report was my failure. I had been asked what causes the jitter, and then what got better. I had not changed a pickup. The ten-seed run was still 6 of 10 cubes in the bin because I left it alone. I wrote that unchanged run down as the bottom line.
 
-The picture test below is a measurement on one frame. It was not applied to a pickup.
+The picture test below started as a measurement on one frame. It was later put into the random layout. The rerun is the last section.
 
 ## One reach frame, with the cube and the bin moved
 
-The ten-seed run is still 6 of 10 cubes in the bin. The arm still jiggles. This picture test did not change the scene, the controller, or that run.
+The first ten-seed run on the published finger meshes put 6 of 10 cubes in the bin. The arm jiggled. The picture test did not change that run.
 
 The test asked one question. Freeze the arm on a training pose. Show the checkpoint the original training photos, then show it this digital twin. How far is the commanded shoulder from the recorded demonstration?
 
@@ -131,3 +131,23 @@ Two limits:
 
 - The hand-on-the-cube moment does not improve. Episode 490, frame 160 stays about 6° off, against 2° on the training photos. Episode 486, frame 246 stays about 51° off, against 1.3° on the training photos.
 - The bin position that looks right to the wrist camera looks wrong to the overhead camera, by about 60 pixels across and 45 pixels down. Moving the bin to fix the overhead view makes the wrist view wrong again. There is no single spot on the table that looks right in both photos, which is why 2.41° did not reach 1.22°.
+
+## Reach placement put into the pickup, then ten seeds again
+
+The random layout now starts from that cube and bin, with a few millimetres of variation per seed. A cube that puts only one corner into the power-on wrist is kept. The old corner bug put two or more corners in, and that is still rejected. The bin center stays inside the measured finger area. The bin corners of this pose stick about 2 cm outside that box, so the old all-corners rule was blocking it.
+
+Seeds 0 through 9 were run again. 5 of 10 cubes ended in the bin. The previous run put 6 of 10 in the bin. The arm reversed direction on 23% to 53% of the moving frames. The previous run was 27% to 53%. The fingers met the cube at 22° on average. The previous run was 8°.
+
+The jitter did not stop. The grasp got worse. The second ten-seed run used this layout.
+
+## Why the arm jitters
+
+The checkpoint does not choose one path. For each photo it draws 50 separate random numbers, one for each of the next 50 steps, and tries to turn each number into the shoulder angle from a demonstration. Those 50 steps do not look at each other. A bump in the random number for step 10 moves that step by about 17° and the next step by about 3°. The position servo then performs every step.
+
+A training wrist photo is enough to replace those 50 random numbers with one smooth demonstration. The shoulder stays within about 1° of the recording, and the recording itself almost never reverses.
+
+This twin's wrist photo is not enough. Each random number is only partly removed, so the next step often points the other way by 1–2°. The arm does that. That is the jitter.
+
+The wrist photo fails because, at the same arm joints, it does not show the cube and the bin where the demonstration had them. The dataset does not record those positions. At the reach, episode 490 frame 80, putting them where the training wrist shows them cut the shoulder error from 7.86° to 2.41°. The training photo at that frame is 1.22°. The new videos look a bit calmer for that reason, and only for that part of the motion. The overhead photo of the same bin is still about 60 pixels off, so the photo is still not the demonstration.
+
+The grasp is a different photo. The hand is on the cube, and moving the cube and the bin does not turn that photo into a training photo. Episode 490 frame 160 stays about 6° off. Episode 486 frame 246 stays about 51° off. The pickup takes a new photo every 50 steps, so those later photos put the random numbers back into the shoulder command. That is the jitter still in the video. The yellow arm is not the cause: painting it black left the reversals in place, and the fingers already cover the same part of the photo as in training.

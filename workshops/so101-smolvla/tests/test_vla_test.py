@@ -101,8 +101,8 @@ def test_a_seed_places_the_cube_outside_the_tray_and_is_written(tmp_path):
                 sim.bin_half,
                 0.02,
             )
-            for corner in _corners(np.array(layout["bin_xy"]), layout["bin_yaw"], sim.bin_half):
-                assert _in_fingers(corner)
+            assert _in_fingers(np.array(layout["bin_xy"]))
+            assert float(np.hypot(*layout["bin_xy"])) <= 0.38
             for corner in _corners(np.array(layout["cube_xy"]), layout["cube_yaw"], np.array([0.02, 0.02])):
                 assert _in_fingers(corner)
             assert not _wrist_clips_cube(sim, np.array(layout["cube_xy"]), layout["cube_yaw"], 0.02)

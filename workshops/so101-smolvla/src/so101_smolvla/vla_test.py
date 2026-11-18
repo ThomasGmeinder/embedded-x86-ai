@@ -118,7 +118,7 @@ def _wrist_clips_cube(sim: ArmSim, xy: np.ndarray, yaw: float, half: float) -> b
     half_vert = np.tan(np.deg2rad(float(sim.model.cam_fovy[cam])) / 2.0)
     half_horiz = half_vert * (640.0 / 480.0)
     cosine, sine = np.cos(yaw), np.sin(yaw)
-    inside = False
+    inside = 0
     outside = False
     for sx in (-half, half):
         for sy in (-half, half):
@@ -137,52 +137,100 @@ def _wrist_clips_cube(sim: ArmSim, xy: np.ndarray, yaw: float, half: float) -> b
                 ndc_x = (local[0] / -local[2]) / half_horiz
                 ndc_y = (local[1] / -local[2]) / half_vert
                 if abs(ndc_x) <= 1.0 and abs(ndc_y) <= 1.0:
-                    inside = True
+                    inside += 1
                 else:
                     outside = True
-    return inside and outside
+    # One corner in the frame is a sliver. The corner bug had two or more.
+    return inside >= 2 and outside
+
+
+# Episode 490 frame 80. At this reach pose the training wrist shows the cube and
+# the bin here. A pickup that starts elsewhere shows the checkpoint a different picture.
+REACH_ARM = np.array([-9.0, 1.6, -8.4, 90.1, 20.6, 43.9], dtype=np.float64)
+MATCH_CUBE = np.array([0.308, 0.033])
+MATCH_CUBE_YAW = np.deg2rad(-135.0)
+MATCH_BIN = np.array([0.326, 0.151])
+MATCH_BIN_YAW = np.deg2rad(-45.0)
+TRAIN_CUBE_PX = np.array([376.4, 118.3])
+TRAIN_TRAY_PX = np.array([132.1, 37.6])
+WRIST_PX = 30.0
+
+
+def _blob_center(mask: np.ndarray) -> np.ndarray | None:
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return None
+    return np.array([xs.mean(), ys.mean()])
+
+
+def _reach_wrist_offset(frame: np.ndarray) -> tuple[float, float] | None:
+    """How far the cube and the bin sit from the training wrist, in pixels."""
+    red = frame[:, :, 0].astype(np.int16)
+    green = frame[:, :, 1].astype(np.int16)
+    blue = frame[:, :, 2].astype(np.int16)
+    cube = (blue > 100) & (green > 100) & (blue > red + 8) & (red < 220)
+    arm = (red > 60) & (red > blue + 15) & (green > blue + 8)
+    tray = ((red + green + blue) / 3 < 90) & ~arm & ~cube
+    cube_at = _blob_center(cube)
+    tray_at = _blob_center(tray)
+    if cube_at is None or tray_at is None:
+        return None
+    return (
+        float(np.linalg.norm(cube_at - TRAIN_CUBE_PX)),
+        float(np.linalg.norm(tray_at - TRAIN_TRAY_PX)),
+    )
 
 
 def draw_layout(sim: ArmSim, seed: int) -> dict:
-    """Tray first, inside the top view and the measured finger area. Cube outside that tray, in both."""
+    """Place the bin and the cube near the training reach picture.
+
+    The bin center stays in the measured finger area. Every bin corner does not,
+    because the training bin's corners stick out of that box. The cube stays
+    outside the bin. A one-corner sliver in the power-on wrist is kept. Two or
+    more corners in that frame is the corner clip and is rejected.
+    """
+    import mujoco
+
     sim.hold_pose(POWER_ON)
     quad = _camera_table_quad(sim)
-    low = np.maximum(quad.min(axis=0), (FINGER_X[0], FINGER_Y[0]))
-    high = np.minimum(quad.max(axis=0), (FINGER_X[1], FINGER_Y[1]))
     rng = np.random.Generator(np.random.PCG64(seed))
     cube_half = float(sim.model.geom(name="cube_geom").size[0])
     bin_half = sim.bin_half
-
-    def fitted(half: np.ndarray) -> tuple[np.ndarray, float] | None:
-        for _ in range(4000):
-            xy = rng.uniform(low, high)
-            yaw = float(rng.uniform(-np.pi, np.pi))
-            corners = _corners(xy, yaw, half)
-            if all(_inside(quad, corner) and _on_table(sim, corner) and _in_fingers(corner) for corner in corners):
-                return xy, yaw
-        return None
-
-    placed = fitted(bin_half)
-    if placed is None:
-        raise RuntimeError(f"seed {seed} could not place the tray in the top camera view")
-    bin_xy, bin_yaw = placed
-    for _ in range(4000):
-        xy = rng.uniform(low, high)
-        yaw = float(rng.uniform(-np.pi, np.pi))
-        corners = _corners(xy, yaw, np.array([cube_half, cube_half]))
-        if not all(_inside(quad, corner) and _on_table(sim, corner) and _in_fingers(corner) for corner in corners):
+    for _ in range(400):
+        cube = MATCH_CUBE + rng.normal(0.0, 0.006, 2)
+        bin_xy = MATCH_BIN + rng.normal(0.0, 0.006, 2)
+        cube_yaw = float(MATCH_CUBE_YAW + rng.normal(0.0, np.deg2rad(8.0)))
+        bin_yaw = float(MATCH_BIN_YAW + rng.normal(0.0, np.deg2rad(8.0)))
+        cube_corners = _corners(cube, cube_yaw, np.array([cube_half, cube_half]))
+        if not all(_inside(quad, corner) and _on_table(sim, corner) and _in_fingers(corner) for corner in cube_corners):
             continue
-        if not _clear_of_bin(xy, bin_xy, bin_yaw, bin_half, cube_half):
+        if not (_in_fingers(bin_xy) and _inside(quad, bin_xy) and _on_table(sim, bin_xy)):
             continue
-        if _wrist_clips_cube(sim, xy, yaw, cube_half):
+        if float(np.hypot(bin_xy[0], bin_xy[1])) > 0.38:
+            continue
+        if not _clear_of_bin(cube, bin_xy, bin_yaw, bin_half, cube_half):
+            continue
+        sim.hold_pose(POWER_ON)
+        if _wrist_clips_cube(sim, cube, cube_yaw, cube_half):
+            continue
+        sim.place_bin((float(bin_xy[0]), float(bin_xy[1])), bin_yaw)
+        sim.data.qpos[sim.cube_qadr : sim.cube_qadr + 3] = (float(cube[0]), float(cube[1]), 0.02)
+        half = 0.5 * cube_yaw
+        sim.data.qpos[sim.cube_qadr + 3 : sim.cube_qadr + 7] = (np.cos(half), 0.0, 0.0, np.sin(half))
+        mujoco.mj_forward(sim.model, sim.data)
+        sim.hold_pose(REACH_ARM)
+        if sim.jaw_contains_cube_center() is not None:
+            continue
+        offset = _reach_wrist_offset(sim.render("wrist"))
+        if offset is None or offset[0] > WRIST_PX or offset[1] > WRIST_PX:
             continue
         return {
             "bin_xy": (float(bin_xy[0]), float(bin_xy[1])),
             "bin_yaw": bin_yaw,
-            "cube_xy": (float(xy[0]), float(xy[1])),
-            "cube_yaw": yaw,
+            "cube_xy": (float(cube[0]), float(cube[1])),
+            "cube_yaw": cube_yaw,
         }
-    raise RuntimeError(f"seed {seed} could not place the cube outside the tray")
+    raise RuntimeError(f"seed {seed} could not match the training reach picture")
 
 
 def seed_policy(seed: int) -> None:
