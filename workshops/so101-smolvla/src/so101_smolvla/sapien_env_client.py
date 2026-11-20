@@ -16,6 +16,7 @@ from so101_smolvla.sapien_config import (
     SAPIEN_COMMIT,
     SAPIEN_PYTHON,
     SAPIEN_SOURCE,
+    task_spec,
 )
 from so101_smolvla.sapien_protocol import MAX_REQUEST_BYTES, Response, read_response
 
@@ -27,7 +28,9 @@ class SapienPolicyEnvironment:
 
     backend = "sapien"
 
-    def __init__(self, horizon: int = 300) -> None:
+    def __init__(
+        self, horizon: int = 300, task_mode: str = "pick-place"
+    ) -> None:
         if not SAPIEN_PYTHON.is_file():
             raise FileNotFoundError(
                 f"SAPIEN Python is missing: {SAPIEN_PYTHON}; run scripts/setup_sapien_env.sh"
@@ -46,6 +49,10 @@ class SapienPolicyEnvironment:
             )
         if horizon < 1:
             raise ValueError(f"invalid horizon {horizon}")
+        spec = task_spec(task_mode)
+        self.task_mode = task_mode
+        self.task_text = spec.instruction
+        self.facts: dict[str, object] = {}
 
         env = os.environ.copy()
         source_path = os.pathsep.join((str(ROOT / "src"), str(SAPIEN_SOURCE)))
@@ -75,6 +82,7 @@ class SapienPolicyEnvironment:
                     "operation": "hello",
                     "protocol_version": PROTOCOL_VERSION,
                     "horizon": horizon,
+                    "task_mode": task_mode,
                 }
             )
         except Exception:
@@ -88,6 +96,8 @@ class SapienPolicyEnvironment:
             raise RuntimeError("SAPIEN worker returned the wrong simulator commit")
         self.provenance = {
             "backend": self.backend,
+            "task_mode": task_mode,
+            "task_text": hello.metadata["task_text"],
             "protocol_version": PROTOCOL_VERSION,
             "simulator_commit": hello.metadata["simulator_commit"],
             "environment_arguments": hello.metadata["environment_arguments"],
@@ -123,10 +133,20 @@ class SapienPolicyEnvironment:
             raise RuntimeError(f"SAPIEN returned invalid state {state}")
         return PolicyObservation(state=state, top=response.top, wrist=response.wrist)
 
-    def reset(self, environment_seed: int) -> PolicyObservation:
-        response = self._request(
-            {"operation": "reset", "environment_seed": int(environment_seed)}
-        )
+    def reset(
+        self,
+        environment_seed: int,
+        *,
+        stack_replay: dict[str, object] | None = None,
+    ) -> PolicyObservation:
+        request = {
+            "operation": "reset",
+            "environment_seed": int(environment_seed),
+        }
+        if stack_replay is not None:
+            request["stack_replay"] = stack_replay
+        response = self._request(request)
+        self.facts = dict(response.metadata["facts"])
         return self._observation(response)
 
     def step(self, action: np.ndarray) -> PolicyStep:
@@ -136,6 +156,7 @@ class SapienPolicyEnvironment:
         response = self._request({"operation": "step", "action": target.tolist()})
         observation = self._observation(response)
         metadata = response.metadata
+        self.facts = dict(metadata["facts"])
         return PolicyStep(
             observation=observation,
             commanded=np.asarray(metadata["commanded"], dtype=np.float64),
@@ -144,8 +165,19 @@ class SapienPolicyEnvironment:
             terminated=bool(metadata["terminated"]),
             truncated=bool(metadata["truncated"]),
             success=bool(metadata["success"]),
-            facts=dict(metadata["facts"]),
+            facts=self.facts,
         )
+
+    def set_command(self, source: str, target: str) -> dict[str, object]:
+        response = self._request(
+            {
+                "operation": "set_command",
+                "source": source,
+                "target": target,
+            }
+        )
+        self.facts = dict(response.metadata["facts"])
+        return self.facts
 
     def close(self) -> None:
         if self._closed:

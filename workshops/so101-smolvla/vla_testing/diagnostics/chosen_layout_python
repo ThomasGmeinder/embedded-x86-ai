@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Stands in for the simulator's Python on the policy side: starts the worker
+# that places a chosen cube layout and ignores the module arguments the client
+# passes.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$here/../../.venv-sapien/bin/python" "$here/chosen_layout_worker.py"

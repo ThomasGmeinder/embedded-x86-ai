@@ -6,11 +6,11 @@ import numpy as np
 from so101_smolvla.layouts import (
     _clear_of_bin,
     _corners,
-    _in_fingers,
     _wrist_clips_cube,
     draw_layout,
 )
 from so101_smolvla.policy_env import random_output_directory
+from so101_smolvla.reachable_workspace import is_reachable_xy
 from so101_smolvla.sim import ArmSim
 from so101_smolvla.track import POWER_ON
 from so101_smolvla.record import _write_clip, accumulate
@@ -108,13 +108,13 @@ def test_a_seed_places_the_cube_outside_the_tray_and_is_written(tmp_path):
                 sim.bin_half,
                 0.02,
             )
-            assert _in_fingers(np.array(layout["bin_xy"]))
+            assert is_reachable_xy(np.array(layout["bin_xy"]))
             assert float(np.hypot(*layout["bin_xy"])) <= 0.38
             for corner in _corners(np.array(layout["cube_xy"]), layout["cube_yaw"], np.array([0.02, 0.02])):
-                assert _in_fingers(corner)
+                assert is_reachable_xy(corner)
             assert not _wrist_clips_cube(sim, np.array(layout["cube_xy"]), layout["cube_yaw"], 0.02)
         assert len(bins) > 30
-        assert not _in_fingers(np.array([0.4573, -0.1392]))
+        assert not is_reachable_xy(np.array([0.4573, -0.1392]))
         sim.hold_pose(POWER_ON)
         assert _wrist_clips_cube(sim, np.array([0.2909, 0.1118]), np.deg2rad(15.7), 0.02)
         xy, yaw = first["cube_xy"], first["cube_yaw"]

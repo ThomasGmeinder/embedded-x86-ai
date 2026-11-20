@@ -1,0 +1,30 @@
+{
+  "source": "Measured from the real stacking recordings of Harrysunshine/so101-smolvla-sim-real-10task. Top camera, joint zero points and table height, fitted together: robot outline and both cubes in 114 top pictures of 38 recordings (start, 25 frames before the gripper closes, release) plus the grasp and release heights of 187 recordings (vla_testing/diagnostics/calibrate_top_camera.py). A joint zero point is what has to be added to a recorded joint number to get the angle of the simulated robot; the wrist roll was not measured. Wrist camera: outline of the two black jaws and the red cube in 152 wrist pictures of 38 recordings, taken 5 to 60 frames before the gripper closes (vla_testing/diagnostics/calibrate_wrist_camera.py). Table picture: per-pixel median of 104 top pictures of episode 33 with robot and cube pixels left out.",
+  "top_camera": {
+    "position_in_robot_base_m": [0.038007915019989014, 0.152556374669075, 0.5523911714553833],
+    "orientation_in_robot_base_wxyz": [0.8245715523470489, -0.012443667314736642, 0.5655478851941391, -0.009082937640168131],
+    "vertical_field_of_view_deg": 51.30957127796381
+  },
+  "wrist_camera": {
+    "position_on_optical_frame_m": [0.000729, -0.000624, 0.023966],
+    "orientation_on_optical_frame_wxyz": [-0.5275769303547465, 0.5088804332643478, 0.4857693558306447, 0.4761632284564121],
+    "vertical_field_of_view_deg": 62.2221153166237
+  },
+  "joint_zero_points_deg": {
+    "shoulder_pan": 5.037,
+    "shoulder_lift": 1.505,
+    "elbow_flex": -10.419,
+    "wrist_flex": 1.175,
+    "wrist_roll": 0.0
+  },
+  "arm_drives": {
+    "source": "The recording robot's arm has weight and its motors hold it with a position error; the simulator switches the arm's weight off. With the weight on, these drives make the simulated readings follow the recorded commands as the recorded readings did: fitted on 20 recordings, checked on 20 others (vla_testing/diagnostics/fit_arm_drives.py).",
+    "shoulder_pan": {"stiffness_Nm_per_rad": 5.97, "damping_Nms_per_rad": 1.074},
+    "shoulder_lift": {"stiffness_Nm_per_rad": 144.5, "damping_Nms_per_rad": 21.675},
+    "elbow_flex": {"stiffness_Nm_per_rad": 14.45, "damping_Nms_per_rad": 2.081},
+    "wrist_flex": {"stiffness_Nm_per_rad": 85.0, "damping_Nms_per_rad": 10.2},
+    "wrist_roll": {"stiffness_Nm_per_rad": 72.25, "damping_Nms_per_rad": 8.67}
+  },
+  "table_below_robot_base_m": 0.0045,
+  "table_picture": "sapien_stack_recording_table.png"
+}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import subprocess
@@ -13,14 +14,17 @@ import numpy as np
 
 from so101_smolvla.sapien_config import (
     ACTION_SHAPE,
-    ENVIRONMENT_ARGUMENTS,
+    HAND_LINKS,
     MOTOR_BLACK,
     ORANGE_ROBOT_LINKS,
     PROTOCOL_VERSION,
     ROBOT_ORANGE,
     SAPIEN_COMMIT,
     SAPIEN_SOURCE,
+    environment_arguments,
+    task_spec,
 )
+from so101_smolvla.sapien_grip import grip_facts
 from so101_smolvla.sapien_protocol import (
     MAX_REQUEST_BYTES,
     RESPONSE_HEADER,
@@ -71,8 +75,19 @@ def _configure_robot_appearance(env) -> None:
                     part.material.set_base_color(list(color))
 
 
+def _new_environment(arguments: dict, episode_length: int):
+    """The complete environment, painted, that has run nothing yet."""
+    from so101_sim.lerobot_env import So101SimEnv
+
+    env = So101SimEnv(**arguments, episode_length=episode_length)
+    _configure_robot_appearance(env)
+    return env
+
+
 def _scene_facts(env) -> dict:
     inner = env._env.unwrapped
+    if hasattr(inner, "scene_facts"):
+        return inner.scene_facts()
     evaluated = inner.evaluate()
     keys = (
         "success",
@@ -84,6 +99,7 @@ def _scene_facts(env) -> dict:
     facts = {key: _plain(evaluated[key])[0] for key in keys if key in evaluated}
     facts["item_position"] = _plain(inner.item.pose.p)[0]
     facts["bin_position"] = _plain(inner.bin.pose.p)[0]
+    facts["grip"] = grip_facts(inner.agent, inner.item)
     return facts
 
 
@@ -91,13 +107,17 @@ def serve() -> None:
     protocol = os.fdopen(os.dup(sys.stdout.fileno()), "wb", buffering=0)
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
 
-    from so101_sim.lerobot_env import So101SimEnv
+    import so101_smolvla.sapien_stack_env  # noqa: F401
+    from so101_sim.envs import ROBOT_COLOR as TRAINING_ROBOT_COLOR
 
     actual_commit = subprocess.check_output(
         ["git", "-C", str(SAPIEN_SOURCE), "rev-parse", "HEAD"],
         text=True,
     ).strip()
+    make_environment = None
     env = None
+    # Whether the environment has already started a test.
+    started = False
 
     def reply(request_id: int, status: int, payload: bytes) -> None:
         protocol.write(RESPONSE_HEADER.pack(status, request_id, len(payload)))
@@ -125,23 +145,30 @@ def serve() -> None:
                     horizon = int(request["horizon"])
                     if horizon < 1:
                         raise ValueError(f"invalid horizon {horizon}")
-                    env = So101SimEnv(
-                        **ENVIRONMENT_ARGUMENTS,
-                        episode_length=horizon + 10,
+                    task_mode = str(request["task_mode"])
+                    spec = task_spec(task_mode)
+                    arguments = environment_arguments(task_mode)
+                    make_environment = functools.partial(
+                        _new_environment, arguments, horizon + 10
                     )
-                    _configure_robot_appearance(env)
+                    env = make_environment()
+                    started = False
                     payload = encode_payload(
                         {
                             "protocol_version": PROTOCOL_VERSION,
                             "simulator_commit": actual_commit,
+                            "task_mode": task_mode,
+                            "task_text": spec.instruction,
                             "action_shape": list(ACTION_SHAPE),
                             "image_shape": [480, 640, 3],
                             "robot_appearance": {
                                 "printed_parts_rgba": list(ROBOT_ORANGE),
                                 "motors_rgba": list(MOTOR_BLACK),
+                                "hand_links": sorted(HAND_LINKS),
+                                "hand_rgba": [*TRAINING_ROBOT_COLOR, 1.0],
                             },
                             "environment_arguments": {
-                                **ENVIRONMENT_ARGUMENTS,
+                                **arguments,
                                 "episode_length": horizon + 10,
                             },
                         }
@@ -152,10 +179,40 @@ def serve() -> None:
                 if env is None:
                     raise RuntimeError("hello must initialize the environment first")
                 if operation == "reset":
-                    obs, _ = env.reset(seed=int(request["environment_seed"]))
+                    # The simulator's reset moves robot and objects back but
+                    # keeps its physics scene, and what that scene keeps from
+                    # earlier tests changes how the next one runs. Every test
+                    # therefore starts in an environment that has run nothing.
+                    if started:
+                        env.close()
+                        env = None
+                        env = make_environment()
+                    started = True
+                    if "stack_replay" in request:
+                        raw_obs, _ = env._env.reset(
+                            seed=int(request["environment_seed"]),
+                            options={"stack_replay": request["stack_replay"]},
+                        )
+                        obs = env._format_raw_obs(raw_obs)
+                    else:
+                        obs, _ = env.reset(
+                            seed=int(request["environment_seed"])
+                        )
                     metadata, top, wrist = _observation(obs)
                     metadata["facts"] = _scene_facts(env)
                     reply(request_id, 1, encode_payload(metadata, top, wrist))
+                elif operation == "set_command":
+                    inner = env._env.unwrapped
+                    if not hasattr(inner, "set_stack_goal"):
+                        raise ValueError("selected task does not accept stack commands")
+                    inner.set_stack_goal(
+                        str(request["source"]), str(request["target"])
+                    )
+                    reply(
+                        request_id,
+                        1,
+                        encode_payload({"facts": _scene_facts(env)}),
+                    )
                 elif operation == "step":
                     action = np.asarray(request["action"], dtype=np.float32)
                     if action.shape != ACTION_SHAPE or not np.isfinite(action).all():

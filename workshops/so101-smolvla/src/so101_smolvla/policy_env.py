@@ -9,6 +9,12 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 
 BACKEND_DIRECTORY_NAMES = {"mujoco": "MuJoCo", "sapien": "sapien"}
+STACKING_DIRECTORY_PREFIXES = {
+    "stack2-training": "random-stacking-sapien",
+    "stack2-sim-view": "random-stacking-simview-sapien",
+    "stack2-recording-rig": "random-stacking-recording-rig-sapien",
+    "stack3-color": "random-stacking-color-sapien",
+}
 
 
 def random_output_directory(root: Path, backend: str, stamp: str) -> Path:
@@ -18,6 +24,22 @@ def random_output_directory(root: Path, backend: str, stamp: str) -> Path:
     except KeyError as exc:
         raise ValueError(f"unknown policy backend {backend!r}") from exc
     return root / f"random-{label}-{stamp}"
+
+
+def random_stacking_output_directory(
+    root: Path, backend: str, task_mode: str, stamp: str
+) -> Path:
+    """Return the required task-labelled random stacking directory."""
+    if backend != "sapien":
+        raise ValueError("random stacking supports only the SAPIEN backend")
+    try:
+        prefix = STACKING_DIRECTORY_PREFIXES[task_mode]
+    except KeyError as exc:
+        expected = ", ".join(sorted(STACKING_DIRECTORY_PREFIXES))
+        raise ValueError(
+            f"unsupported stacking task {task_mode!r}; expected {expected}"
+        ) from exc
+    return root / f"{prefix}-{stamp}"
 
 
 @dataclass(frozen=True)
@@ -108,6 +130,7 @@ def create_policy_environment(
     *,
     initial_pose: np.ndarray | None = None,
     horizon: int = 300,
+    task_mode: str = "pick-place",
 ):
     """Construct the sole selected policy environment backend."""
     if backend == "mujoco":
@@ -117,5 +140,5 @@ def create_policy_environment(
     if backend == "sapien":
         from so101_smolvla.sapien_env_client import SapienPolicyEnvironment
 
-        return SapienPolicyEnvironment(horizon=horizon)
+        return SapienPolicyEnvironment(horizon=horizon, task_mode=task_mode)
     raise ValueError(f"unknown policy backend {backend!r}; expected 'mujoco' or 'sapien'")

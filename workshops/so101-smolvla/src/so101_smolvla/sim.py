@@ -10,6 +10,8 @@ os.environ.setdefault("MUJOCO_GL", "egl")
 import mujoco
 import numpy as np
 
+from so101_smolvla.grasp_geometry import finger_face_angle_deg
+
 ROOT = Path(__file__).resolve().parents[2]
 SCENE = ROOT / "assets" / "robotstudio_so101" / "scene_task.xml"
 
@@ -216,26 +218,12 @@ class ArmSim:
         return np.array(self.data.qpos[self.cube_qadr : self.cube_qadr + 3], dtype=np.float64)
 
     def finger_face_deg(self) -> float:
-        """Angle between the fingertip line and the nearest vertical face of the cube.
-
-        Zero means the jaws close straight onto a face. The cube orientation is
-        the live body orientation, so a yaw during the episode is included.
-        """
-        pinch = self.data.geom_xpos[self.tip_b][:2] - self.data.geom_xpos[self.tip_a][:2]
-        pinch_norm = float(np.linalg.norm(pinch))
-        if pinch_norm < 1e-9:
-            return 90.0
-        pinch = pinch / pinch_norm
-        axes = self.data.xmat[self.cube_body].reshape(3, 3)[:2, :2]
-        errors = []
-        for column in range(2):
-            face = axes[:, column]
-            face_norm = float(np.linalg.norm(face))
-            if face_norm < 1e-9:
-                continue
-            cosine = abs(float(np.dot(pinch, face / face_norm)))
-            errors.append(float(np.degrees(np.arccos(min(1.0, cosine)))))
-        return min(errors) if errors else 90.0
+        """Angle between the fingertip line and the nearest vertical face of the cube."""
+        return finger_face_angle_deg(
+            self.data.geom_xpos[self.tip_a],
+            self.data.geom_xpos[self.tip_b],
+            self.data.xmat[self.cube_body],
+        )
 
     def jaw_contact(self) -> bool:
         for index in range(self.data.ncon):

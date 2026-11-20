@@ -1,0 +1,354 @@
+{
+  "checkpoint": "Harrysunshine/so101-smolvla-sim-real-10task",
+  "checkpoint_revision": "7d9501d2b82c54849fbf98b5e8fa79c3470eb916",
+  "backend": "sapien",
+  "provenance": {
+    "backend": "sapien",
+    "task_mode": "stack2-recording-rig",
+    "task_text": "Stack the smaller cube on the larger one",
+    "protocol_version": 1,
+    "simulator_commit": "239b38e076387b11d5c0b0da29487edcbde5f905",
+    "environment_arguments": {
+      "control_mode": "pd_joint_pos",
+      "unit_convention": "real",
+      "obs_type": "pixels_agent_pos",
+      "sim_backend": "physx_cpu",
+      "auto_reset": false,
+      "observation_width": 640,
+      "observation_height": 480,
+      "render_mode": "rgb_array",
+      "task": "SO101Stack2RecordingRig-v1",
+      "task_description": "Stack the smaller cube on the larger one",
+      "episode_length": 660
+    },
+    "robot_appearance": {
+      "printed_parts_rgba": [
+        1.0,
+        0.35,
+        0.0,
+        1.0
+      ],
+      "motors_rgba": [
+        0.05,
+        0.05,
+        0.05,
+        1.0
+      ],
+      "hand_links": [
+        "gripper_link",
+        "moving_jaw_so101_v1_link",
+        "wrist_camera_mount_link"
+      ],
+      "hand_rgba": [
+        0.05,
+        0.05,
+        0.05,
+        1.0
+      ]
+    }
+  },
+  "package_versions": {
+    "lerobot": "0.7.0",
+    "torch": "2.14.0+rocm10.1.0",
+    "numpy": "2.2.6",
+    "huggingface-hub": "2.4.0"
+  },
+  "task_mode": "stack2-recording-rig",
+  "task": "Stack the smaller cube on the larger one",
+  "environment_seed": 8,
+  "policy_seed": 8,
+  "steps_per_command": 650,
+  "initial_layout": {
+    "red": [
+      0.30926665601190606,
+      0.07298783790811329
+    ],
+    "blue": [
+      0.24981048073396012,
+      0.05603844571162759
+    ]
+  },
+  "commands": [
+    {
+      "original_command": "put red cube on blue cube",
+      "canonical_command": "put red cube on blue cube",
+      "source": "red",
+      "target": "blue",
+      "success": true,
+      "success_step": 246,
+      "failure_stage": null,
+      "selected": true,
+      "lifted": true,
+      "released": true,
+      "grip": true,
+      "grip_step": 185,
+      "finger_face_deg": 5.24,
+      "grip_roll_deg": -18.12,
+      "final_facts": {
+        "task_mode": "stack2-training",
+        "active_source": "red",
+        "active_target": "blue",
+        "initial_layout": {
+          "red": [
+            0.30926665601190606,
+            0.07298783790811329
+          ],
+          "blue": [
+            0.24981048073396012,
+            0.05603844571162759
+          ]
+        },
+        "initial_state_source_index": 195,
+        "initial_state_real": [
+          5.230769157409668,
+          -109.4065933227539,
+          92.87911987304688,
+          80.92308044433594,
+          -7.252747058868408,
+          3.4076015949249268
+        ],
+        "cube_sizes": {
+          "red": 0.02,
+          "blue": 0.04
+        },
+        "cube_positions": {
+          "red": [
+            0.2627345323562622,
+            0.044439222663640976,
+            0.045502085238695145
+          ],
+          "blue": [
+            0.2498112916946411,
+            0.05603720620274544,
+            0.015499941073358059
+          ]
+        },
+        "interfaces": {
+          "red_on_blue": {
+            "xy_distance": 0.01736442744731903,
+            "z_error": 2.1439045667648315e-06,
+            "source_speed": 0.006276087835431099,
+            "supported": true
+          },
+          "blue_on_red": {
+            "xy_distance": 0.01736442744731903,
+            "z_error": 0.06000214070081711,
+            "source_speed": 0.0007029507542029023,
+            "supported": false
+          }
+        },
+        "table_supported": {
+          "red": false,
+          "blue": true
+        },
+        "grasped": {
+          "red": false,
+          "blue": false
+        },
+        "grip": {
+          "red": {
+            "contact": false,
+            "distance": 0.02671926795711051,
+            "finger_face_deg": 7.720664278755567
+          },
+          "blue": {
+            "contact": false,
+            "distance": 0.05664498345805831,
+            "finger_face_deg": 39.20009198465416
+          }
+        },
+        "source_released": true,
+        "robot_static": true,
+        "success": true,
+        "top_camera": {
+          "position": [
+            0.03800789753940187,
+            0.15255636200833111,
+            0.5523911177391108
+          ],
+          "focal_length_px": 499.69189453125,
+          "projection": [
+            [
+              114.79500579833984,
+              -508.7519836425781,
+              -282.9938049316406,
+              229.57350158691406
+            ],
+            [
+              -379.7252197265625,
+              -12.09367561340332,
+              -403.67620849609375,
+              239.2646942138672
+            ],
+            [
+              0.3601462244987488,
+              -0.02905411273241043,
+              -0.9324433207511902,
+              0.5058174133300781
+            ]
+          ]
+        },
+        "wrist_camera": {
+          "position_on_optical_frame": [
+            0.00072900002123788,
+            -0.000623999978415668,
+            0.023965999484062195
+          ],
+          "orientation_on_optical_frame_wxyz": [
+            -0.5275769233703613,
+            0.5088804364204407,
+            0.4857693612575531,
+            0.47616323828697205
+          ],
+          "focal_length_px": 397.67901611328125,
+          "projection": [
+            [
+              -163.49449157714844,
+              -334.5281066894531,
+              -349.15484619140625,
+              116.30055236816406
+            ],
+            [
+              -441.213623046875,
+              97.93035888671875,
+              -107.18588256835938,
+              147.12008666992188
+            ],
+            [
+              -0.277103066444397,
+              0.1665317565202713,
+              -0.9462987184524536,
+              0.22748808562755585
+            ]
+          ]
+        },
+        "simulated_arm_deg": [
+          -12.71285629272461,
+          1.9675419330596924,
+          3.7798588275909424,
+          75.5979995727539,
+          -18.23450469970703
+        ],
+        "arm_drives": {
+          "has_weight": true,
+          "stiffness": [
+            5.96999979019165,
+            144.5,
+            14.449999809265137,
+            85.0,
+            72.25
+          ],
+          "damping": [
+            1.0740000009536743,
+            21.674999237060547,
+            2.0810000896453857,
+            10.199999809265137,
+            8.670000076293945
+          ]
+        }
+      }
+    }
+  ],
+  "success": true,
+  "failure_stage": null,
+  "raw_model_targets": {
+    "shoulder_pan": {
+      "moving_steps": 164,
+      "reversals": 61,
+      "reversal_opportunities": 119,
+      "reversal_rate": 0.5126050420168067,
+      "median_step": 0.3240218162536621,
+      "p95_step": 1.1421634197235107
+    },
+    "shoulder_lift": {
+      "moving_steps": 231,
+      "reversals": 87,
+      "reversal_opportunities": 217,
+      "reversal_rate": 0.4009216589861751,
+      "median_step": 0.9659271240234375,
+      "p95_step": 3.801455497741699
+    },
+    "elbow_flex": {
+      "moving_steps": 232,
+      "reversals": 85,
+      "reversal_opportunities": 217,
+      "reversal_rate": 0.391705069124424,
+      "median_step": 0.901341438293457,
+      "p95_step": 3.5345709323883048
+    },
+    "wrist_flex": {
+      "moving_steps": 196,
+      "reversals": 67,
+      "reversal_opportunities": 157,
+      "reversal_rate": 0.4267515923566879,
+      "median_step": 0.40520477294921875,
+      "p95_step": 1.2705459594726562
+    },
+    "wrist_roll": {
+      "moving_steps": 165,
+      "reversals": 80,
+      "reversal_opportunities": 116,
+      "reversal_rate": 0.6896551724137931,
+      "median_step": 0.24551010131835938,
+      "p95_step": 0.7144622802734367
+    },
+    "gripper": {
+      "moving_steps": 183,
+      "reversals": 73,
+      "reversal_opportunities": 138,
+      "reversal_rate": 0.5289855072463768,
+      "median_step": 0.3064451217651367,
+      "p95_step": 2.3438774108886724
+    }
+  },
+  "achieved_joints": {
+    "shoulder_pan": {
+      "moving_steps": 99,
+      "reversals": 0,
+      "reversal_opportunities": 92,
+      "reversal_rate": 0.0,
+      "median_step": 0.28725433349609375,
+      "p95_step": 0.6491198539733887
+    },
+    "shoulder_lift": {
+      "moving_steps": 190,
+      "reversals": 4,
+      "reversal_opportunities": 161,
+      "reversal_rate": 0.024844720496894408,
+      "median_step": 0.7668401896953583,
+      "p95_step": 3.13915843963623
+    },
+    "elbow_flex": {
+      "moving_steps": 201,
+      "reversals": 4,
+      "reversal_opportunities": 176,
+      "reversal_rate": 0.022727272727272728,
+      "median_step": 0.5900382995605469,
+      "p95_step": 2.476083755493164
+    },
+    "wrist_flex": {
+      "moving_steps": 172,
+      "reversals": 2,
+      "reversal_opportunities": 147,
+      "reversal_rate": 0.013605442176870748,
+      "median_step": 0.26384735107421875,
+      "p95_step": 0.6511035919189453
+    },
+    "wrist_roll": {
+      "moving_steps": 69,
+      "reversals": 1,
+      "reversal_opportunities": 45,
+      "reversal_rate": 0.022222222222222223,
+      "median_step": 0.18343830108642578,
+      "p95_step": 0.352739143371582
+    },
+    "gripper": {
+      "moving_steps": 104,
+      "reversals": 2,
+      "reversal_opportunities": 82,
+      "reversal_rate": 0.024390243902439025,
+      "median_step": 0.23424315452575684,
+      "p95_step": 1.3584475040435784
+    }
+  }
+}

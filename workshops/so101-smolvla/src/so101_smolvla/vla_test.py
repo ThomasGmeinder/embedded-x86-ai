@@ -13,10 +13,16 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+from so101_smolvla.grasp_geometry import (
+    FINGER_ANGLE_NOTE,
+    GripMoment,
+    GripSample,
+    finger_angle_summary,
+)
 from so101_smolvla.layouts import draw_layout
 from so101_smolvla.policy_env import random_output_directory
 from so101_smolvla.record import _write_clip, accumulate
-from so101_smolvla.sim import PHYSICS_HZ, ArmSim
+from so101_smolvla.sim import ARM, PHYSICS_HZ, ArmSim
 from so101_smolvla.track import (
     CHUNK,
     EVAL_STEPS,
@@ -77,30 +83,26 @@ def prepare(
 
 
 class GripWatch:
-    """First jaw contact, or the closest approach when the jaws never touch."""
+    """The grip of one MuJoCo test, and whether the cube was picked up and held."""
 
     def __init__(self, empty_force: float = 0.0) -> None:
         self.empty_force = empty_force
-        self.grip: dict | None = None
-        self.closest: dict | None = None
+        self.moment = GripMoment()
         self.picked_up = False
         self.held = False
         self.step = 0
 
     def observe(self, sim: ArmSim) -> None:
         mid = (sim.data.geom_xpos[sim.tip_a] + sim.data.geom_xpos[sim.tip_b]) / 2
-        dist = float(np.linalg.norm(mid - sim.cube_pos()))
-        sample = {
-            "step": self.step,
-            "dist": dist,
-            "finger_face_deg": round(sim.finger_face_deg(), 2),
-            "roll_deg": round(float(sim.read_state()[4]), 2),
-            "contact": sim.jaw_contact(),
-        }
-        if sample["contact"] and self.grip is None:
-            self.grip = sample
-        if self.closest is None or dist < self.closest["dist"]:
-            self.closest = sample
+        self.moment.observe(
+            GripSample(
+                step=self.step,
+                distance=float(np.linalg.norm(mid - sim.cube_pos())),
+                finger_face_deg=sim.finger_face_deg(),
+                roll_deg=float(sim.read_state()[ARM.index("wrist_roll")]),
+                contact=sim.jaw_contact(),
+            )
+        )
         if sim.above_table():
             self.picked_up = True
         # A squeeze on the table is not a hold. The cube has to be off the table
@@ -109,8 +111,8 @@ class GripWatch:
             self.held = True
         self.step += 1
 
-    def chosen(self) -> dict:
-        return self.grip if self.grip is not None else self.closest
+    def chosen(self) -> GripSample:
+        return self.moment.chosen()
 
 
 def empty_close_force(sim: ArmSim) -> float:
@@ -176,10 +178,7 @@ def run_scenario(
         "layout_seed": layout_seed,
         "policy_seed": policy_seed,
         "backend": "mujoco",
-        "grip": grip["contact"],
-        "grip_step": grip["step"],
-        "finger_face_deg": grip["finger_face_deg"],
-        "grip_roll_deg": grip["roll_deg"],
+        **grip.as_result(),
         "picked_up": watch.picked_up,
         "held": watch.held,
         "trajectory": motion,
@@ -218,16 +217,12 @@ def _count(rows: list[dict], key: str) -> tuple[int, int]:
 
 def write_report(rows: list[dict], dest: Path) -> Path:
     """One page: links to the accumulated videos, then pass/fail counts and each seed."""
-    angles = [float(row["finger_face_deg"]) for row in rows]
-    mean = float(np.mean(angles)) if angles else 0.0
     lines = [
         f"# Random regression {dest.name}",
         "",
         "Accumulated video: [top](overall-top.mp4), [wrist](overall-wrist.mp4).",
         "",
-        "The finger angle is the angle between the fingertip line and the nearest cube face",
-        "at the first jaw contact. Zero is square onto the face. If the jaws never touch,",
-        "the angle is taken at the closest approach.",
+        *FINGER_ANGLE_NOTE,
         "",
         "| Check | Pass | Fail |",
         "|---|---:|---:|",
@@ -243,8 +238,7 @@ def write_report(rows: list[dict], dest: Path) -> Path:
     lines.extend(
         [
             "",
-            f"Finger-to-face angle at grip: mean {mean:.1f}°, "
-            f"median {float(np.median(angles)):.1f}°, max {max(angles):.1f}°. Ideal is 0°.",
+            finger_angle_summary(row["finger_face_deg"] for row in rows),
             "",
             "| Layout seed | Policy seed | In bin | Picked up | Held | Jaw contact | Finger angle ° | Lift reversals | Elbow reversals |",
             "|---:|---:|---|---|---|---|---:|---:|---:|",

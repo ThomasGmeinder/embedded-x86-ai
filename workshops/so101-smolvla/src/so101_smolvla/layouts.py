@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from so101_smolvla.reachable_workspace import is_reachable_xy
 from so101_smolvla.sim import ArmSim
 
 POWER_ON = np.array([-5.76, -100.0, 92.97, 63.38, -0.53, 1.90], dtype=np.float64)
@@ -15,8 +16,6 @@ MATCH_BIN_YAW = np.deg2rad(-45.0)
 TRAIN_CUBE_PX = np.array([376.4, 118.3])
 TRAIN_TRAY_PX = np.array([132.1, 37.6])
 WRIST_PX = 30.0
-FINGER_X = (0.172, 0.368)
-FINGER_Y = (-0.099, 0.190)
 def _camera_table_quad(sim: ArmSim) -> np.ndarray:
     cam = sim.cam_id["top"]
     origin = sim.data.cam_xpos[cam]
@@ -56,10 +55,6 @@ def _corners(xy: np.ndarray, yaw: float, half: np.ndarray) -> np.ndarray:
         [[half[0], half[1]], [half[0], -half[1]], [-half[0], half[1]], [-half[0], -half[1]]]
     )
     return xy + local @ rotation.T
-
-
-def _in_fingers(point: np.ndarray) -> bool:
-    return FINGER_X[0] <= point[0] <= FINGER_X[1] and FINGER_Y[0] <= point[1] <= FINGER_Y[1]
 
 
 def _clear_of_bin(
@@ -144,11 +139,17 @@ def draw_layout(sim: ArmSim, seed: int) -> dict:
         bin_yaw = float(MATCH_BIN_YAW + rng.normal(0.0, np.deg2rad(8.0)))
         cube_corners = _corners(cube, cube_yaw, np.array([cube_half, cube_half]))
         if not all(
-            _inside(quad, corner) and _on_table(sim, corner) and _in_fingers(corner)
+            _inside(quad, corner)
+            and _on_table(sim, corner)
+            and is_reachable_xy(corner)
             for corner in cube_corners
         ):
             continue
-        if not (_in_fingers(bin_xy) and _inside(quad, bin_xy) and _on_table(sim, bin_xy)):
+        if not (
+            is_reachable_xy(bin_xy)
+            and _inside(quad, bin_xy)
+            and _on_table(sim, bin_xy)
+        ):
             continue
         if float(np.hypot(bin_xy[0], bin_xy[1])) > 0.38:
             continue

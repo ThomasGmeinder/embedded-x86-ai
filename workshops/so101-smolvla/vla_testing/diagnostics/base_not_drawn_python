@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Stands in for the simulator's Python on the policy side: starts the worker
+# whose recording-rig scene does not draw the robot's base and ignores the
+# module arguments the client passes.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$here/../../.venv-sapien/bin/python" "$here/base_not_drawn_worker.py"
