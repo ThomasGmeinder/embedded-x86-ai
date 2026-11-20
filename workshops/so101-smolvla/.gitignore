@@ -5,3 +5,9 @@ __pycache__/
 scripted_testing/
 vla_testing/**/*.mp4
 .pytest_cache/
+# Run folders and loose results stay local; only the diagnostics are kept in git.
+# Files already tracked stay tracked; add a run's small files on purpose with `git add -f`.
+vla_testing/*
+!vla_testing/diagnostics/
+# State of the Codex command-line tool.
+.codex/

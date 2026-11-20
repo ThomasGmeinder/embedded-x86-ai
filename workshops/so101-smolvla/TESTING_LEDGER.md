@@ -1602,3 +1602,167 @@ again from the export; it ran at 18:00 on the working tree, whose
 tracked files equal the commit (`git status` lists no modified tracked
 file in the workshop after the commit). The folder
 `/tmp/so101-commit-e9f453c` was left in place.
+
+### Addition, 19:10: the push, and the checkpoint asked on its own training pictures
+
+The push: `git push origin so101-smolvla` after a fetch that showed no
+commit on `origin` missing here; `2e59205..ddd2319`, recorded by git at
+18:59:26. No force.
+
+| Job | Started, ended | Command | Result |
+|---|---|---|---|
+| `own-training-pictures-trial-1795197783` (foreground) | 19:03, 16 s | The changed script imported in `.venv` with the names its asking step imports; `answers_on_own_training_pictures.py pick 25 trial` in `.venv-sapien`; its `bin_task_robot()` built once and three recorded readings posed | Import fine; 500 of 500 episodes usable, two picked, pictures 480×640, nothing written, 8.4 s; tip 11.9 to 12.2 mm above the table at the closing frame of episodes 0, 250, 499 |
+| `own-training-pictures-1795197834` (tmux) | 19:03:54, exit 0 at 19:06:54 | For 25, 55 and 105 frames: `pick <n>` (`.venv-sapien`), `ask <n>` (`.venv`; before the first, `ask 25 trial`), `report <n>` (`.venv-sapien`) | 18 result files in `analysis/` (`own-training-pictures-sim-cube20-<n>-pictures.npz`, `-top.png`, `-wrist.png`, `-answers.npz`; `own-training-pictures-<n>.json`, `-per-episode.npz`); 38 answers per moment at 0.78, 0.72 and 0.63 s per answer; usable episodes 500, 500, 491 of 500 |
+
+Readiness check before the tmux launch: no session of that name, both
+Python environments and the script present, the three stored stacking
+results present, no result file of this job yet, the graphics processor
+visible. Both launches were announced first. Two typed-in looks before
+the script was finished failed for setup reasons and gave no result: the
+data set's closing rule was called without the upstream simulator on the
+path, and then in `.venv`, where that package cannot be imported (it
+needs `sapien`); the script therefore picks its moments on the
+simulator's side. Typed-in afterwards, from stored files only: the three
+result files printed; the same measure for the seven picture pairs of
+`early-reach-25-per-recording.npz`; a search of the data set's source
+folder and of the upstream simulator for a stacking task (none). The
+numbers and what they mean are in `DEVELOPMENT_LEDGER.md`, section "The
+checkpoint on its own training pictures". No product file changed, so
+the test suite was not run again. The ledger additions of 19:10 and the
+diagnostic are not committed.
+
+### Addition, 19:22: stored files read again, no job
+
+No tmux job, no model run, no simulation, no test run; `tmux ls` showed
+no server at 19:16. Every step was a typed-in command that reads stored
+files and prints, between 19:16 and 19:22:
+
+| What was read | Command | Result |
+|---|---|---|
+| `analysis/early-reach-{105,55}-top-parts.json` | typed-in `python3` | the stored medians of the top-picture mixes, as in the development ledger |
+| `analysis/early-reach-105-predictions.npz`, `early-reach-105-pictures.npz` | typed-in, `.venv` | a sheet of real against scene top pictures of three recordings, written to `/tmp/top-real-against-scene-105.png` and `-near-enlarged.png` (looked at; not used for a number) |
+| `analysis/early-reach-{105,55,25}-per-recording.npz` | typed-in `python3`, then again in `.venv` | recorded cube colours against the plain scene, per recording |
+| `analysis/replay-zero-points-weighted-arm.json` (35 rows of 01:16) | typed-in `python3`, more than once | 23 stacks and 12 others sorted by kind: 3 + 3 + 2 + 2 + 1 + 1 |
+| `vla_testing/random-stacking-recording-rig-sapien-20261120-180023/seed-*/trajectory.npz` and `result.json` | typed-in, `.venv`, more than once | 15 of 20 tests lift; fastest rise in a step 3.7 to 9.7 mm; the cube at the opening command in 8 tests |
+
+Two of these prints stopped on a fault of their own and gave no number:
+one treated `summary.json` of the run as a dictionary (it is a list),
+one measured 15 steps after an opening command that is the last stored
+step of its test; the second was repeated with that case named. The
+numbers and what they say are in `DEVELOPMENT_LEDGER.md`, "Addition,
+19:22" at its end. No file under `src/`, `tests/`, `configs/` or
+`scripts/` changed, so the suite was not run again; its last run is the
+one of 18:16:38 from the export of commit `e9f453c` (103 passed, 1
+expected failure). Not committed: the ledger additions of 19:10 and of
+19:22 and the diagnostic `answers_on_own_training_pictures.py`.
+
+### Addition, 21:05: the humans' commands replayed, the stop-short of the real joints, and a model run with it
+
+No product file, test or configuration changed. Logs and exit files are
+in `~/.cache/so101-stack-training/logs/`, result files in
+`~/.cache/so101-stack-training/analysis/`. Simulator-side jobs run with
+`.venv-sapien` and `PYTHONPATH=src:/tmp/Xbotics-SO101-Sim:vla_testing/diagnostics`,
+the model-side job with `.venv` and
+`PYTHONPATH=src:~/.cache/so101-stack-training:vla_testing/diagnostics`,
+all from the workshop folder.
+
+| Job | Clock (from its log) | Command | Result |
+|---|---|---|---|
+| `replay-fresh-all-1795199282` (tmux) | 19:28:02 to 19:50:05 | `replay_recordings_fresh_scene.py all-187` | `replay-fresh-scene-all-187.json`, `-courses.npz`: 187 recordings, 121 stacks, 156 lifted, 146 still up at the release; 1,319 s by its own count |
+| `servo-stop-short-fit-1795201047` (tmux) | 19:57:27 to 20:07:22 | `servo_stop_short.py fit-40` | `servo-stop-short-fit-40.json`, `-tip-miss.npz`: stop-short of the recording robot per joint from 200 recordings; tip miss of three states on 187 recordings and on the 147 not used in the fit; 589 s by its own count |
+| `replay-fresh-servo-trial-1795201971` (plain command) | 20:12:51 to 20:14:42 | `replay_recordings_fresh_scene.py trial 2 5 --servo-state "scene as it is"`, then the same with `"stop-short and drives fitted on 40 recordings"` | no result file (label `trial`); the first gives the stored rows of recordings 2 to 5 of the 19:28 job again, no field differs; 2 stacks of 4 in each |
+| `replay-fresh-servo-1795202129` (tmux) | 20:15:29 to 20:39:54 | `replay_recordings_fresh_scene.py fitted-stop-short-187 --servo-state "stop-short and drives fitted on 40 recordings"` | `replay-fresh-scene-fitted-stop-short-187.json`, `-courses.npz`: 115 stacks, 151 lifted, 137 still up at the release; 1,460 s by its own count |
+| `stack-servo-stop-short-1795203781` (tmux) | 20:43:01 to 20:44:07 | `stacking_with_servo_stop_short.py 20 0` | **failed** after the first test with a `RuntimeError` of the script's own check (tolerance below the single precision of the stored commands); its exit file says 0, which is wrong (see below); folder `vla_testing/random-stacking-servo-stop-short-sapien-20261120-204302` holds that one test and no summary, left where it is |
+| `launch-line-check-1795203964-fail`, `-ok` (tmux) | 20:46:04 | the corrected launch line with `false` and with `true` | exit files 1 and 0 (`/tmp/launch-line-check-1795203964-*.exit`) |
+| `stack-servo-stop-short-1795203995` (tmux) | 20:46:35 to 21:00:34, exit 0 | `stacking_with_servo_stop_short.py 20 0` | `vla_testing/random-stacking-servo-stop-short-sapien-20261120-204636`: 7 stacks in 20 (seeds 1, 4, 7, 9, 10, 17, 18 at steps 243, 246, 632, 426, 394, 239, 277); 5 dropped cube, 4 no lift, 2 cube displaced without grasp, 1 final stack unstable, 1 wrong cube selected; `COMPLETE.json`, `summary.json`, `REPORT.md` |
+
+Compared with `random-stacking-recording-rig-sapien-20261120-180023`
+(same environment seeds 0 to 19, same model noise, same layouts, checked
+in the comparison): 10 stacks there, 7 here; stack in both 5, only there
+5, only here 2, in neither 8.
+
+Two short trials before the two long simulator jobs
+(`replay-fresh-trial-1795199232`, `servo-stop-short-trial-1795201016`)
+wrote no result file. Readiness checks before each launch: no session of
+that name, input files and Python present, no result file of the job
+yet, the changed scripts imported; before the model run the wrapped
+environment was built once, reset and stepped four times without the
+model (a command 3.0° above the start gives the pan motor 1.81°).
+
+The exit files of this part: from 17:57 on my launch line ended its
+command group with a `date`, so the exit file held the status of that
+`date`. This concerns eight jobs (`full-suite-1795193877`,
+`stack-restored-placement-1795194022`, `commit-check-1795194998`,
+`own-training-pictures-1795197834`, `replay-fresh-all-1795199282`,
+`servo-stop-short-fit-1795201047`, `replay-fresh-servo-1795202129`,
+`stack-servo-stop-short-1795203781`). The "exit 0" written for them in
+this ledger is not evidence of success. Only the last of the eight has
+a `Traceback` in its log; for the other seven the evidence is their
+result files and test counts, read in the same step as each job. The
+line is corrected and was tried with a failing command; the job of
+20:46:35 is the first whose exit file is the job's own status.
+
+The numbers and what they say are in `DEVELOPMENT_LEDGER.md`,
+"Addition, 21:05" at its end. No file under `src/`, `tests/`,
+`configs/` or `scripts/` changed, so the suite was not run again; its
+last run is the one of 18:16:38 from the export of commit `e9f453c`
+(103 passed, 1 expected failure). Not committed: the ledger additions
+of 19:10, 19:22 and 21:05 and the diagnostics
+`answers_on_own_training_pictures.py`,
+`replay_recordings_fresh_scene.py`, `servo_stop_short.py`,
+`servo_hold.py` and `stacking_with_servo_stop_short.py`.
+
+### Addition, 21:30: the humans' commands with the cubes from the first top picture
+
+Started after the final response of 21:02 on the automatic goal
+reminder, not on a message of the user (recorded in
+`AGENT_MISTAKES.md`). Changed: the untracked diagnostic
+`vla_testing/diagnostics/replay_recordings_fresh_scene.py` (new option
+`--places-from-pictures`). No product file, test or configuration
+changed. Simulator side, `.venv-sapien`, from the workshop folder.
+
+| Job | Clock (from its log) | Command | Result |
+|---|---|---|---|
+| `replay-pictures-trial-1795205256` (plain command, 31 s) | 21:07:36 to 21:08:07, exit 0 | a check that a cube placed and turned by the new functions reads back the asked place and turn (recording 9: turns 30.0° and 5.0°), then `replay_recordings_fresh_scene.py trial 9 10 --places-from-pictures` | no result file; recording 9 not lifted, recording 10 stack |
+| `replay-pictures-1795205309` (tmux) | 21:08:29 to 21:20:04, exit 0 (the job's own status) | `replay_recordings_fresh_scene.py pictures-33 --places-from-pictures`, then `replay_recordings_fresh_scene.py pictures-33-fitted-stop-short --places-from-pictures --servo-state "stop-short and drives fitted on 40 recordings"` | `analysis/replay-fresh-scene-pictures-33.json`, `-courses.npz`: 23 stacks of 33, 28 lifted, 26 still up at the release, 339 s by its own count; `analysis/replay-fresh-scene-pictures-33-fitted-stop-short.json`, `-courses.npz`: 22 stacks of 33, 28 lifted, 25 still up, 347 s |
+
+The waiting call of the tmux job was aborted before it printed
+anything; the job itself ran to its end, and its exit file, log and
+result files were read at 21:27. The numbers and what they say are in
+`DEVELOPMENT_LEDGER.md`, "Addition, 21:30". The suite was not run again
+(no file under `src/`, `tests/`, `configs/` or `scripts/` changed).
+Nothing is committed.
+
+### Addition, 22:05: cleanup of uncommitted files; no test and no model run
+
+On the user's "go" of 22:00. No tmux job, no model run, no simulation;
+`tmux ls` showed no server before and after. Every step was a
+foreground command run from `workshops/so101-smolvla`; how long each
+took was not noted. What was deleted and why is in
+`DEVELOPMENT_LEDGER.md`, "Addition, 22:05".
+
+| Step | When | Command | Result |
+|---|---|---|---|
+| Check before removal | after 22:00, before 22:02:58 | file times of both ledgers and of `servo_hold.py`, `tmux ls`, count of `policy-observations.npz` | no file newer than 21:28; no session; 20 picture files in the run of 18:00, 523 outside it and outside the folders to be removed |
+| Three groups of folders and files | ended 22:02:58 (change time of `vla_testing/`) | `rm -rf` on the 24 written-out paths of the plan's groups 1 to 3 | all 24 gone; `vla_testing/` was 83,030 MiB before; freed 11,899, 2,787 and 328 MiB; no tracked file touched |
+| Stored pictures of old runs | list written 22:03:13 | list of every `policy-observations.npz` outside `random-stacking-recording-rig-sapien-20261120-180023` (`/tmp/cleanup-pictures-to-remove-1795208593.txt`), stop unless the list has 523 lines and none is tracked, then `rm -f` per line | 523 removed; freed 49,555 MiB, `vla_testing/` 18,461 MiB afterwards; 0 left outside the run of 18:00 and 20 in it; 56 run folders, 644 `result.json` and 634 `trajectory.npz` still there |
+| Leftovers of the deleted script | between 22:03:36 (last edit of `servo_hold.py`) and 22:05:22 | search of `vla_testing/diagnostics`, `src`, `tests`, `scripts` for `stacking_with_servo_stop_short` and `stop_short_of_the_recording_robot` | no match |
+| Import check | same time span | `.venv-sapien/bin/python` with `PYTHONPATH=src:/tmp/Xbotics-SO101-Sim:vla_testing/diagnostics`, importing `servo_hold`, `replay_recordings_fresh_scene` and `servo_stop_short`; import only, no simulation | exit 0; `servo_hold` holds `MEASURED`, `held_target`, `held_targets` |
+
+The first removal command was stopped once by the automatic review of
+the agent's commands (it asks for the user's approval of a deletion
+that cannot be undone) and ran after that approval, unchanged.
+
+The suite was not run again: no file under `src/`, `tests/`, `configs/`
+or `scripts/` changed, and no test reads a file that was deleted
+(`tests/data/stack_test_commands.json` holds the commands it needs). Its
+last run is the one of 18:16:38 from the export of commit `e9f453c`
+(103 passed, 1 expected failure). No linter is installed in `.venv`
+(`No module named pyflakes`), so the unused names in `servo_hold.py`
+were checked by listing what the module holds after import.
+
+Earlier rows of this ledger name run folders under `vla_testing/` and
+say they hold "policy observations". From 22:03 only the run of 18:00
+does. Rows that name `random-stacking-servo-stop-short-sapien-20261120-204636`,
+`…-204302` or `stacking_with_servo_stop_short.py` name files that were
+deleted here.
