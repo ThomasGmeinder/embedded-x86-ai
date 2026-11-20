@@ -1583,3 +1583,22 @@ visible, and for the stacking run the layout check above. Every launch
 of this part was announced first. The suite was run after the last edit
 of product source (17:55:02) and of the tests (17:57:02), and before the
 commit.
+
+### Addition, 18:20: the commit `e9f453c` and the suite run from an export of it
+
+The state above was committed at 18:16:07 as `e9f453c` on branch
+`so101-smolvla` (125 files; not pushed). Before staging: a dry run of the
+file list, no file but the development ledger and the proof run's
+`summary.json` over 200 kB, and a search of the listed files for
+credential-like text that found nothing.
+
+| Job | Started, ended | Command | Result |
+|---|---|---|---|
+| `commit-check-1795194998` (tmux) | 18:16:38, exit 0 at 18:18:30 | `git archive HEAD workshops/so101-smolvla` unpacked to `/tmp/so101-commit-e9f453c` (302 files), the two Python environments linked into it, then from that folder `PYTHONPATH=src .venv/bin/python -m pytest tests -v --tb=short` | `so101_smolvla` imported from the exported folder; 103 passed, 1 expected failure, 111.06 s |
+
+So the suite does not depend on a file that exists only in the working
+tree. Not covered by this check: the random stacking test was not run
+again from the export; it ran at 18:00 on the working tree, whose
+tracked files equal the commit (`git status` lists no modified tracked
+file in the workshop after the commit). The folder
+`/tmp/so101-commit-e9f453c` was left in place.
