@@ -1766,3 +1766,116 @@ say they hold "policy observations". From 22:03 only the run of 18:00
 does. Rows that name `random-stacking-servo-stop-short-sapien-20261120-204636`,
 `…-204302` or `stacking_with_servo_stop_short.py` name files that were
 deleted here.
+
+## 2026-11-21 — Gemma 4 voice control, the voice notebook and its tests
+
+Written after 19:01. The jobs of this day ran through
+`~/.cache/stack-memory-agent-test/job.sh <job name> <command>`: one
+detached tmux session per job (tmux server socket `stack-memory-test`),
+with a live log, an exit file that holds the command's own exit status,
+and a completion event the caller blocks on. Logs, exit files and each
+job's script are in `~/.cache/stack-memory-agent-test/logs/` under the
+job's name. Clock times are the `started-` and `ended-` lines of each
+log; commands are read from each job's script.
+
+The jobs of this day before 16:06 (picture reading by Gemma, the voice
+loop beside picture requests, the plain program on outlines, the marker
+question, the two stack commands) are listed with job names, clock
+times and results in `DEVELOPMENT_LEDGER.md`, sections "2026-11-21 —
+Gemma 4 beside SmolVLA" and "2026-11-21 — Task 3 without Gemma reading
+pictures". They are not copied here.
+
+Tests of the Gemma client outside the workshop's suite:
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `tool-call-test-1795274571` | 16:22:51 to 16:24:01, exit 0 | in `workshops/vvla-pipeline`: `source .venv/bin/activate && source scripts/ryzen_ai_env.sh`, then in `~/.cache/stack-memory-agent-test`: `python tool_call_test.py --out tool-call-test --slots 2 --ctx-size 4096` | 21 sentences, typed and spoken, two ways. Expected command: way 1 typed 21 of 21, spoken 17 of 21; way 2 typed 20 of 21, spoken 17 of 21. `pick_place` with object and place right: 8 of 8, 7 of 8, 8 of 8, 8 of 8. Server ready after 2.0 s |
+| `notebook-section7-check-1795280574` | 18:02:54 to 18:02:55, exit 0 | in `workshops/so101-smolvla/notebooks`, after the voice workshop's two environment scripts: `python ~/.cache/stack-memory-agent-test/notebook_section7_check.py voice_control_test.ipynb` (runs the notebook's live-session cell twice, against a Gemma server that was already running) | "both cases as expected": a microphone name that does not exist ends the cell with `RuntimeError: The microphone or the speech detection could not be opened`; with the configured microphone it prints "Listening…" and stops on the interrupt. Replaced by the second test of `tests/test_voice_notebook.py` |
+
+Runs of the notebook `notebooks/voice_control_test.ipynb` by
+`jupyter nbconvert --to notebook --execute --inplace` (real Gemma
+server, started and stopped by the notebook; the two cells that need a
+person are left out by their tag):
+
+| Job | Clock, exit | How | Result |
+|---|---|---|---|
+| `notebook-voice-1795275738` | 16:42:18 to 16:43:24, exit 0 | kernel `python3`, time limit 300 s per cell | notebook written back with its outputs (32,047 bytes) |
+| `notebook-kernel-1795276154` | 16:49:14 to 16:50:21, exit 0 | the voice workshop's `jupyter`, the notebook's own kernel, `HSA_OVERRIDE_GFX_VERSION` and `VIRTUAL_ENV` taken out of the calling environment | written back (31,643 bytes); the kernel set its environment itself. Its outputs include the live session fed with the synthetic voice (a cell that was removed afterwards): "pick up the small red cube and put it in the box" came out as `pick_place(object: small red cube)` without the place |
+| `voice-notebook-outputs-1795283510` | 18:51:50 to 18:52:47, exit 0 | `../../vvla-pipeline/.venv/bin/jupyter nbconvert … --ExecutePreprocessor.kernel_name=so101-smolvla-notebooks`, after the notebook was changed to import only from `../voice` | written back (28,623 bytes); stored lines: typed 30 of 30 right (seconds per request 0.55, 0.69, 1.00), spoken in the synthetic voice 26 of 30 right (0.74, 0.87, 1.19), "Gemma stopped." These are the outputs in commit `9cf0ca2` |
+
+The workshop's tests, from `workshops/so101-smolvla`:
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `notebooks-launcher-test-1795276139` | 16:48:59 to 16:49:04, exit 0 | `.venv/bin/python -m pytest tests/test_notebooks_launcher.py -v --tb=short` | 3 passed in 4.45 s |
+| `notebooks-launcher-test-1795279697` | 17:48:17 to 17:48:21, exit 1 | the same, with the test extended by a saved JupyterLab layout, against the launcher as it was | 1 failed, 2 passed in 4.73 s: `test_launcher_serves_the_notebooks_directory`, no layout file in the launcher's own directory. The failure the extension was written for |
+| `notebooks-launcher-test-1795279716` | 17:48:36 to 17:48:41, exit 0 | the same, after the launcher got `--LabApp.workspaces_dir` | 3 passed in 4.46 s |
+| `voice-notebook-test-1795283427` | 18:50:27 to 18:51:30, exit 0 | `.venv/bin/python -m pytest tests/test_voice_notebook.py -rP` | 2 passed in 62.59 s; printed: typed 30 of 30 right, spoken in the synthetic voice 26 of 30 right (0.70, 0.85, 1.15 s per request) |
+| `so101-full-suite-1795283583` | 18:53:03, exit 2 after 0.32 s | `.venv/bin/python -m pytest -rP` | **Setup failure, not a result:** launched without `PYTHONPATH=src`; 14 test files could not be loaded (`No module named 'so101_smolvla'`). Recorded in `AGENT_MISTAKES.md` |
+| `so101-full-suite-1795283609` | 18:53:29 to 18:56:29, exit 0 | `env PYTHONPATH=src .venv/bin/python -m pytest tests -v --tb=short -rP` | 108 passed, 1 expected failure (`test_real_sapien_bin_task_does_not_place_the_cube_into_the_resting_hand`) in 179.27 s; printed: typed 30 of 30 right, spoken 26 of 30 right (0.72, 0.86, 1.16 s per request) |
+
+Five tests are new since the 103 of 20 November: the three of
+`tests/test_notebooks_launcher.py` (the kernel starts in the voice
+workshop's environment; every notebook names the kernel; the launcher
+serves the notebooks directory and keeps its own layout directory) and
+the two of `tests/test_voice_notebook.py` (the notebook runs and every
+typed sentence gives its call; the live-session cell stops with an
+error without a microphone and a second server start is refused).
+
+What the two notebook tests need on the machine, and fail without: the
+set-up voice workshop `workshops/vvla-pipeline` (Python environment,
+`llama-server`, model files, speech-detection model), its graphics
+processor, espeak-ng, and nothing answering on the Gemma port (8082 in
+`voice/config/pipeline.yaml`). They take about a minute of the suite.
+The spoken count is printed and not required (the user's decision); the
+typed count is required to be complete.
+
+Readiness checks before the launches of 18:50 to 18:53: `yaml` imports
+in the workshop's Python and `nbconvert` knows `--stdin`;
+`voice/notebook_tools.py` imported with the voice workshop's Python and
+its settings loaded (client from `voice/`, the four workshop files
+present, port 8082 free, espeak-ng opens); before the second suite
+launch `so101_smolvla` imported with `PYTHONPATH=src`. The suite ran
+after the last edit of the notebook and of the tests and before commit
+`9cf0ca2`.
+
+Not run: any test with a person's voice (the user ran the notebook's
+two microphone sections; no count was taken); the random stacking test
+and the bin test (no file under `src/`, `configs/` or `scripts/`
+changed).
+
+What the numbers mean is in `DEVELOPMENT_LEDGER.md`, section
+"2026-11-21 — Voice control for task 1", and in `SPEC.md`, sections 4.5
+and 4.6.
+
+Amendment, 2026-11-21, after 19:08 (clock read in the step before), to
+this section.
+
+- The section was appended at 19:03:03 (`stat` of this file) as one of
+  the first steps after a summary of the conversation, from that
+  summary, without this ledger having been read again and before any
+  command of the turn had printed its numbers. Checked afterwards, up
+  to 19:08, against each job's log, exit file and script in
+  `~/.cache/stack-memory-agent-test/logs/` and against the notebook's
+  stored outputs: every clock time, exit status, command, count,
+  duration and byte size of the four tables stands. This ledger was
+  read in full before this amendment was written.
+- "Written after 19:01": no clock reading that can still be read backs
+  19:01. The file time is 19:03:03.
+- **Not verified:** the paragraph "Readiness checks before the launches
+  of 18:50 to 18:53". The session's record does not hold the turn in
+  which those launches were made (a search of it for the three job
+  names finds nothing), so no output of those checks can be read now.
+  One of them has a source: the import of `so101_smolvla` before the
+  second suite launch (`AGENT_MISTAKES.md`, amendment of 18:57, "with
+  the import of `so101_smolvla` as readiness check before the launch").
+  For the others (`yaml`, `--stdin`, the import of
+  `voice/notebook_tools.py`, the four workshop files, port 8082,
+  espeak-ng) the paragraph is my recollection, not evidence. What holds
+  without it: each notebook test itself requires that nothing answers
+  on the Gemma port before it starts the notebook
+  (`tests/test_voice_notebook.py:62`), and both tests passed in the two
+  jobs of the table.
+- The row of `notebook-section7-check-1795280574` gives the printed
+  line as "Listening…". The log line is "Listening to your microphone.
+  Speak; interrupt the cell to stop.", followed by "Stopped listening."
