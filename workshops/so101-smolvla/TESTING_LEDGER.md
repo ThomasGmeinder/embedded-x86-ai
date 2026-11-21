@@ -1879,3 +1879,53 @@ this section.
 - The row of `notebook-section7-check-1795280574` gives the printed
   line as "Listening…". The log line is "Listening to your microphone.
   Speak; interrupt the cell to stop.", followed by "Stopped listening."
+
+### Addition, after 19:20: the table of the notebook's section 5 grows row by row
+
+On the user's request of 19:06 ("the latest result is immediately added
+to the table so that the user can see the table grow"). Written after
+19:20:23, the clock printed with the last result below. Same job runner
+and log directory as the section above; clock times are the `started-`
+and `ended-` lines of each log.
+
+Changed: in `notebooks/voice_control_test.ipynb` the code cell and the
+heading text of section 5 (the table is shown once, empty, and drawn
+again after every sentence from the one list of answers; the two count
+lines are printed as before); new `tests/notebook_display_updates.py`;
+`tests/test_voice_notebook.py` (the first test, now
+`test_notebook_runs_every_typed_sentence_gives_its_call_and_the_table_grows`).
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `voice-notebook-test-1795284893` | 19:14:53 to 19:15:55, exit 0 | from `workshops/so101-smolvla`: `.venv/bin/python -m pytest tests/test_voice_notebook.py -v --tb=short -rP` | 2 passed in 62.59 s (the figure of this job's log; the run of 18:50 printed the same); printed: typed 30 of 30 right, spoken in the synthetic voice 26 of 30 right (0.71, 0.87, 1.16 s per request), "table of section 5: 30 redraws, rows 1 to 30" |
+| `voice-notebook-outputs-1795284968` | 19:16:08 to 19:17:05, exit 0 | from `notebooks/`: `../../vvla-pipeline/.venv/bin/jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.kernel_name=so101-smolvla-notebooks voice_control_test.ipynb` | written back (29,146 bytes); stored lines: typed 30 of 30 right (seconds per request 0.54, 0.69, 1.00), spoken in the synthetic voice 26 of 30 right (0.73, 0.88, 1.17). In `git diff` against commit `9cf0ca2` no line of the stored table differs; both `skip-execution` tags are there |
+| `so101-full-suite-1795285038` | 19:17:18 to 19:20:18, exit 0 | from `workshops/so101-smolvla`: `env PYTHONPATH=src .venv/bin/python -m pytest tests -v --tb=short -rP` | 108 passed, 1 expected failure (`test_real_sapien_bin_task_does_not_place_the_cube_into_the_resting_hand`) in 178.39 s; printed: typed 30 of 30 right, spoken 26 of 30 right (0.71, 0.87, 1.18 s per request), "table of section 5: 30 redraws, rows 1 to 30" |
+
+The number of tests is unchanged (one test renamed and extended). What
+it now also requires: while the cell of section 5 runs, the kernel
+sends one redraw of the table per sentence (the message
+`update_display_data`, on which a notebook front end draws a shown
+output again); the first redraw holds row 1, each later one one row
+more, and the last one is the table the executed notebook keeps. To see
+those messages the first test runs the notebook through
+`tests/notebook_display_updates.py`, which uses nbconvert's
+`ExecutePreprocessor`, the class `jupyter nbconvert --execute` runs a
+notebook with, and writes the redraw messages beside the executed
+notebook. The second test still runs through the `jupyter nbconvert`
+command line.
+
+Readiness checks. Before the first job: both tags present in the edited
+notebook, the cell compiles, the helper's modules import in the voice
+workshop's Python, nothing listens on port 8082, pytest collects the two
+tests. Before the in-place run: the notebook's file time (19:14:06, my
+edit) and port 8082. Before the suite: `so101_smolvla` imports with
+`PYTHONPATH=src`, port 8082 free. Each launch was announced first. The
+waiting call of the first job was moved to the background by the user
+after 10 s; the job ran on in its tmux session, and its exit file and
+log were read after the launcher process had ended. No file was edited
+between the in-place run and the suite.
+
+Not verified by me: the table growing on a screen. No browser or editor
+was opened; the tests show that the kernel sends the redraws. The
+development ledger has no entry for this change: it was not read again
+in full in this part of the session, so it was not edited.
