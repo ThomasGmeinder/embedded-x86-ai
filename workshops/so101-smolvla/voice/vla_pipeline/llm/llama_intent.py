@@ -235,6 +235,9 @@ class LlamaIntentParser:
         obj = str(data.get("object", "") or "").strip()
         if obj:
             params["object"] = obj
+        place = str(data.get("place", "") or "").strip()
+        if place:
+            params["place"] = place
         heard = str(data.get("heard", "") or "").strip() or transcript
         logger.info(
             "Intent %r %s ← %r (%.0f ms)",

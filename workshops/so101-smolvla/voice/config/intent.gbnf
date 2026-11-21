@@ -1,16 +1,19 @@
 # Grammar for the intent router: the model can ONLY emit
-#   {"command": "<one of the known commands>", "object": "<0-2 plain words>", "heard": "<words>"}
+#   {"command": "<one of the known commands>", "object": "<0-3 plain words>", "place": "<0-2 plain words>", "heard": "<words>"}
 # so JSON parsing can never fail and unknown verbs collapse to "unknown".
 # "heard" is what the speaker said, so the console can show it.
 
-root    ::= "{" ws "\"command\"" ws ":" ws cmd ws "," ws "\"object\"" ws ":" ws obj ws "," ws "\"heard\"" ws ":" ws said ws "}"
+root    ::= "{" ws "\"command\"" ws ":" ws cmd ws "," ws "\"object\"" ws ":" ws obj ws "," ws "\"place\"" ws ":" ws place ws "," ws "\"heard\"" ws ":" ws said ws "}"
 
 cmd     ::= "\"gesture_mimic\"" | "\"fetch_block\"" | "\"pick_place\"" |
             "\"dance\"" | "\"grip\"" | "\"release\"" | "\"wave\"" | "\"home\"" |
+            "\"learn_stack\"" | "\"rebuild_stack\"" |
             "\"stop\"" | "\"unknown\""
 
-# Object: empty, or 1-2 lowercase words ("ball", "water bottle").
-obj     ::= "\"\"" | "\"" word (" " word)? "\""
+# Object: empty, or 1-3 lowercase words ("ball", "water bottle", "small green bottle").
+obj     ::= "\"\"" | "\"" word (" " word)? (" " word)? "\""
+# Place: empty, or 1-2 lowercase words ("box").
+place   ::= "\"\"" | "\"" word (" " word)? "\""
 word    ::= [a-z] [a-z]{0,15}
 
 # What was said. Empty when the words cannot be made out.

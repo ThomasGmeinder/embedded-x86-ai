@@ -41,6 +41,8 @@ class Intent(str, Enum):
     RELEASE = "release"
     WAVE = "wave"
     HOME = "home"
+    LEARN_STACK = "learn_stack"
+    REBUILD_STACK = "rebuild_stack"
     STOP = "stop"
     UNKNOWN = "unknown"
 
@@ -87,6 +89,9 @@ def command_from_json(text: str) -> ParsedCommand | None:
     obj = str(data.get("object", "") or "").strip()
     if obj:
         params["object"] = obj
+    place = str(data.get("place", "") or "").strip()
+    if place:
+        params["place"] = place
     heard = str(data.get("heard", "") or "").strip()
     return ParsedCommand(Intent.from_string(str(command)), params=params, transcript=heard)
 
@@ -162,9 +167,13 @@ You are the command router for a robot arm on a crowded floor. Other people
 are talking. Ignore background conversation, a second speaker, questions,
 quotes, negations, and anything not addressed to the robot: those are
 "unknown". Map a clear instruction to exactly one command and answer ONLY
-with a JSON object {"command": "<name>", "object": "<object or empty string>", "heard": "<words>"}.
-"object" is the thing to act on for pick_place (one or two plain words,
-e.g. "ball", "water bottle"); for every other command use "".
+with a JSON object {"command": "<name>", "object": "<object or empty string>", "place": "<place or empty string>", "heard": "<words>"}.
+"object" is the thing to act on for pick_place (one to three plain words,
+e.g. "ball", "water bottle", "small green bottle"); for every other command
+use "".
+"place" is where the user wants the object put for pick_place (one or two
+plain words, e.g. "box"); use "" when the user names no place and for every
+other command.
 "heard" is the words the person said to the robot, and nothing else.
 Use "" for "heard" when you cannot make out the words.
 
@@ -173,9 +182,10 @@ Commands:
   arm and hand movements ("copy me", "mirror my hand", "follow my arm").
 - "fetch_block": the user wants the block/cube from its usual spot brought to
   them ("get me the block", "bring the cube here").
-- "pick_place": the user names an object to pick up / grab / hand over
-  ("pick up the ball", "grab the bottle and give it to me"). Put the object
-  name in "object".
+- "pick_place": the user names an object to pick up / grab / hand over, or
+  to put somewhere ("pick up the ball", "grab the bottle and give it to me",
+  "put the apple in the box"). Put the object name in "object" and the
+  place, if the user names one, in "place".
 - "dance": the user wants the robot to dance / groove / party.
 - "grip": the user is handing the robot something to hold ("hold this",
   "take this pencil", "grab what I give you").
@@ -185,6 +195,12 @@ Commands:
 - "wave": the user wants a wave / greeting ("wave at me", "say hi").
 - "home": the speaker says "go home". "home", "rest", and "reset" alone
   are "unknown".
+- "learn_stack": the user tells the robot to learn / memorise the stack of
+  cubes that stands on the table now ("learn the stack", "memorise this
+  stack").
+- "rebuild_stack": the user tells the robot to build the stack it learned
+  again from the scattered cubes ("rebuild the stack", "build the stack
+  again").
 - "stop": the speaker says "stop robot". "stop", "halt", "freeze",
   "stop it", "abort", and "stop talking" are "unknown".
 - "unknown": anything else.

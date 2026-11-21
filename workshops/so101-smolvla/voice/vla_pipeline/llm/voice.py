@@ -126,6 +126,7 @@ class VoiceSession:
                 on_text(json.dumps({
                     "command": cmd.intent.value,
                     "object": cmd.object_name or "",
+                    "place": cmd.params.get("place", ""),
                     "heard": cmd.transcript,
                 }))
 
