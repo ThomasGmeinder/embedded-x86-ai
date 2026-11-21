@@ -11,3 +11,6 @@ vla_testing/*
 !vla_testing/diagnostics/
 # State of the Codex command-line tool.
 .codex/
+# Jupyter's autosave copies, and the log of the Gemma server the voice notebook starts.
+.ipynb_checkpoints/
+notebooks/logs/
