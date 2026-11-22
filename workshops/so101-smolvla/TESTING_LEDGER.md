@@ -2830,3 +2830,42 @@ meters joined the 201 of 19:19. One warning of the run was the test's own:
 the busy processors were forked from a process with torch's threads; they
 start as fresh interpreters now, and the processor tests reran clean with
 warnings as errors.
+
+<a id="t-2026-11-22-core-placement"></a>
+### Addition, after 22:05: where the processes of a run put their threads (nothing is pinned)
+
+Asked by the user at 21:5x: how the processes map to the cores. Read
+first: no file of the workshop sets a CPU affinity, a `taskset` or a
+thread count (`grep` over `src`, `scripts`, `voice`); every process
+inherits the mask `0-31`. The machine: 16 cores, 2 threads each, one
+NUMA node, two L3 complexes (processors 0 to 15 and 16 to 31, 32 MB
+each), governor `powersave` under `amd_pstate`, boost on. Default thread
+pools: torch 32 intra-op threads in `.venv` and `.venv-sam3`; the SAM 3
+reference's CPU ONNX Runtime sessions 8 threads each.
+
+Measured, tmux job `core-map-1795381326` (21:5x, 67 s, exit 0): one
+three-cube layout, `--steps 50 --outlines sam3 --sentences built-in`,
+while `/tmp/core-map-1795381326/sample_threads.py` read every thread's
+CPU time and last processor from `/proc` once a second (66 samples). A
+thread counts as busy at 10 % of a processor in a second. The run was
+mostly model loading (the commands took the last 15 s).
+
+| Process | Threads | CPU share of the process, median / peak (% of one processor) | Busy threads, median / peak | Processors the busy threads used; thread-seconds on complex 0-15 / 16-31 |
+|---|---:|---:|---:|---|
+| SAM 3 worker (`.venv-sam3`) | 32 to 848 | 98 / 685 | 1 / 32 | 28 distinct; 52 / 14 |
+| main process, runner and SmolVLA (`.venv`) | 1 to 162 | 1 / 1,869 | 0 / 32 | all 32; 162 / 146 |
+| SAPIEN worker (`.venv-sapien`) | 1 to 111 | 0 / 457 | 0 / 16 | all 32; 77 / 58 |
+| `llama-server`, the run's and the user's | 38 each | 0 / 165 | 0 / 2 | 5 distinct; 10 / 0 |
+| voice worker | 64 | 0 / 1 | 0 / 0 | none |
+
+`ffmpeg` did not appear in the one-second samples (the three clips of a
+50-step layout are written in less than a second). The first sampler of
+the evening (`ps` once a second, job `core-map-1795381063`) left no
+file and its run is not used. Reading: the peaks are the three workers
+loading their models at once with pools sized for all 32 processors;
+during the commands the stages run one after another over synchronous
+pipes and the cores are mostly idle while the graphics processor works;
+the busy threads of the main and the SAPIEN process were seen on all 32
+processors and on both L3 complexes about equally, so no cache locality
+is kept. The proposed dedicated placement is in `README.md`, section
+"Compute placement"; it is not applied.

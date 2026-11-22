@@ -44,8 +44,8 @@ flowchart TD
   subgraph S2 ["2. Which cube: a program"]
     F --> C["cube_commands.py: the green cube"]
   end
-  T@{ icon: "mdi:camera", form: "rounded", label: "top camera", pos: "b" }
-  W@{ icon: "mdi:camera", form: "rounded", label: "wrist camera", pos: "b" }
+  T(["📷 top camera"])
+  W(["📷 wrist camera"])
   subgraph S3 ["3. Outlines: SAM 3"]
     M["SAM 3, sam3-tracker-rocm"] --> O["outlines of red, green and blue"]
   end
@@ -133,6 +133,54 @@ The run folder under `vla_testing/` holds, per layout, a `feeds.mp4` with a
 row per camera: the picture as taken, SAM 3's outlines with what was done with
 each, and the picture SmolVLA was given; its `REPORT.md` lists every sentence,
 what Gemma heard, its call and the cube chosen.
+
+## Compute placement
+
+Each stage of a run is its own process in its own Python environment, and the
+three models share the integrated graphics processor; the simulator, the
+picture editing and the video encoding are on the processor cores. The machine
+(AMD Ryzen AI Max+ PRO 395) has 16 cores with two threads each, so 32 logical
+processors, in two L3 cache complexes: processors 0 to 15 and 16 to 31. The
+NPU is not used by this workshop; the utilization table shows it idle.
+
+Today nothing is pinned: every process inherits all 32 processors and the Linux
+scheduler places the threads, which were measured on all 32 processors and on
+both L3 complexes about equally (`TESTING_LEDGER.md`,
+[the measurement](TESTING_LEDGER.md#t-2026-11-22-core-placement)). The column
+"Dedicated CPUs" is the proposed placement for a run with every stage, drawn
+from that measurement; it is not applied by any launcher yet.
+
+<table style="border-collapse: collapse">
+<thead>
+<tr><th style="background-color: rgba(128, 128, 128, 0.2); border: 1px solid rgba(128, 128, 128, 0.4)">Task</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">Model or algorithm</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">What it does</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">Runs on</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">Runtime and process</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">Dedicated CPUs (proposed)</th></tr>
+</thead>
+<tbody>
+<tr><td rowspan="2" valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Voice command</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Gemma 4 E4B (Q4_0) with its audio projector</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">hears or reads the sentence, answers with the command's fields</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">iGPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)"><code>llama.cpp</code> <code>llama-server</code> (HIP), a child of the voice worker, port 8083</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">14, 15 (core 7); at most two threads were busy</td></tr>
+<tr><td style="border: 1px solid rgba(128, 128, 128, 0.4)">espeak-ng (the test's synthetic voice) and the client's request</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">says a test sentence into a clip; sends text or clip to the server</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Python, the voice worker (<code>voice_worker.py</code>, the voice workshop's environment)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">14, 15, with its server</td></tr>
+<tr><td valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Choosing the cube</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">a program, <code>cube_commands.py</code></td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">reads the one colour in Gemma's object field, refuses the rest</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Python, the main process</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">2 to 7 (cores 1 to 3), with the main process</td></tr>
+<tr><td valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Outlines</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">SAM 3 (<code>sam3-tracker-rocm</code>, 504 px, compiled with MIGraphX; mask decoder and memory encoder in PyTorch)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">outlines every cube in both camera pictures at every plan</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">iGPU (one driving thread on the CPU)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">ONNX Runtime MIGraphX EP and torch (ROCm), the SAM 3 worker (<code>.venv-sam3</code>)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">8 to 13 (cores 4 to 6); its CPU sessions use 8 threads</td></tr>
+<tr><td valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Picture editing</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">a program, <code>picture_editor.py</code></td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">paints the other cubes over with the empty table and bin, both pictures</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">NumPy, the main process</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">2 to 7, with the main process</td></tr>
+<tr><td valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Motion</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">SmolVLA, <code>Harrysunshine/so101-smolvla-sim-real-10task</code></td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">50 joint targets per plan from the two pictures and the sentence</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">iGPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">torch (ROCm) through LeRobot, the main process (<code>.venv</code>)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">2 to 7 (cores 1 to 3); torch threads capped to 6</td></tr>
+<tr><td rowspan="2" valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Digital twin</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">SAPIEN with PhysX</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">physics, the arm's controller, both camera pictures, the placement rule</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU (SAPIEN's GPU path needs CUDA)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">the SAPIEN worker (<code>.venv-sapien</code>), framed pipe protocol</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">16 to 31 (cores 8 to 15, the second L3 complex); the largest CPU load, up to 16 busy threads</td></tr>
+<tr><td style="border: 1px solid rgba(128, 128, 128, 0.4)">MuJoCo (the default one-cube twin)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">simulates the arm and the table scene</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU (rendering with OSMesa)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">MuJoCo, the main process</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">16 to 31 when it is the twin of a run</td></tr>
+<tr><td valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Videos</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">x264, preset ultrafast</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">writes the clips of a layout and the batch</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)"><code>ffmpeg</code>, a child of the main process, at the end of a layout</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">16 to 31; the twin is idle while it runs</td></tr>
+<tr><td valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Utilization table</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">the sampler and a Qt Quick scene</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">reads the kernel's files twice a second and draws the table</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU (drawn by the iGPU, 0.02 % of it)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">PySide6, its own process (<code>utilization_window.py</code>)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">0, 1 (core 0), with the desktop and the system</td></tr>
+</tbody>
+</table>
+
+The reasoning behind the proposal: the simulator is the only stage with a
+large processor load (physics and two rendered cameras per step), so it gets
+the second L3 complex to itself; the three processes that drive the graphics
+processor need few cores each and share the first complex, so their working
+sets stay in one L3; core 0 is left to the system, the desktop and the table.
+The thread pools default to all 32 processors (torch in both ROCm
+environments; the SAM 3 reference's CPU sessions use 8), which is what the
+start-up peaks of 7 to 19 processors' worth come from; the caps in the table go
+with the placement. In the measured run the stages took turns over synchronous
+pipes and the cores were mostly idle while the graphics processor worked, so
+the placement is for locality and for a quiet start, not for a measured gain.
+Applying it would be one `taskset -c` and the thread caps in each launcher
+script, to be measured against this run before it is kept.
 
 ## Environment
 
