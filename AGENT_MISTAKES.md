@@ -2872,3 +2872,40 @@ No new entry, because they are the same mistakes. Status: corrected.
   lines in every one of its rules, and the check for headings that
   contain a link runs before anything is committed.
 - **Status:** corrected
+
+## 2026-11-22 — Told the user that VS Code cannot play H.264 video, as the reason a run's video did not render
+
+- **Agent/tool:** Claude Code (Claude Fable 5.1)
+- **Task:** Explain why `seed-00000/feeds.mp4` of the run of 17:12 did
+  not render for the user.
+- **Mistake:** After checking only the file (it decodes, its first frame
+  renders), I named the viewer as the cause and stated as fact that VS
+  Code's Electron build ships without the H.264 decoder, and wrote a
+  VP9 WebM copy as the way round it. The statement was from memory and
+  not checked against anything on this machine.
+- **Evidence:** The user's correction: `overall-feeds.mp4` of the same
+  run plays in VS Code. That file is a stream copy of the per-layout
+  files (`record.accumulate`, `ffmpeg -f concat -c copy`) and has the
+  same codec, profile (Constrained Baseline, level 4.0), pixel format,
+  brands, encoder tag and atom layout as `seed-00000/feeds.mp4`,
+  compared field by field with `ffprobe` and an atom walk.
+- **Cause:** Took a plausible explanation for a verified one; the one
+  check that would have falsified it (does another H.264 file of the
+  same run play in the same viewer?) was not made and was not asked of
+  the user.
+- **Correction:** The claim is withdrawn in the reply. The two files
+  differ in no property that was read; the cause is not known yet and
+  is being asked of the user (how the file was opened, what the player
+  showed, whether the sibling files play).
+- **Prevention:** A cause named for a viewer or tool is stated as a
+  guess unless a control case was checked (a file that plays beside one
+  that does not, in the same viewer), and the control case is asked for
+  before a workaround is built.
+- **Status:** corrected
+
+Amendment, 2026-11-22, after 18:10, to the entry above: the file plays
+in VS Code now, unchanged (the user, "it plays now"). What made the
+first attempt fail is not known; the file was checked and found sound
+before and after, so it was a state of the viewer, not of the file. The
+VP9 WebM copy written as a way round it (`seed-00000/feeds.webm` in the
+run folder, outside git) was not needed.
