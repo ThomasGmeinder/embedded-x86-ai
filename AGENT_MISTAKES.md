@@ -2932,3 +2932,14 @@ run folder, outside git) was not needed.
   the tests for the file's name and update every exact comparison before
   the first test run, whatever the tests cost.
 - **Status:** corrected
+
+## 2026-11-22 — Wrote that a click on the README's animated picture opens the video
+
+- **Agent/tool:** Claude Code (Claude Fable 5.1)
+- **Task:** Show the three-cube run's video inline in `workshops/so101-smolvla/README.md` on GitHub.
+- **Mistake:** Wrapped the animated GIF in a link to the mp4 and wrote that a click on the picture opens the full video.
+- **Evidence:** User correction after viewing the page. GitHub's rendered page wraps the image with `data-animated-image`, its own play-and-pause control, so a click on the picture pauses it and never follows the link.
+- **Cause:** Assumed a Markdown link around an image behaves on GitHub as it does in plain HTML, without checking the rendered page.
+- **Correction:** Commit `21236ab`: the picture is plain, the mp4 is linked in the sentence, and the text says GitHub offers a repository video file only as a download.
+- **Prevention:** After changing how media is embedded in a README, fetch the rendered page and confirm the element and its behaviour before describing it in the text.
+- **Status:** corrected
