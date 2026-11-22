@@ -532,6 +532,7 @@ Reading these:
   | the two other cubes painted over with table, by the simulator's outlines | 7 of 10 | 26 of 30 |
   | the same, by SAM 3's outlines (phrase "cube", tracked) | 9 of 10 | 29 of 30 |
   | the same, by the outlines of the fast SAM 3 reference (`sam3-tracker-rocm`, 0.3 s per picture instead of 7 to 9 s) | 9 of 10 | 29 of 30 |
+  | the same, the cube named by a typed sentence through Gemma 4 ("grab the green one and drop it in the box"), a program reading the cube from Gemma's fields | 9 of 10 | 29 of 30 |
   | painted over on the table only, a cube already in the bin left visible | 1 of 10 | 16 of 30 |
 
   Ten layouts do not show that 9 differs from 7. They do show the step
@@ -544,6 +545,17 @@ Reading these:
   workshop's SAM 3. Detail, layout by layout and per call:
   [`TESTING_LEDGER.md`](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-run);
   what it means for the work: [`DEVELOPMENT_LEDGER.md`](DEVELOPMENT_LEDGER.md#d-2026-11-22-fast-sam3).
+
+  Added after 19:05 on 2026-11-22: the row before last. The user's words
+  reach the test now: each command is a sentence through Gemma 4, whose
+  fields a program of the workshop reads for the cube; the same ten
+  layouts end the same, step for step, because every one of the 30
+  sentences gave the cube the draw had. Typed, 30 of 30 pick sentences
+  and 7 of 7 sentences that should move nothing came out right; in a
+  synthetic voice 29 of 30 and 5 of 7, where a question and a negation
+  became a pick. Detail: [`TESTING_LEDGER.md`](TESTING_LEDGER.md#t-2026-11-22-gemma-commands);
+  what it means: [`DEVELOPMENT_LEDGER.md`](DEVELOPMENT_LEDGER.md#d-2026-11-22-gemma-commands);
+  the design: `SPEC.md`, section 4.7.
 
 <a id="r-finding-9"></a>
 ## Finding 9: playing all 50 predicted actions before the next look is the shipped default, not the best published method; a prediction at every step is not smoother by itself
@@ -629,6 +641,13 @@ Reading these:
   command and turn it into fields, and has a program read colour, size
   and place inside SAM 3's outlines. That change from the line above is
   put to the user in the spec's section 11.
+
+  Amendment, 2026-11-22 after 19:05: built for three cubes of three
+  colours in the twin. Gemma hears or reads the command and gives the
+  fields; the program reads the cube from the colour in the object
+  field (no size, no place yet); SAM 3 outlines and the editor paints.
+  The counts are under [Finding 8](#r-finding-8) (the row of the typed
+  sentences) and in the ledgers linked there.
 - Task 3 does not need a policy with memory. The memory belongs in the
   program or agent that calls the pick and place steps.
 - Added 2026-11-22 ([Finding 9](#r-finding-9)): the checkpoint's 50 actions per

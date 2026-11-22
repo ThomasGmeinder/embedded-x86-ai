@@ -55,6 +55,15 @@ this workshop; the plain PyTorch route is removed (sections 5.2 and 9,
 measurement M4; section 11, decisions 2 and 3). Measurements are in the
 ledgers and linked, not repeated.
 
+Changed 2026-11-22, after 18:50, on the user's request of that evening
+and the answers to two question forms: the three-cube test takes its
+commands as sentences through Gemma 4, typed or in the synthetic voice,
+and a program of this workshop reads the cube from Gemma's fields
+(section 4.7; sections 5.3 and 6 amended; section 10 has a weak point
+of the spoken form; section 11, decision 10 refers to it). Stacking
+sentences are not part of it (the user: another use case, tested on
+its own).
+
 Terms used throughout:
 
 - **VLA (vision-language-action model):** one neural network that takes
@@ -354,6 +363,37 @@ and, where the table names one, the place. Three runs on 2026-11-21
   clip per sentence. No count has been taken with a person's voice or
   through the live session.
 
+<a id="s-4-7-sentences-through-gemma-to-the-three-cube-test"></a>
+### 4.7 Sentences through Gemma to the three-cube test
+
+Built 2026-11-22, evening. The three-cube test of [Finding 8](RESEARCH.md#r-finding-8)
+(`RESEARCH.md`) takes its three commands per layout as sentences: each
+goes to Gemma 4 through the voice client in `voice/`, typed (the
+client's `parse`) or said by the synthetic voice as one 6 s clip (its
+`parse_audio`), right before its pick. Gemma's fields come back as
+they are; `src/so101_smolvla/cube_commands.py` reads the cube from
+`command` and `object` alone, in one place: a `pick_place` whose object
+names exactly one of red, green and blue, and no other kind of thing,
+is that cube; anything else is refused with its reason and moves
+nothing. The `place` field is recorded and not judged (section 6: a
+pick ends in the bin; a cube named as the place is the stacking case,
+decision 9, tested on its own on the user's word). The client runs in
+the voice workshop's environment as a worker process
+(`voice_worker.py` through `scripts/run_voice_env.sh`, the same
+launcher the notebooks' kernel now starts with) and starts its own
+Gemma server on port 8083, so a server the user runs on the client's
+port 8082 is left alone. The runner's switches are `--sentences
+built-in` (ten phrasings per colour, section of `cube_commands.py`) or
+a file of sentences, and `--spoken`.
+
+Measured (detail: [`TESTING_LEDGER.md`](TESTING_LEDGER.md#t-2026-11-22-gemma-commands);
+meaning: [`DEVELOPMENT_LEDGER.md`](DEVELOPMENT_LEDGER.md#d-2026-11-22-gemma-commands)):
+typed, every one of the 30 pick sentences gave its cube and every one
+of the 7 sentences that should move nothing was refused; in the
+synthetic voice, 34 of the 37, and two of the three misses are a
+question and a negation that became a pick of the red cube (section
+10). The ten-layout run with typed sentences is in the testing ledger.
+
 <a id="s-5-parts-and-what-each-one"></a>
 ## 5. Parts and what each one owns
 
@@ -626,6 +666,14 @@ cylinders ("cube" is the only phrase in use).
 - The decision is made in the task state in one call, from the scene
   facts it is handed; the caller does not combine queries.
 
+  Amendment, 2026-11-22, after 18:50: built for the three-cube scene of
+  the test in the form of section 4.7. There the scene has three cubes
+  of three colours and the facts are the colours, so the one call is
+  `cube_commands.choose_cube(command, object)`: one colour named, that
+  cube; no colour, two colours, another kind of thing or another
+  command, a refusal with its reason and no movement. It asks nothing
+  back yet (no voice out) and reads no size or place.
+
 <a id="s-5-4-picture-editor"></a>
 ### 5.4 Picture editor
 
@@ -675,6 +723,13 @@ cylinders ("cube" is the only phrase in use).
 What the checkpoint is trained to do with a picked object is to put it
 into the bin. "Pick" in this spec therefore ends in the bin. Balls and
 cylinders were never run with this checkpoint (measurement M7).
+
+Amendment, 2026-11-22, after 18:50: steps 1 to 4 run in the twin for
+three cubes of three colours (section 4.7): the sentence through Gemma,
+the cube from its fields, the other two cubes painted over by SAM 3's
+outlines, SmolVLA with its trained sentence. Step 5, the checker, is
+the simulator's own rule for a placed cube in the test, not a fresh
+look at the scene.
 
 <a id="s-7-task-2"></a>
 ## 7. Task 2: stack cubes as commanded
@@ -769,6 +824,16 @@ section 5.2. Pass counts are still the user's (decision 4). Detail:
   red cube is in the box", which gave `pick_place` with "red cube" and
   "box". One spoken command of the branch ("show me your best dance
   moves") gave no command there.
+- In the synthetic voice, a question ("is the red cube in the box",
+  heard as "This red cube in the box") and a negation ("do not pick up
+  the red cube", heard right) became `pick_place` with "red cube"; the
+  program that reads the cube sees only Gemma's fields and would move
+  the red cube. Typed, both are "unknown" as the instructions ask. The
+  test that holds this (`tests/test_gemma_cube_commands_integration.py`,
+  the spoken test) asserts that no sentence moves a cube it does not
+  name and so stays red, on the user's word, until the audio path is
+  fixed; the audio request is the branch's (5.1) and a change to it
+  needs the user's word. Section 4.7.
 - With "stop robot" going through Gemma only (5.1, departure 3), a stop
   depends on Gemma hearing it and takes one Gemma request. How long
   that is while the arm moves and the other models run is not measured
@@ -918,6 +983,13 @@ section 5.2. Pass counts are still the user's (decision 4). Detail:
     user's answer after 16:14: "stop robot" goes through Gemma only
     (5.1, departure 3). Open: keep the keyword match, or fail loudly
     when Gemma is not there.
+
+    Amendment, 2026-11-22, after 18:50: the program of section 4.7 that
+    reads the cube from Gemma's fields is not such a place: it works
+    out nothing from the user's words, only which of three colours the
+    object field holds. The weak point of section 10 (a spoken negation
+    made a pick) shows what a program on the words could catch and
+    Gemma's audio path did not; whether to add one is this decision.
 11. **A spoken command that takes longer to say than one hop of the
     live session** (section 10). Open. For `pick_place` with the place
     said late, the place can be missing in the call. Changing how the

@@ -38,6 +38,80 @@ Compared from their model cards only and not run here:
 `io-intelligence/smolvla_so101_stack_cups` and
 `dobri420/smolvla-so101-pick-cube`.
 
+## Use case: pick the cube the user names and place it in the bin
+
+Three cubes, red, green and blue, lie on the table beside a bin. The user says
+or types which cube goes next, in their own words: "grab the green one and
+drop it in the box". The arm picks that cube and places it in the bin; then
+the next command. Nothing in the checkpoint was changed and nothing was
+fine-tuned: the checkpoint cannot choose between objects by the sentence
+(the table above, [`RESEARCH.md`](RESEARCH.md#r-finding-1)), so the choice is
+made before the pictures reach it, and it is shown only the cube that was
+named. Built and measured in the SAPIEN twin on 2026-11-22; the design is
+`SPEC.md`, sections 3, 4.7 and 6.
+
+```mermaid
+flowchart LR
+  User([User speaks or types the command])
+  Gemma[Gemma 4 E4B: the command as fields]
+  Choose[Program: the cube the fields name]
+  Cams[Top and wrist cameras]
+  Sam3[SAM 3: outlines of every cube]
+  Edit[Picture editor: the other two cubes painted over]
+  VLA[SmolVLA: joint targets from the edited pictures]
+  Arm([SO-101 arm: the named cube into the bin])
+  User --> Gemma --> Choose --> Edit
+  Cams --> Sam3 --> Edit
+  Edit --> VLA --> Arm
+  Arm -.-> User
+```
+
+| Stage | What happens | Model or program |
+|---|---|---|
+| 1. Command | The user speaks (one 6 s clip) or types. Gemma 4 E4B, run by `llama-server` through the voice client in `voice/`, returns the command and its fields under a grammar: `pick_place`, the object words, the place words, and what it heard. | Gemma 4 E4B (language and audio) |
+| 2. Choice | A program reads the one colour in the object field; "red ball", "the cube", two colours, a question or another command are refused and nothing moves. The place is recorded, not used: a pick ends in the bin. | `src/so101_smolvla/cube_commands.py` |
+| 3. Outlines | Every time SmolVLA plans (every 50 control steps) both camera pictures go to SAM 3, asked for the phrase "cube"; the colour inside each outline says which cube it is. | SAM 3 (`sam3-tracker-rocm`, compiled with MIGraphX, in `.venv-sam3`) |
+| 4. Editing | The two cubes the command does not name are painted over with the table and bin as the top camera sees them empty, in the top and the wrist picture. | `src/so101_smolvla/picture_editor.py` |
+| 5. Motion | SmolVLA gets the edited pictures and its trained sentence and moves the arm; 400 steps per command. The simulator's own rule says when the cube is placed. | SmolVLA checkpoint, SAPIEN twin |
+
+Measured on ten random layouts (three commands each, `TESTING_LEDGER.md`,
+[the fast SAM 3 run](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-run) and
+[the run commanded by sentences](TESTING_LEDGER.md#t-2026-11-22-gemma-commands)):
+
+| Pictures given to SmolVLA | Layouts with all three cubes in the bin | Commands whose cube was in the bin |
+|---|---:|---:|
+| as the cameras take them (no SAM 3, no editing) | 0 of 10 | 1 of 30 |
+| the other two cubes painted over by SAM 3's outlines, cubes given as colours | 9 of 10 | 29 of 30 |
+| the same, each cube named by a typed sentence through Gemma 4 | 9 of 10 | 29 of 30 |
+
+Typed, all 30 phrasings (ten per colour: pick up, put, grab, place, move,
+take; box, bin, container or no place; with fillers) gave their cube, and all
+7 sentences that should move nothing were refused. In a synthetic voice 29 of
+30 and 5 of 7: a question ("is the red cube in the box") and a negation ("do
+not pick up the red cube") became a pick of the red cube. That is a known
+weak point of the spoken form (`SPEC.md`, section 10), held by a test that
+stays red until it is fixed.
+
+To run it (the SAPIEN twin, the SAM 3 environment and the voice workshop
+`workshops/vvla-pipeline` set up; the Gemma server is started on port 8083
+and stopped by the run):
+
+```bash
+./scripts/run_sapien_rollout.sh --task pick-place-three-cubes --pictures others-painted \
+  --outlines sam3 --sentences built-in --count 10
+# your own sentences: a JSON list of layouts, each a list of sentences
+./scripts/run_sapien_rollout.sh --task pick-place-three-cubes --pictures others-painted \
+  --outlines sam3 --sentences my_sentences.json --count 1
+# the same sentences said by the synthetic voice
+./scripts/run_sapien_rollout.sh --task pick-place-three-cubes --pictures others-painted \
+  --outlines sam3 --sentences built-in --spoken --count 1
+```
+
+The run folder under `vla_testing/` holds, per layout, a `feeds.mp4` with a
+row per camera: the picture as taken, SAM 3's outlines with what was done with
+each, and the picture SmolVLA was given; its `REPORT.md` lists every sentence,
+what Gemma heard, its call and the cube chosen.
+
 ## Environment
 
 Run these commands from this directory. The system ROCm (Radeon Open Compute) install is left as it is. This machine's integrated GPU is gfx1151. TorchCodec, LeRobot's video decoder, needs the system `ffmpeg` package.

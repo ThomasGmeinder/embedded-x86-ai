@@ -2596,3 +2596,131 @@ earlier counts are typed sentences and a synthetic voice.
   voice 26 of 30, seconds per request 0.54 / 0.69 / 0.99 and 0.70 /
   0.86 / 1.17); the last cell has no "Gemma stopped" line, because the
   notebook was saved while the user's server was still running.
+
+<a id="t-2026-11-22-gemma-commands"></a>
+### Addition, after 19:05: sentences through Gemma 4 into the three-cube test, typed and in the synthetic voice; the ten-layout run commanded by sentences
+
+Written after 19:05:31, the end of the run below. What was built is in
+`DEVELOPMENT_LEDGER.md` ([the section of this evening](DEVELOPMENT_LEDGER.md#d-2026-11-22-gemma-commands))
+and `SPEC.md` section 4.7; here the jobs, their clocks and their numbers.
+All from `workshops/so101-smolvla`, Python of `.venv` with
+`PYTHONPATH=src`; the Gemma worker runs in the voice workshop's Python
+through `scripts/run_voice_env.sh`, starts `llama-server` on port 8083
+with two slots and a context of 4,096 and stops it when closed. The
+user's own server on port 8082 ran throughout and was not used.
+
+**Smoke of the worker**, not a job: `/tmp/voice-smoke/smoke.py`, about
+18:38, from `.venv`. The worker was up (server started and answering)
+2.6 s after the call; "hey robot, put the green cube in the box please"
+typed gave `pick_place(object: green cube, place: box)` in 1.43 s, the
+same sentence in the synthetic voice (3.2 s of sound in a 6 s clip)
+gave the same call in 1.13 s with "Hey robot put the green cube in the
+box please" heard; after `close` nothing listened on 8083.
+
+**Unit tests**, tmux job `unit-1795369…` (about 18:42), the four files
+`tests/test_cube_commands.py`, `tests/test_voice_commands.py`,
+`tests/test_three_cube_rollout.py`, `tests/test_sam3_outlines.py`:
+**37 passed in 7.24 s**, exit 0. Among them the runner with a stand-in
+voice: five sentences of which two are refused, the refused ones move
+nothing and the report carries the sentence table.
+
+**The real Gemma on the sentences**, tmux job `gemma-tests-1795369557`,
+18:45:57 to about 18:48:02, exit 1, log `/tmp/gemma-tests-1795369557.log`,
+command `PYTHONPATH=src .venv/bin/python -m pytest tests/test_gemma_cube_commands_integration.py tests/test_gemma_three_cubes_integration.py -v --tb=short -s`:
+**3 passed, 1 failed in 124.55 s**. The sentences are the 30 of
+`cube_commands.TEMPLATES` (ten phrasings, each for red, green and blue)
+and the 7 of `REFUSED_SENTENCES` (no colour; two colours; a red ball; a
+yellow cube; a question; a negation; "learn the stack"). Each went to
+Gemma once typed and once in the synthetic voice (espeak-ng, `en-us`,
+150 words per minute, one 6 s clip); the cube is read from Gemma's
+fields by `cube_commands.choose_cube`.
+
+| | Typed | Synthetic voice |
+|---|---:|---:|
+| Pick sentences that gave their cube | 30 of 30 | 29 of 30 |
+| Sentences that should move nothing and were refused | 7 of 7 | 5 of 7 |
+| Seconds per request: least, middle, most | 0.60, 0.89, 1.41 | 0.75, 0.99, 1.16 |
+
+The three spoken misses:
+
+| Sentence | Gemma heard | Call | Read as | Should be |
+|---|---|---|---|---|
+| take the red block and put it in the box | pick up the block and put it in the box | `pick_place(object: block, place: box)` | refused: names no cube colour | red |
+| is the red cube in the box | This red cube in the box | `pick_place(object: red cube, place: box)` | red | refused |
+| do not pick up the red cube | do not pick up the red cube | `pick_place(object: red cube)` | red | refused |
+
+- The first miss is safe (nothing moves). The second and third would
+  move the red cube on a question and on a negation; typed, both were
+  "unknown". The spoken test asserts that no sentence moves a cube it
+  does not name and so **fails**; on the user's word (question form of
+  this evening) it stays strict and red until Gemma's audio path is
+  fixed. `SPEC.md` section 10 has it as a weak point.
+- The typed test passed: every sentence as it should be. The
+  provenance test passed: port 8083, two slots, context 4,096, branch
+  commit `1d231e1`, grammar and instructions checksums, the graphics
+  override of the voice workshop's environment (`11.0.0`) present.
+- `tests/test_gemma_three_cubes_integration.py` passed: one real
+  layout (seed 7) through the command line with `--sentences built-in
+  --outlines sam3 --steps 3`, the arm held by a stand-in for SmolVLA:
+  the three built-in sentences of that layout gave red, blue and green
+  as drawn (1.38, 0.83, 0.88 s), the picks and the video's captions
+  carry Gemma's calls, the other two cubes were painted by SAM 3's
+  outlines (top mean over 1,000 pixels, wrist over 1,500), the batch
+  folder holds `llama-server.log`.
+
+**The ten-layout run commanded by typed sentences**, tmux job
+`three-cubes-gemma-typed-1795369783`, 18:49:43 to 19:05:31, exit 0,
+948 s, platform profile `performance` as in the run of 17:12 (set for
+the run, back to `balanced` at 19:08):
+`scripts/run_sapien_rollout.sh --task pick-place-three-cubes --pictures others-painted --outlines sam3 --sentences built-in --count 10`,
+folder `vla_testing/random-three-cubes-sapien-others-painted-sam3-gemma-typed-20261122-184944`
+("succeeded 9 of 10"; `REPORT.md` with the sentence table,
+`summary.json`, `COMPLETE.json`, `llama-server.log`, the three overall
+videos, ten layout folders). The built-in sentences follow each
+layout's drawn order with the templates rotated, so the cubes are
+commanded in the same order as in the run of 17:12.
+
+| Count | Run of 17:12 (colours) | This run (typed sentences) |
+|---|---:|---:|
+| Sentences whose fields gave the cube they name | – | 30 of 30, none refused |
+| Layouts with all three cubes in the bin at the end | 9 of 10 | 9 of 10 |
+| Cubes in the bin at the end | 29 of 30 | 29 of 30 |
+| Commands whose cube was in the bin when the command ended | 29 of 30 | 29 of 30 |
+| Commands in which the simulator's rule held at some step | 28 of 30 | 28 of 30 |
+
+Every layout ends as in the run of 17:12, with the same success step
+for every command (`~/.cache/stack-memory-agent-test/compare_three_cube_runs.py`:
+"layouts whose outcome differs: none"; layout 1 fails in both, its
+green cube not placed). That is expected: every sentence gave the cube
+the draw had, so SmolVLA saw the same pictures with the same seeds and
+SAM 3 outlined the same (the named cube without an outline in 36 of 240
+top and 37 of 240 wrist plans in both runs, counted from each plan's
+legend and SAM 3's found cubes). The comparison script's own
+"named cube" count reads the colour from the command text and splits
+at " cube", so for "green one" and "red block" it reports 79 and 77;
+that figure is wrong for this run and is not used.
+
+Gemma over the 30 sentences: 0.73, 0.88, 2.29 s (least, middle, most;
+the most is the first request of the run), 27.6 s in all. Time per
+layout from the write times of `COMPLETE.json`: 75, 80, 84, 93, 94, 96,
+98, 99, 101 s for layouts 1 to 9 (median 94 s; the run of 17:12: 92 to
+128, median 100 s); the first layout's file at 18:51:45, 122 s after
+the start, which includes the Gemma server, SmolVLA and SAM 3 loading.
+SAM 3 per call, median: 0.272 s top, 0.309 s wrist (17:12: 0.294 and
+0.321), 141 s of SAM 3 in the run against 164 s.
+
+**The full suite**, tmux job `test-suite-1795370801`, 19:06:41 to
+19:13:30, exit 1, log `/tmp/test-suite-1795370801.log`:
+`env PYTHONPATH=src .venv/bin/python -m pytest tests -v --tb=short -rP --ignore=tests/test_voice_notebook.py`,
+**3 failed, 199 passed, 1 expected failure in 408.12 s**. One failure is
+the spoken Gemma test above, red on the user's word. The other two were
+the real-scene batch tests of `tests/test_sapien_three_cubes_integration.py`
+and `tests/test_sam3_three_cubes_integration.py`, which compare the
+batch's `COMPLETE.json` to an exact dictionary: the file now carries a
+`commands` key ("user" there) that the tests did not expect. The two
+expectations were updated (an agent mistake, journaled in
+`AGENT_MISTAKES.md`) and the two files rerun, tmux job
+`real-fix-1795371436`, 19:17:16 to 19:19:43, exit 0: **9 passed in
+146.39 s**. So the suite stands at 201 passing, 1 expected failure and
+the one red spoken test; the notebook test is left out as before (the
+user's `llama-server` on port 8082).

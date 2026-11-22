@@ -2909,3 +2909,26 @@ first attempt fail is not known; the file was checked and found sound
 before and after, so it was a state of the viewer, not of the file. The
 VP9 WebM copy written as a way round it (`seed-00000/feeds.webm` in the
 run folder, outside git) was not needed.
+
+## 2026-11-22 — A new key in `COMPLETE.json` broke two real-scene tests that were not rerun before the full suite
+
+- **Agent/tool:** Claude Code (Claude Fable 5.1)
+- **Task:** Let the three-cube test take its commands as sentences through
+  Gemma 4 (`workshops/so101-smolvla`).
+- **Mistake:** Added the key `commands` to the batch's `COMPLETE.json`
+  (`three_cube_rollout.py`) and reran only the fast unit tests and the new
+  Gemma tests; the two existing real-scene batch tests compare that file to
+  an exact dictionary and were left as they were.
+- **Evidence:** Full suite, tmux job `test-suite-1795370801` (19:06:41 to
+  19:13:30): `tests/test_sapien_three_cubes_integration.py::test_real_three_cube_batch_runs_a_command_per_cube_and_writes_its_report`
+  and `tests/test_sam3_three_cubes_integration.py::test_real_three_cube_batch_with_sam3_outlines_through_the_command_line`
+  failed on `{'commands': 'user'}` as the one extra item.
+- **Cause:** The change to a file's contents was not followed by a search
+  for every test that reads that file; the real-scene tests take minutes
+  and were put off to the full suite.
+- **Correction:** Both expectations carry `"commands": "user"`; the two
+  files rerun in job `real-fix-…` (result in the testing ledger).
+- **Prevention:** After changing what a result or marker file holds, grep
+  the tests for the file's name and update every exact comparison before
+  the first test run, whatever the tests cost.
+- **Status:** corrected

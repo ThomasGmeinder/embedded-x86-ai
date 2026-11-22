@@ -6231,3 +6231,122 @@ result file is written in the testing ledger only, the development
 ledger and the research file link to it, the spec links to both. The
 script ran once and is not kept; the check that every link resolves to
 an anchor found none unresolved.
+
+<a id="d-2026-11-22-gemma-commands"></a>
+## 2026-11-22 — The user commands the three-cube test by sentences: Gemma 4 gives the fields, a program reads the cube; typed 30 of 30 and the same 9 of 10
+
+Result in one line: a typed sentence such as "grab the green one and
+drop it in the box" now goes through Gemma 4 to the three-cube test,
+where a program of this workshop reads the cube from Gemma's `object`
+field and the rest of the test (SAM 3's outlines, the painting, SmolVLA
+with its trained sentence) runs as before; on the ten layouts of the
+afternoon every sentence gave its cube and the outcome is the same 9 of
+10, step for step. In the synthetic voice a question and a negation were
+made a pick, which the suite now shows as a red test on the user's word.
+Written after 19:05:31 by the Claude Code session of the afternoon.
+Every number is in `TESTING_LEDGER.md` ([the section of this evening](TESTING_LEDGER.md#t-2026-11-22-gemma-commands));
+the spec has the design in section 4.7.
+
+<a id="d-2026-11-22-what-the-user-asked-for-and-3"></a>
+### What the user asked for and decided
+
+- After the design review of 18:1x (the transcript is not fed to
+  SmolVLA; Gemma's fields and SAM 3's painting are the path; the
+  missing piece was a program from the `object` word to the cube): "expand
+  the test to include the gemma translation of the user intent and feed
+  variations of commands to gemma4 to be translated into the commands
+  to pickup cube X and place it in the bin."
+- Question form, about 18:25: the tests start their own Gemma server
+  on a free port (8083), so the user's server on 8082 is left alone;
+  the variations are sent typed and spoken; the phrasings are the
+  session's, ten per colour, to be reviewed in the test file. A fourth
+  question, how a sentence with a place other than the bin ("put the
+  red cube on the blue cube") is handled, the user struck: "just do not
+  test it! stacking is another use case that will be tested
+  separately." So no such sentence is among the variations and the
+  place is recorded, not judged.
+- Question form, 18:50, on the spoken misses: keep the spoken test
+  strict and red. A question and a negation that move a cube are a
+  fault to show until Gemma's audio path is fixed; the audio request is
+  the branch's and a change to it needs the user's word.
+
+<a id="d-2026-11-22-what-was-built-2"></a>
+### What was built
+
+- `src/so101_smolvla/cube_commands.py`: the one place that turns
+  Gemma's fields into a cube of the scene (`choose_cube`), the call text
+  as the notebook writes it (`call_text`), the ten templates and the
+  seven refusal sentences, the built-in sentences per layout (the
+  layout's drawn order, templates rotated) and the reading of a user's
+  sentence file.
+- `src/so101_smolvla/voice_worker.py` and `voice_commands.py`: the Gemma
+  client of `voice/` in a worker process, on the pattern of the SAM 3
+  worker. It runs in the voice workshop's Python and environment
+  through the new `scripts/run_voice_env.sh`; the notebooks' kernel
+  (`notebooks/run_notebooks.sh`) now starts through the same script, so
+  the environment of the voice client has one source. The worker starts
+  the server through `notebook_tools.start_server`, as the notebook
+  does, with the same two settings (now the constant `SERVER_CHANGES` in
+  `voice/notebook_tools.py`), and speaks a sentence with the notebook's
+  own espeak-ng functions. Its hello carries the server's settings, the
+  model file names, the branch commit, checksums of the grammar and the
+  instructions, and the graphics override of the environment.
+- `three_cube_rollout.py`: a layout takes `sentences` (each with the
+  cube it should name, where known) and a `voice`; each sentence is
+  asked right before its pick, typed or spoken; a refused sentence is
+  a pick entry that moved nothing; the result holds every translation
+  and the worker's provenance; the report says where the commands came
+  from, counts the sentences and lists them with what Gemma heard, its
+  call, the cube, the expected cube and the seconds. The video's captions
+  carry Gemma's call. `sapien_rollout.py`: `--sentences built-in|FILE`
+  and `--spoken`; the folder name ends in `-gemma-typed` or
+  `-gemma-spoken`.
+- Tests: the chooser and the sentences (`test_cube_commands.py`), the
+  launcher and the fields (`test_voice_commands.py`), the runner with a
+  stand-in voice (four tests in `test_three_cube_rollout.py`), the real
+  Gemma on all 37 sentences typed and spoken
+  (`test_gemma_cube_commands_integration.py`), and one real layout
+  through Gemma, SAM 3 and the scene with the arm held
+  (`test_gemma_three_cubes_integration.py`). The real tests skip when
+  the voice workshop is not set up (the worker's `--check`) and fail on
+  anything else.
+
+<a id="d-2026-11-22-what-it-means-2"></a>
+### What it means
+
+- Typed, the path is complete for task 1 in its three-cube form: the
+  user names the cube in their own words, Gemma gives the fields, the
+  program picks the cube, SAM 3 and the editor show SmolVLA only that
+  cube. Ten phrasings with different verbs, place words and fillers all
+  came through, and the seven sentences that should move nothing were
+  all refused. One Gemma request costs about 0.9 s per command.
+- The ten-layout result is the same as with colours because the
+  sentences changed nothing downstream: same cube, same pictures, same
+  seeds, same actions. The run shows the translation on 30 more
+  sentences and that it adds no cost worth naming (Gemma 28 s of 948 s).
+- Spoken, in the synthetic voice, the chooser refuses a colour that was
+  not heard (safe) but cannot see a question or a negation that Gemma
+  turned into a pick: it reads fields, not words, by the requirement of
+  16:14. The typed form gets both right, so the instructions are not
+  the gap; the audio request of the branch is (its user text "Classify
+  the spoken robot instruction in this audio" names an instruction
+  before Gemma has heard one). This is `SPEC.md` section 10 and
+  decision 10; the red test keeps it in view.
+- Not measured: a person's voice through this path; the spoken form
+  in a ten-layout run (`--spoken` exists and ran in the smoke and the
+  tests, not in a run); more than one sentence per pick or a sentence
+  said while the arm moves.
+
+<a id="d-2026-11-22-where-this-leaves-the-work-3"></a>
+### Where this leaves the work
+
+- Uncommitted when this was written: the five new and six changed
+  files above, the kernel launcher, the three documents and the spec.
+  The full suite was launched after this section; its count goes into
+  the testing ledger. One test is red by design.
+- The platform profile is `balanced` again (set to `performance` for
+  the run, as the run of 17:12 had it).
+- Open for the user: the spoken question and negation (decision 10 or
+  a change to the audio request, 5.1); a run with `--spoken`; the
+  stacking sentences as their own use case (decision 9); the earlier
+  open items (D4, fewer actions per plan).
