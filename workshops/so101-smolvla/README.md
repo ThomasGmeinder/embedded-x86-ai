@@ -73,16 +73,17 @@ flowchart TD
 
 ### Automated testing
 
-Video of the first layout of the run commanded by typed sentences
-(`vla_testing/random-three-cubes-sapien-others-painted-sam3-gemma-typed-20261122-184944`,
-seed 0: "pick up the blue cube and put it in the box", "put the red cube in
-the bin", "grab the green one and drop it in the box", all three placed):
-[media/three-cubes-gemma-typed/seed-00000-feeds.mp4](media/three-cubes-gemma-typed/seed-00000-feeds.mp4).
+Video of the first layout of the run of 2026-11-22, 17:12, with the fast
+SAM 3 (`vla_testing/random-three-cubes-sapien-others-painted-sam3-fast-20261122-171213`,
+seed 0, the cubes commanded as colours in the order blue, red, green, all
+three placed):
+[media/three-cubes-sam3-fast/seed-00000-feeds.mp4](media/three-cubes-sam3-fast/seed-00000-feeds.mp4).
 Each row is one camera, top and wrist, with three pictures: the scene as the
 camera takes it at every step; the outlines SAM 3 gave when SmolVLA last
 planned, tinted by what was done with each (target, painted over, not used);
-and the picture SmolVLA was given. The caption carries Gemma's call for the
-current command.
+and the picture SmolVLA was given. The caption carries the command. The run
+commanded by typed sentences through Gemma ended identically, step for step,
+on this layout and the nine others.
 
 Measured on ten random layouts (three commands each, `TESTING_LEDGER.md`,
 [the fast SAM 3 run](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-run) and
