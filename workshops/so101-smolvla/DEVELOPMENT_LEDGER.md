@@ -6424,3 +6424,181 @@ in `TESTING_LEDGER.md` ([the section of this evening](TESTING_LEDGER.md#t-2026-1
   the four test files and the recorded metrics file, the project file, the
   notebook, the README and the two ledgers. The full suite runs after this
   section; its count goes into the testing ledger.
+
+<a id="d-2026-11-22-compute-placement"></a>
+## 2026-11-22 — Compute placement: the run's useful work is under two processors; the rest is worker threads spinning
+
+Result in one line: nothing in the workshop pins a process to a core, and
+with the default thread pools a three-cube run keeps about sixteen of the
+32 logical processors busy, twelve of them torch's OpenMP threads spinning
+in the main process while SmolVLA runs on the graphics processor; the
+same layout pinned to five physical cores with the pools capped to four
+threads ends sooner, with the identical result, on 1.7 processors' worth
+of work. Written after 22:50 on the user's questions of the evening (how
+the processes map to the cores; whether five physical cores would do).
+Numbers, runs and folders: `TESTING_LEDGER.md`,
+[the measurement and its amendment](TESTING_LEDGER.md#t-2026-11-22-core-placement).
+The table of stages, devices and the measured placement is the README's
+section "Compute placement".
+
+<a id="d-2026-11-22-what-was-found"></a>
+### What was found
+
+- The process split is by software environment and engine (SAPIEN on the
+  cores because its GPU path needs CUDA; SAM 3 in the reference's own
+  environment with its MIOpen setting; the voice client in its own), not
+  by core placement. Every process inherits all 32 processors; the busy
+  threads were seen on all of them and on both L3 complexes alike.
+- A first reading from a 50-step layout said the cores were mostly idle.
+  That was wrong, read from 13 samples; the full layout shows the main
+  process at twelve processors' worth and the SAPIEN worker at 3.6.
+  Journaled in `AGENT_MISTAKES.md`.
+- Capping the pools (`OMP_NUM_THREADS=4`) and pinning to processors 0 to 9
+  gave 130 s for the layout against 142 s unpinned; pinning without the
+  cap gave 202 s, because 32 spinning threads per process then fight over
+  ten processors. The three runs end with the same cubes in the bin at the
+  same steps.
+
+<a id="d-2026-11-22-what-it-means-4"></a>
+### What it means
+
+- Five physical cores are enough for a run, and the cap is the condition:
+  pinning alone makes it worse. The second L3 complex and six more cores
+  stay free for the desktop and the user's own Gemma server.
+- The 12 s gain is one run against one and within the spread between
+  layouts (92 to 128 s in the ten-layout run of 17:12); the drop from 16
+  to 1.7 processors' worth is not in doubt. A ten-layout run with the cap
+  and the pin would settle the time.
+- Not applied: `scripts/run_sapien_rollout.sh` still starts everything
+  unpinned with the default pools. Applying it is one `taskset -c 0-9` and
+  the variable in that script, then the ten-layout run.
+
+## 2026-11-22 — The voice path stands on its own: the Gemma client as `so101_smolvla.voice`, no dependency on `workshops/vvla-pipeline`
+
+Result in one line: the Gemma 4 voice path (typed and spoken sentences
+for the three-cube test, the voice notebook, the live microphone) now
+lives in this workshop's package `src/so101_smolvla/voice/`, runs in the
+workshop's own `.venv`, starts a `llama-server` built here under
+`third_party/`, and reads the two Gemma files from the Hugging Face cache;
+the copied client in `voice/`, the environment launcher, the worker
+process and the last borrowed piece (the NPU load test) are gone. Typed
+37 of 37, the three-cube layout 0 identical step for step to the run of
+18:49, one layout in 155 s. Numbers in `TESTING_LEDGER.md`
+([the section of this night](TESTING_LEDGER.md#t-2026-11-22-voice-standalone)).
+
+<a id="d-2026-11-22-voice-standalone-what-the-user-asked-for"></a>
+### What the user asked for and decided
+
+- "does so101-smolvla depend on: the voice workshop workshops/vvla-pipeline
+  set up ???" (22:0x), then "I do not want a dependency on vvla-pipeline
+  !!!!! look at all the dependent files and try to simplify them before
+  integrating them in so101-smolvla in a nice structure."
+- Question form: keep the live-microphone path (yes); the utilization
+  meters' NPU load test, which borrowed the other workshop's NPU runtime
+  and YOLO model, is removed; `llama-server` is built in this workshop and
+  "the model lives in the global huggingface cache !!!! check if it is
+  there already" (it was not: the cache held only `unsloth`'s Q4_K_M
+  quantization twice and a metadata-only entry of `ggml-org`'s repository;
+  the other workshop had downloaded with `--local-dir`, past the cache).
+- "I do not want s101-smolvla make the same stupid mistakes as
+  vvla-pipeline !!!! models should be downloaded to global caches where
+  sensible, definitely large LLM based models !!!!": so no model file in
+  the workshop at all. The Silero speech-detection model is the file its
+  official package `silero-vad==6.2.3` ships (the same bytes, sha256
+  `1a153a22…`, checked against the other workshop's copy and four hub
+  mirrors); the Gemma files are `huggingface_hub` downloads into
+  `~/.cache/huggingface`.
+- The rule of 2026-11-21, 16:01 (the branch is the working reference)
+  keeps its force for what the model sees and hears; where the code lives
+  and how it is run is this workshop's (SPEC.md section 5.1).
+
+<a id="d-2026-11-22-voice-standalone-what-was-built"></a>
+### What was built
+
+- `configs/voice.json`, the one source for shell and Python: the llama.cpp
+  commit (`781dbc5ac`) and graphics target (`gfx1100`), the Hugging Face
+  repository and file names, the server settings (default port 8082, the
+  runner's 8083, two slots, a context of 4,096, the graphics override
+  `11.0.0`), the listening parameters, the synthetic voice. The two slots
+  and the context are settings now, not values a caller passed over the
+  copied file's.
+- `scripts/setup_voice.sh`: the packages into `.venv` (held to
+  `constraints.txt`, so the ROCm Torch wheels stayed as they were:
+  checked), llama.cpp cloned and built with HIP for `gfx1100` under
+  `third_party/` (not in git) without the server's web page, the two
+  Gemma files into the Hugging Face cache; `--check` only names what is
+  missing. Idempotent. The build took 2 min on 32 processors; the
+  download of 5.1 GB 14.5 min.
+- `src/so101_smolvla/voice/`: `settings.py` (the one reader of the
+  settings and of where the files are; a missing piece is a
+  `SetupFailure` that names it and the setup script), `intents.py`,
+  `intent.gbnf`, `server.py` (`GemmaServer`: start, readiness line, refuse
+  a port something answers on, stop; the override goes into the server
+  process's environment only), `client.py` (`GemmaClient`: the two
+  requests), `speech.py` (`SyntheticVoice`, espeak-ng), `microphone.py`
+  (`Listener`, Silero, the windows and the filter; the request thread
+  blocks on its queue and ends on a sentinel, it no longer polls with a
+  timeout), `commands.py` (`VoiceCommands` in the main process;
+  `voice_ready()` for the tests' skips), `examples.py`. 29 and 15 example
+  sentences as before.
+- Gone: `voice/` (12 files), `scripts/run_voice_env.sh`,
+  `voice_worker.py`, `voice_commands.py`, `tests/npu_load.py`, the NPU
+  load test, `VOICE_WORKSHOP` everywhere. Left out of the port: the
+  keyword stand-in, the handler registry, the `autostart`, `ubatch_size`,
+  `cu_mask` and `extra_args` settings, none of them used here.
+- `notebooks/run_notebooks.sh`: the kernel is `.venv/bin/python` with
+  `PYTHONPATH=src` in the kernel's own specification; no sibling checks.
+  The notebook's first cell imports the package and checks `sys.prefix`;
+  its live cells use `Listener`; its meters cell lost its `sys.path`
+  line. The outputs of the two microphone cells (the user's own runs)
+  were kept as committed.
+- Tests: `tests/test_voice_commands.py` rewritten for the package (the
+  settings name no model in the workshop; readiness names each missing
+  piece; the grammar and the instructions cover every command; an answer
+  is read from Gemma's JSON; the synthetic voice gives a 6 s clip at
+  16 kHz; the server refuses a port a real bound socket answers on); the
+  launcher test asserts the kernel is `.venv` with the package importable
+  and the override absent; the notebook test takes its tools from `.venv`
+  and the port from the settings; the two Gemma tests skip on
+  `voice_ready()` and the provenance test reads the server's build commit.
+- README (Environment: the setup script; the flow table; the "To run it"
+  sentence; the compute placement rows of the voice), SPEC.md (sections 2,
+  4.7, 5.1, 10 and the definitions), this entry.
+
+<a id="d-2026-11-22-voice-standalone-what-it-means"></a>
+### What it means
+
+- One Python environment for the whole run: the Gemma client is asked in
+  the main process, the worker process and the fifth environment are gone.
+  The only separate processes left are the ones that must be: the server,
+  the SAM 3 worker and the SAPIEN worker.
+- The graphics override is the server process's alone. Measured: with
+  `HSA_OVERRIDE_GFX_VERSION=11.0.0` in a process of `.venv`, Torch still
+  reports the device, but a kernel on it fails ("Device-side assertion
+  tracking was not enabled by user" and no result); without it, the
+  device is "AMD Radeon 8060S Graphics" and kernels run. So the variable
+  must never reach the main process, and `GemmaServer.start` puts it into
+  the child's environment only.
+- What the model sees and hears did not change: the instructions, the
+  grammar, the two request bodies, the clip and the listening parameters
+  are the branch's in effect. The three-cube layout 0 commanded by
+  sentences ended identically, step for step and field for field, to the
+  run of 18:49 that went through the copied client.
+- The llama.cpp web page: at commit `781dbc5ac` the server target embeds a
+  page a build downloads ready-made from a Hugging Face bucket; the copy
+  for this build tag is gone and the "latest" one fails the commit's own
+  check. The setup script builds without the page; the server's API is
+  unchanged.
+
+<a id="d-2026-11-22-voice-standalone-where-this-leaves-the-work"></a>
+### Where this leaves the work
+
+- The notebook test (`tests/test_voice_notebook.py`) was not run: the
+  user's own `llama-server` of the other workshop's notebook session
+  (pid 3037368) still holds port 8082, which that test requires free. To
+  be run once the port is free.
+- `HSA_OVERRIDE_GFX_VERSION=11.0.0` and the `gfx1100` build are the proven
+  way on this machine; whether llama.cpp of a newer commit runs natively
+  on `gfx1151` with ROCm 7.2.4 was not tried.
+- The spoken Gemma test stays red on the user's word (section of 19:05):
+  34 of 37 in the synthetic voice, the question and the negation again.

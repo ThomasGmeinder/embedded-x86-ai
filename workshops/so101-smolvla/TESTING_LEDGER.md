@@ -2869,3 +2869,33 @@ the busy threads of the main and the SAPIEN process were seen on all 32
 processors and on both L3 complexes about equally, so no cache locality
 is kept. The proposed dedicated placement is in `README.md`, section
 "Compute placement"; it is not applied.
+
+**Amendment, after 22:45: the sentence "the cores are mostly idle while
+the graphics processor works" above is wrong.** It was read from 13
+one-second samples of a 50-step layout. Three full layouts (400 steps per
+command, seed 0, `--outlines sam3`, the cubes as colours because the
+voice path was mid-refactor in the working tree) sampled twice a second
+with each thread's CPU time, processor and name (`sample_threads.py` in
+the folders below) say this, steady state being the samples after the
+model loading:
+
+| Run (folder under `/tmp/`) | Layout complete after the start | All run processes, CPU share median / p90 (% of one processor) | Main process median, busy threads | SAPIEN worker median, busy threads | SAM 3 worker median | ffmpeg at the end | Outcome (cube, in bin, success step) |
+|---|---:|---|---|---|---|---|---|
+| `core-map-1795383335`: unpinned, default thread pools | 142 s | 1,606 / 2,141 | 1,233 %, 32 of 32 threads busy (all named `python`) | 363 %, 16 of 16 | 2 % | 436 %, 17 threads | blue 189, red 180, green 212, all in |
+| `core-map-pinned-1795383550/A`: `taskset -c 0-9` (five physical cores), default pools | 202 s | not separable (the SAM 3 worker's threads kept growing to 1,205) | | | | | the same |
+| `core-map-pinned-1795383550/B`: `taskset -c 0-9` and `OMP_NUM_THREADS=4` for every process | 130 s | 171 / 340 | 58 %, 1 to 4 | 26 %, 0 to 4 | 24 % | 403 %, 15 to 24 threads | the same |
+
+Reading: with the default pools the main process keeps all 32 OpenMP
+threads of torch busy for twelve processors' worth while the policy runs
+on the graphics processor, and the SAPIEN worker sixteen threads for
+3.6 processors' worth; with the pools capped to four threads the same
+layout ends 12 s sooner and the useful work of all processes together is
+1.7 processors' worth in the median. So the twelve processors were
+spin-waiting worker threads, not work. Pinning to five physical cores
+without the cap is the worst case, 60 s slower: 32 spinning threads per
+process on ten processors. The outcome is identical in the three runs
+(the same success steps), as expected from a deterministic policy and
+simulator. SAM 3's median call stayed at 0.26 to 0.32 s. One run each;
+the spread between layouts of the 17:12 run was 92 to 128 s, so the 12 s
+gain is within that spread and needs more layouts to be claimed as a
+gain; the drop in processor load does not.

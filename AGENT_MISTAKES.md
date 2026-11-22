@@ -2943,3 +2943,36 @@ run folder, outside git) was not needed.
 - **Correction:** Commit `21236ab`: the picture is plain, the mp4 is linked in the sentence, and the text says GitHub offers a repository video file only as a download.
 - **Prevention:** After changing how media is embedded in a README, fetch the rendered page and confirm the element and its behaviour before describing it in the text.
 - **Status:** corrected
+
+## 2026-11-22 — Wrote that the cores sit idle during a three-cube run, from 13 samples of a 50-step layout
+
+- **Agent/tool:** Claude Code (Claude Fable 5.1)
+- **Task:** Analyse how the processes of `workshops/so101-smolvla` map to the cores (user's question of 21:5x) and write the compute placement table.
+- **Mistake:** Wrote in `TESTING_LEDGER.md` and `README.md` that in steady state "the stages take turns over synchronous pipes and the cores are mostly idle while the graphics processor works", and built the proposed dedicated-CPU column on it.
+- **Evidence:** A full layout (400 steps per command, folder `/tmp/core-map-1795383335`) sampled twice a second: the main process ran all 32 torch OpenMP threads at 12.3 processors' worth in the median, the SAPIEN worker 3.6, all processes together 16 processors' worth; with `OMP_NUM_THREADS=4` on five physical cores the same layout finished 12 s sooner at 1.7 processors' worth.
+- **Cause:** The first measurement's command phase was 13 one-second samples of a 50-step layout, dominated by loading; I read a median from too few samples and did not question a result that contradicted the known 32-thread default of torch.
+- **Correction:** Amendment in the testing ledger (section of 22:05) with the three runs; the README's compute placement table and its paragraph rewritten on the user's word to the measured placement (five physical cores with the thread pools capped).
+- **Prevention:** A steady-state claim about a run needs the run's real length and at least a minute of samples; a load figure that contradicts a library's known thread default is checked with a capped run before it is written down.
+- **Status:** corrected
+
+## 2026-11-22 — The provenance test read the wrong line of `llama-server --version`
+
+- **Agent/tool:** Claude Code (Claude Fable 5.1)
+- **Task:** Fold the Gemma voice client into `so101_smolvla.voice`; record the server's build commit in a run's provenance.
+- **Mistake:** `server_version()` returned the last line of `llama-server --version` ("built with GNU 13.3.0 for Linux x86_64") and the test parsed a commit out of it; the commit is on the first line ("version: 0.6.0-dev (build 11548, commit 781dbc5ac)").
+- **Evidence:** `tests/test_gemma_cube_commands_integration.py::test_the_voice_reports_the_server_it_started_and_the_client_it_is` failed in tmux job `gemma-tests-224028` (`/tmp/gemma-tests-224028.log`); the binary's two output lines, read afterwards.
+- **Cause:** Wrote the parser from the vvla-pipeline script's `sed` on `--version` without running the binary first.
+- **Correction:** `server_version()` returns the line that names the commit; the test matches `commit <hex>` with a regular expression. Rerun: passed in 9.52 s.
+- **Prevention:** Before parsing a program's output, run the program once and quote its real output in the test.
+- **Status:** corrected
+
+## 2026-11-22 — Editing notebook cells dropped the user's saved microphone outputs
+
+- **Agent/tool:** Claude Code (Claude Fable 5.1), the notebook cell editing tool
+- **Task:** Point `notebooks/voice_control_test.ipynb` at the new `so101_smolvla.voice` package.
+- **Mistake:** Editing the source of the two cells tagged `skip-execution` (sections 6 and 7, the microphone) cleared their outputs, which are the user's own recorded runs and cannot be made again by a test; the cell sources were also stored as one string instead of a list of lines.
+- **Evidence:** A cell-by-cell comparison with `git show HEAD:...ipynb` after the edits: outputs 3 -> 0 and 1 -> 0 on the two tagged cells, source type `str` on every edited cell.
+- **Cause:** Assumed the cell editing tool changes only a cell's source.
+- **Correction:** The two cells' outputs and execution counts were restored from the committed notebook; every edited source was stored as a list of lines again. Checked by the same comparison.
+- **Prevention:** After editing a notebook with a tool, compare it cell by cell with the committed file (sources, outputs, metadata) before going on.
+- **Status:** corrected
