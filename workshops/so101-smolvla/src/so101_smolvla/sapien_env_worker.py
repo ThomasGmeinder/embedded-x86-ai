@@ -103,10 +103,19 @@ def _scene_facts(env) -> dict:
     return facts
 
 
+def _outline_maps(env) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """The outline maps of the last observation, from a scene that hands them out."""
+    inner = env._env.unwrapped
+    if not hasattr(inner, "outline_maps"):
+        return None, None
+    return inner.outline_maps()
+
+
 def serve() -> None:
     protocol = os.fdopen(os.dup(sys.stdout.fileno()), "wb", buffering=0)
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
 
+    import so101_smolvla.sapien_bin_env  # noqa: F401
     import so101_smolvla.sapien_stack_env  # noqa: F401
     from so101_sim.envs import ROBOT_COLOR as TRAINING_ROBOT_COLOR
 
@@ -200,7 +209,29 @@ def serve() -> None:
                         )
                     metadata, top, wrist = _observation(obs)
                     metadata["facts"] = _scene_facts(env)
-                    reply(request_id, 1, encode_payload(metadata, top, wrist))
+                    reply(
+                        request_id,
+                        1,
+                        encode_payload(metadata, top, wrist, *_outline_maps(env)),
+                    )
+                elif operation == "set_target":
+                    inner = env._env.unwrapped
+                    if not hasattr(inner, "set_target"):
+                        raise ValueError("selected task has no cube to name")
+                    inner.set_target(str(request["cube"]))
+                    reply(
+                        request_id,
+                        1,
+                        encode_payload({"facts": _scene_facts(env)}),
+                    )
+                elif operation == "scene_without_cubes":
+                    inner = env._env.unwrapped
+                    if not hasattr(inner, "pictures_without_cubes_and_robot"):
+                        raise ValueError(
+                            "selected task cannot show its scene without cubes"
+                        )
+                    top, wrist = inner.pictures_without_cubes_and_robot()
+                    reply(request_id, 1, encode_payload({}, top, wrist))
                 elif operation == "set_command":
                     inner = env._env.unwrapped
                     if not hasattr(inner, "set_stack_goal"):
@@ -229,7 +260,11 @@ def serve() -> None:
                             "facts": _scene_facts(env),
                         }
                     )
-                    reply(request_id, 1, encode_payload(metadata, top, wrist))
+                    reply(
+                        request_id,
+                        1,
+                        encode_payload(metadata, top, wrist, *_outline_maps(env)),
+                    )
                 elif operation == "close":
                     reply(request_id, 1, encode_payload({"closed": True}))
                     return

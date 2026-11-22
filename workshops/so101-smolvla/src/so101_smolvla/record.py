@@ -11,6 +11,8 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Iterable
+from itertools import chain
 from pathlib import Path
 
 import numpy as np
@@ -78,28 +80,56 @@ def _capture(index: int, xy: tuple[float, float], dest: Path) -> bool:
     return completed.returncode == 0 and dest.exists()
 
 
-def _write_clip(frames: np.ndarray, path: Path) -> None:
+def _write_clip(frames: Iterable[np.ndarray], path: Path) -> None:
+    """Encode ``frames`` at 30 pictures per second, in the size of the first.
+
+    ``frames`` may be an array or anything that hands out one frame at a
+    time, so a wide clip need not be held in memory as a whole.
+    """
+    stream = iter(frames)
+    first = next(stream, None)
+    if first is None:
+        raise ValueError(f"no frame to write to {path}")
+    if first.ndim != 3 or first.shape[2] != 3 or first.dtype != np.uint8:
+        raise ValueError(f"invalid frame {first.dtype} of shape {first.shape}")
+    height, width = first.shape[:2]
+    if height % 2 or width % 2:
+        # The clip's pixel format halves the colour planes.
+        raise ValueError(f"a frame of {width}x{height} has an odd side")
     path.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(
         [
             "ffmpeg", "-y", "-loglevel", "error",
-            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "640x480", "-r", "30", "-i", "-",
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", "30", "-i", "-",
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(path),
         ],
         stdin=subprocess.PIPE,
     )
     assert proc.stdin is not None
-    for frame in frames:
-        proc.stdin.write(np.ascontiguousarray(frame).tobytes())
-    proc.stdin.close()
-    if proc.wait() != 0:
+    try:
+        for frame in chain((first,), stream):
+            if frame.shape != first.shape or frame.dtype != np.uint8:
+                raise ValueError(
+                    f"a frame is {frame.dtype} of shape {frame.shape}, "
+                    f"the first is of shape {first.shape}"
+                )
+            proc.stdin.write(np.ascontiguousarray(frame).tobytes())
+    finally:
+        proc.stdin.close()
+        status = proc.wait()
+    if status != 0:
         raise RuntimeError(f"ffmpeg failed for {path}")
 
 
-def accumulate(folders: list[Path], dest: Path, prefix: str) -> None:
-    """Join each camera across ``folders``, in the order given, into one clip."""
+def accumulate(
+    folders: list[Path],
+    dest: Path,
+    prefix: str,
+    clips: tuple[str, ...] = ("top", "wrist"),
+) -> None:
+    """Join each clip of ``clips`` across ``folders``, in the order given, into one."""
     dest.mkdir(parents=True, exist_ok=True)
-    for camera in ("top", "wrist"):
+    for camera in clips:
         listing = dest / f"{prefix}-{camera}.txt"
         listing.write_text(
             "".join(f"file '{(folder / f'{camera}.mp4').resolve()}'\n" for folder in folders),

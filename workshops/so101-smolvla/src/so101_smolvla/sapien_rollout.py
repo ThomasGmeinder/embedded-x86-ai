@@ -8,6 +8,7 @@ import importlib.metadata
 import json
 import os
 import tempfile
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from so101_smolvla.sapien_config import (
     PICK_PLACE_TASKS,
     TASK_SPECS,
     TASK_TEXT,
+    THREE_CUBE_TASK,
     task_spec,
 )
 from so101_smolvla.sapien_stack_session import CommandTrace, StackCommandSession
@@ -123,7 +125,13 @@ def _atomic_episode(
     policy_observations: dict[str, np.ndarray],
     top: np.ndarray,
     wrist: np.ndarray,
+    feeds: Iterable[np.ndarray] | None = None,
 ) -> None:
+    """Write one episode's folder, complete or not at all.
+
+    ``feeds``, where a test has them, are the frames of a further clip
+    ``feeds.mp4`` (so101_smolvla.feeds_video).
+    """
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         raise FileExistsError(f"refusing to overwrite completed episode {destination}")
@@ -142,14 +150,17 @@ def _atomic_episode(
             np.concatenate((top, wrist), axis=2),
             temporary / "rollout.mp4",
         )
-        artifact_names = (
+        artifact_names = [
             "result.json",
             "trajectory.npz",
             "policy-observations.npz",
             "top.mp4",
             "wrist.mp4",
             "rollout.mp4",
-        )
+        ]
+        if feeds is not None:
+            _write_clip(feeds, temporary / "feeds.mp4")
+            artifact_names.append("feeds.mp4")
         completion = {
             "complete": True,
             "artifacts": {
@@ -665,14 +676,18 @@ def run_batch(
 
 
 def main(argv: list[str] | None = None) -> None:
+    # The three-cube runner builds on this module, so it is loaded from here.
+    from so101_smolvla import three_cube_rollout
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--count", type=int, default=1)
     parser.add_argument(
         "--steps",
         type=int,
         help=(
-            f"steps per bin episode (default {DEFAULT_STEPS}) or per stacking "
-            f"command (default {DEFAULT_STACK_STEPS})"
+            f"steps per bin episode (default {DEFAULT_STEPS}), per stacking "
+            f"command (default {DEFAULT_STACK_STEPS}) or per three-cube command "
+            f"(default {three_cube_rollout.DEFAULT_STEPS_PER_PICK})"
         ),
     )
     parser.add_argument("--environment-seed-base", type=int, default=0)
@@ -680,9 +695,66 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--backend", choices=("sapien",), default="sapien")
     parser.add_argument("--task", choices=tuple(TASK_SPECS), default="pick-place")
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--pictures",
+        choices=tuple(three_cube_rollout.PICTURE_MODES),
+        help=f"what SmolVLA is shown in the {THREE_CUBE_TASK} task",
+    )
+    parser.add_argument(
+        "--order",
+        help=(
+            f"the order of the cubes in the {THREE_CUBE_TASK} task, such as "
+            "green,red,blue; without it each layout draws its own"
+        ),
+    )
+    parser.add_argument(
+        "--outlines",
+        choices=tuple(three_cube_rollout.OUTLINE_SOURCES),
+        help=(
+            f"where the {THREE_CUBE_TASK} task takes the outlines from that the "
+            "pictures are edited by: the simulator (the default) or SAM 3, "
+            "asked for every picture SmolVLA plans on"
+        ),
+    )
     args = parser.parse_args(argv)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    if args.task in PICK_PLACE_TASKS:
+    if args.task != THREE_CUBE_TASK and (args.pictures or args.order or args.outlines):
+        parser.error(
+            f"--pictures, --order and --outlines belong to --task {THREE_CUBE_TASK}"
+        )
+    if args.task == THREE_CUBE_TASK:
+        if args.pictures is None:
+            parser.error(f"--task {THREE_CUBE_TASK} needs --pictures")
+        try:
+            order = (
+                None
+                if args.order is None
+                else three_cube_rollout.parse_order(args.order)
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        outlines = args.outlines or "simulator"
+        # A run with the simulator's outlines keeps the folder name it had.
+        source = "" if outlines == "simulator" else f"-{outlines}"
+        destination = args.output or (
+            VLA_TESTING
+            / f"{task_spec(args.task).output_label}-{args.pictures}{source}-{stamp}"
+        )
+        rows = three_cube_rollout.run_three_cube_batch(
+            args.count,
+            destination=destination,
+            pictures=args.pictures,
+            steps_per_pick=(
+                three_cube_rollout.DEFAULT_STEPS_PER_PICK
+                if args.steps is None
+                else args.steps
+            ),
+            environment_seed_base=args.environment_seed_base,
+            policy_seed_base=args.policy_seed_base,
+            order=order,
+            outlines=outlines,
+        )
+    elif args.task in PICK_PLACE_TASKS:
         destination = args.output or (
             VLA_TESTING / f"{task_spec(args.task).output_label}-{stamp}"
         )

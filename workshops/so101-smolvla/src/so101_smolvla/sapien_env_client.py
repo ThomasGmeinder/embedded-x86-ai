@@ -131,7 +131,13 @@ class SapienPolicyEnvironment:
         state = np.asarray(response.metadata["state"], dtype=np.float64)
         if state.shape != ACTION_SHAPE or not np.isfinite(state).all():
             raise RuntimeError(f"SAPIEN returned invalid state {state}")
-        return PolicyObservation(state=state, top=response.top, wrist=response.wrist)
+        return PolicyObservation(
+            state=state,
+            top=response.top,
+            wrist=response.wrist,
+            top_outline=response.top_outline,
+            wrist_outline=response.wrist_outline,
+        )
 
     def reset(
         self,
@@ -178,6 +184,19 @@ class SapienPolicyEnvironment:
         )
         self.facts = dict(response.metadata["facts"])
         return self.facts
+
+    def set_target(self, cube: str) -> dict[str, object]:
+        """Name the cube the next command moves; the scene's facts afterwards."""
+        response = self._request({"operation": "set_target", "cube": cube})
+        self.facts = dict(response.metadata["facts"])
+        return self.facts
+
+    def scene_without_cubes(self) -> tuple[np.ndarray, np.ndarray]:
+        """The top and wrist picture of the scene as it stands, cubes and robot not drawn."""
+        response = self._request({"operation": "scene_without_cubes"})
+        if response.top is None or response.wrist is None:
+            raise RuntimeError("SAPIEN worker sent no picture of the scene without cubes")
+        return response.top, response.wrist
 
     def close(self) -> None:
         if self._closed:

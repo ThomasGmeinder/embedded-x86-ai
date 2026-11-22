@@ -10,7 +10,7 @@ from so101_smolvla.reachable_workspace import (
     REACHABLE_HALF_EXTENT,
 )
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 SAPIEN_COMMIT = "239b38e076387b11d5c0b0da29487edcbde5f905"
 SAPIEN_SOURCE = Path("/tmp/Xbotics-SO101-Sim")
 SAPIEN_PYTHON = Path(__file__).resolve().parents[2] / ".venv-sapien" / "bin" / "python"
@@ -57,12 +57,30 @@ TASK_SPECS = {
         instruction="",
         output_label="random-stacking-color-sapien",
     ),
+    # Three 40 mm cubes (red, green, blue) and a larger bin. One cube is named
+    # per command; the sentence stays the trained one of the 40 mm bin task.
+    "pick-place-three-cubes": TaskSpec(
+        environment_id="SO101PickPlaceThreeCubes-v1",
+        instruction="Pick up a cube and place in the bin",
+        output_label="random-three-cubes-sapien",
+    ),
 }
 # Bin tasks of the pinned simulator; both draw objects from the central
 # reachable workspace.
 PICK_PLACE_TASKS = frozenset({"pick-place", "pick-place-cube20"})
+THREE_CUBE_TASK = "pick-place-three-cubes"
 TASK_ID = TASK_SPECS["pick-place"].environment_id
 TASK_TEXT = TASK_SPECS["pick-place"].instruction
+# What a pixel of an outline map shows. A scene that hands out outline maps
+# numbers its pixels with these; the picture editor reads them.
+OUTLINE_CODES = {
+    "other": 0,
+    "robot": 1,
+    "bin": 2,
+    "red": 3,
+    "green": 4,
+    "blue": 5,
+}
 IMAGE_HEIGHT = 480
 IMAGE_WIDTH = 640
 IMAGE_SHAPE = (IMAGE_HEIGHT, IMAGE_WIDTH, 3)

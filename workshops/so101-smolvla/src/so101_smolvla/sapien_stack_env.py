@@ -66,6 +66,17 @@ STACK_Z_TOLERANCE = 0.010
 STATIC_SPEED_TOLERANCE = 0.020
 
 
+def camera_projections(env, name: str) -> np.ndarray:
+    """Pixels from robot-base coordinates for one camera of a scene, per scene."""
+    camera = env._sensors[name].camera
+    return (
+        (camera.get_intrinsic_matrix() @ camera.get_extrinsic_matrix())
+        .cpu()
+        .numpy()
+        .astype(np.float64)
+    )
+
+
 def _real_state_to_sim_qpos(state: np.ndarray) -> np.ndarray:
     qpos = np.deg2rad(np.asarray(state, dtype=np.float64))
     qpos[-1] = grip_rad_from_pct(float(state[-1]))
@@ -206,14 +217,7 @@ class RecordingRigMixin:
         return obs
 
     def _camera_projections(self, name: str) -> np.ndarray:
-        """Pixels from robot-base coordinates for one camera, per scene."""
-        camera = self._sensors[name].camera
-        return (
-            (camera.get_intrinsic_matrix() @ camera.get_extrinsic_matrix())
-            .cpu()
-            .numpy()
-            .astype(np.float64)
-        )
+        return camera_projections(self, name)
 
     def _table_in_wrist_picture(self, rgb: torch.Tensor) -> torch.Tensor:
         """The recorded table as the wrist camera sees it from where it stands.

@@ -47,6 +47,10 @@ class PolicyObservation:
     state: np.ndarray
     top: np.ndarray
     wrist: np.ndarray
+    # What every pixel of the two pictures shows (sapien_config.OUTLINE_CODES),
+    # from a scene that hands out outline maps; otherwise absent.
+    top_outline: np.ndarray | None = None
+    wrist_outline: np.ndarray | None = None
 
 
 @dataclass(frozen=True)

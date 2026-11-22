@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 
 # The proven 10/10 SAPIEN pickup workspace from so101_sim.envs.ReachableSpawnMixin.
@@ -16,11 +18,15 @@ def draw_reachable_layout(
     clearances: np.ndarray,
     minimum_distance: float,
     candidate_count: int = 100,
+    also_valid: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> np.ndarray:
     """Draw the first valid layout from one finite seeded candidate batch.
 
     A layout is valid when every object's footprint is reachable and the
     centres of every two objects are at least the minimum distance apart.
+    ``also_valid`` adds a condition of the scene: it gets the candidate
+    layouts, shaped (candidates, objects, 2), and says for each whether it
+    may be used. The candidates drawn do not depend on it.
     """
     margins = np.asarray(clearances, dtype=np.float64)
     if margins.ndim != 1 or len(margins) < 1 or np.any(margins < 0.0):
@@ -44,6 +50,14 @@ def draw_reachable_layout(
     distances = np.linalg.norm(separation, axis=-1)
     distinct = ~np.eye(len(margins), dtype=bool)
     valid = np.all(distances[:, distinct] >= minimum_distance, axis=1)
+    if also_valid is not None:
+        allowed = np.asarray(also_valid(candidates))
+        if allowed.shape != valid.shape or allowed.dtype != bool:
+            raise ValueError(
+                f"the scene's condition returned {allowed.dtype} of shape "
+                f"{allowed.shape}, expected bool of shape {valid.shape}"
+            )
+        valid &= allowed
     if not np.any(valid):
         raise RuntimeError("reachable workspace produced no non-overlapping layout")
     return candidates[np.flatnonzero(valid)[0]]
