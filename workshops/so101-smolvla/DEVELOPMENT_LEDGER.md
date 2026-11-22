@@ -6350,3 +6350,77 @@ the spec has the design in section 4.7.
   a change to the audio request, 5.1); a run with `--spoken`; the
   stacking sentences as their own use case (decision 9); the earlier
   open items (D4, fewer actions per plan).
+
+<a id="d-2026-11-22-utilization-meters"></a>
+## 2026-11-22 — The utilization and power table: three rows from the kernel's files, a Qt Quick window of its own process
+
+Result in one line: a small always-on-top table (CPU, iGPU, NPU; utilization
+and power) now exists in this workshop, read from `/proc/stat`,
+`gpu_busy_percent` and the firmware's metrics file, drawn by a window
+program of its own process that a notebook, a shell or another program
+starts with `open_meters()` or `scripts/run_utilization_meters.sh`, and
+ends with `close_meters()` or the ×. Written after 20:40 by the Claude Code
+session that took the work over from Cursor at 20:15, on the plan
+`~/.cursor/plans/ryzen_ai_utilization_meters_3f9c21ab.plan.md`. Numbers
+in `TESTING_LEDGER.md` ([the section of this evening](TESTING_LEDGER.md#t-2026-11-22-utilization-meters)).
+
+<a id="d-2026-11-22-what-the-user-asked-for-and-4"></a>
+### What the user asked for and decided
+
+- "switch to the other session cursor was working on: the popup window
+  showing utilization and power for cpu, igpu, npu" (20:14).
+- Question form at 20:20: the item 10 windows "stayed on top, looked fine";
+  D7, "add the live NPU measurement" (the NPU test runs the voice
+  workshop's detector as its load); D12, "skip step 4 for now"; the
+  notebook cell goes into `voice_control_test.ipynb`. The user's question
+  with D7, whether an idle NPU shows idle: yes, 0 % in all eight columns
+  and 0.0 W, as item 1 measured at baseline.
+
+<a id="d-2026-11-22-what-was-built-3"></a>
+### What was built
+
+- `src/so101_smolvla/utilization.py`: the sampler, standard library only,
+  with the metrics structure written once beside its header name. A
+  missing or unknown source gives no value and a reason, never 0; a busy
+  value above 100 is refused with the reason. Its only state is the
+  previous `/proc/stat` reading. `--once --json` prints one reading.
+- `utilization_window.py` and `utilization_table.qml`: the window program.
+  One sampling clock in the event loop (500 ms); SIGTERM and SIGINT come
+  in as events over a wake-up socket; the renderer is chosen in one place
+  by the rule the plan fixed before the measurement (graphics renderer on
+  a local display, software renderer on a forwarded one); the "shown" line
+  carries the facts; `--report-after N` reads the cells back from the
+  scene for the tests. The scene is the approved mock-up with "n/a" for a
+  missing value and its reason while the mouse rests on the cell.
+- `utilization_meters.py`: `open_meters()`, `close_meters()` and the one
+  authority for "is it running", a lock file in the runtime directory held
+  with `flock` by the program and carrying its facts; `close_meters()`
+  waits for the exit through a process descriptor, from any process.
+- `scripts/run_utilization_meters.sh`, the dependency in `pyproject.toml`
+  with the scene as package data, the two notebook cells, the README
+  section with the three caveats (the rows do not sum to the chip, the
+  1 s filter, which program loads the graphics is not told).
+- Tests on the real sources and the real display, loads bracketed inside
+  the readings; thresholds in `tests/utilization_machines.py`.
+
+<a id="d-2026-11-22-what-it-means-3"></a>
+### What it means
+
+- The three gaps of the existing monitors are closed here: the NPU has a
+  real meter (per column), power is shown, and no program is started per
+  poll. The other workshops' monitors are not changed (D3).
+- The two renderers cost the same processor time; the graphics renderer's
+  own graphics time is 0.02 % of the interval, far under the 1 % the rule
+  allowed, so a meter that costs a whole percent of what it shows is ruled
+  out on this machine.
+- Not done: step 4 (the remote machine), on the user's word; a count with
+  the window open while the robot stack runs (M5 of the spec); the display
+  of a notebook kernel under Cursor's Remote SSH (item 11).
+
+<a id="d-2026-11-22-where-this-leaves-the-work-4"></a>
+### Where this leaves the work
+
+- Uncommitted when this was written: the five new source and script files,
+  the four test files and the recorded metrics file, the project file, the
+  notebook, the README and the two ledgers. The full suite runs after this
+  section; its count goes into the testing ledger.

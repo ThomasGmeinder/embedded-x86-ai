@@ -2724,3 +2724,109 @@ expectations were updated (an agent mistake, journaled in
 146.39 s**. So the suite stands at 201 passing, 1 expected failure and
 the one red spoken test; the notebook test is left out as before (the
 user's `llama-server` on port 8082).
+
+<a id="t-2026-11-22-utilization-meters"></a>
+### Addition, after 20:40: the utilization and power table (processor, graphics, NPU), step 0 completed and steps 1 to 3 built
+
+Written after 20:40. The plan is Cursor's
+`~/.cursor/plans/ryzen_ai_utilization_meters_3f9c21ab.plan.md` (revised
+14:49); its step 0 results up to 14:44 are in that file. What follows is
+what came after, by the Claude Code session that took the work over at
+20:15. All from `workshops/so101-smolvla`, Python of `.venv` with
+`PYTHONPATH=src`; the loads of the tests are the test's own.
+
+**Step 0, item 10, read from Cursor's logs** (`~/.cache/stack-memory-agent-test/logs/util-step0-item10-local-1795356026.log`,
+15:00:26 to 15:04:39, and `…-item10-remote-1795356384.log`, 15:06:24 to
+15:10:42; the plan file does not record them). The approved table, drawn
+with Qt Quick for 60 s per run at the top right of the HDMI monitor:
+
+| Run | Shown after | The window's own processor time in 60 s | Its own graphics time |
+|---|---:|---:|---:|
+| This machine, graphics-processor renderer (OpenGL) | 207 ms | 0.25 s (0.4 % of one processor) | 12.7 ms, 0.02 % of the interval |
+| This machine, software renderer | 142 ms | 0.22 s | not reported per process |
+| Remote machine through X11 forwarding, software renderer | 2,060 ms | 0.26 s | not reported |
+| Remote machine through X11 forwarding, OpenGL (software OpenGL there) | 3,166 ms | 1.55 s | not reported |
+
+133 frames in each 60 s run (the table updates twice per second). The
+user's eye check, asked at 20:20: "Stayed on top, looked fine". By the
+rule written in the plan before the run, decision D11 is settled: the
+graphics-processor renderer on a local display, the software renderer on
+a forwarded one.
+
+**Step 0, item 2, partial load**, tmux job `util-step0-gpu-partial-1795375489`,
+20:24:49 to 20:26:33, exit 0 (log and `-30.jsonl`, `-70.jsonl` beside it
+under `~/.cache/stack-memory-agent-test/logs/`; the load is
+`utilization-step0/partial_gpu_load.py`, a matrix multiplication on the
+ROCm device with a duty cycle of 0.2 s periods). `gpu_busy_percent`
+beside `radeontop`, 30 readings each:
+
+| Duty cycle | radeontop mean (min, max) | gpu_busy_percent mean (min, max) | metrics file gfx activity mean | largest difference per reading |
+|---:|---|---|---:|---:|
+| 30 % | 32.0 (26.7, 35.0) | 31.6 (30, 34) | 31.6 | 4.3 points |
+| 70 % | 69.9 (65.8, 73.3) | 70.5 (68, 72) | 70.5 | 5.3 points |
+
+Item 2 passes at partial load; with it step 0 is complete. Decisions by
+the user at 20:20: D7, the NPU test's load is the voice workshop's YOLO26s
+detector (the user's words: "add the live NPU measurement"); D12, step 4
+(the remote machine) is skipped for now; the notebook cell goes into
+`notebooks/voice_control_test.ipynb`.
+
+**Step 1, the sampler** (`src/so101_smolvla/utilization.py`), tests
+`tests/test_utilization.py` with the thresholds in one place,
+`tests/utilization_machines.py`. A recorded metrics file of this machine
+(`tests/data/gpu_metrics_v3_0_ryzen_ai_max_395.bin`, 20:30, idle) is the
+decoding test. Jobs `util-tests-1795376053` (20:34, 2 failed, 8 passed in
+17.12 s; the two failures were the test's load helper closing the load's
+input twice) and `util-tests-1795376098` (20:35, the two reran, 2 passed
+in 8.86 s): **10 of 10 pass**. Readings inside the loads (2.5 s after the
+load reported "running"):
+
+| Load | Reading inside the load | Floor |
+|---|---|---|
+| 4 busy processors | CPU 17.2 %, cores 42.3 W | 12.5 % |
+| 16 busy processors | CPU 51.8 %, cores 49.2 W | 50.0 % |
+| 32 busy processors | CPU 99.9 %, cores 49.2 W | 95 %; 18 W |
+| ROCm matrix multiplication (idle before: 2 %, 3.6 W) | iGPU 91 %, 21.5 W | 50 %; above the idle power |
+| YOLO26s on the NPU, 131 inferences (idle before: 0 % all columns, 0.0 W) | eight columns 74 %, 2.8 W | 30 %; 0.5 W |
+
+In every reading the three power rows summed to no more than the whole
+chip. Worth a line: the cores drew 49 W at full load with the graphics
+idle, where step 0 measured 24 W with the SAM 3 rollout on the graphics at
+the same time (the chip's budget moves between the two, as the plan
+noted); the 18 W floor holds in both cases.
+
+**Step 2, the window** (`utilization_window.py`, `utilization_table.qml`,
+`utilization_meters.py`, `scripts/run_utilization_meters.sh`; the
+dependency `PySide6-Essentials` 6.12.0 installed into `.venv` and named in
+`pyproject.toml`). Job `meters-tests-1795376416` (20:40, 1 failed, 8
+passed in 4.64 s; the failure was the test's own offscreen check missing
+an import), then the one test rerun (passed): **9 of 9 pass**, on the
+real display `:0`: the window is viewable, outside the window manager
+(override-redirect), 32 bits deep, and the keyboard focus is the same
+before and after; a second `open_meters()` returns the running one; a
+`close_meters()` from another process ends it and frees the lock;
+without `DISPLAY` `open_meters()` raises "no DISPLAY" and leaves no
+process; a drag of 60 by 30 pixels moves the window by exactly that; a
+click on the × ends the program with status 0; under 16 busy processors
+the CPU cell read at or above 50 % after five readings, the caption holds
+this machine's name and the NPU row has eight segments; the scene alone
+shows "n/a" for a missing value and the numbers for the rest. A first run
+by hand at 20:38: shown 1.8 s after the start, renderer OpenGL, report
+after three readings `CPU 4 %, 3.3 W; iGPU 2 %, 3.5 W; NPU 0 %, 0.0 W`.
+
+**Step 3**: section 9 of the voice notebook (two cells), the README
+section "Utilization and power table", this entry. The two cells were
+run in the real notebook kernel from the notebooks directory at 20:43 (a
+short notebook of those cells through nbconvert): "table shown on display
+:0 of xdetgmeinde-lx01 (renderer OpenGL)", then "table closed"; the lock
+was free afterwards.
+
+**The full suite**, tmux job `test-suite-1795376642`, 20:44:02 to 20:50:57, exit 1,
+log `/tmp/test-suite-1795376642.log`, the command of this afternoon with
+`--ignore=tests/test_voice_notebook.py`: **1 failed, 220 passed, 1
+expected failure in 414.23 s**. The one failure is the spoken Gemma test,
+red on the user's word (the section of 19:05). So the 19 tests of the
+meters joined the 201 of 19:19. One warning of the run was the test's own:
+the busy processors were forked from a process with torch's threads; they
+start as fresh interpreters now, and the processor tests reran clean with
+warnings as errors.
