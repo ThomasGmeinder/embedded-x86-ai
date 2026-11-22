@@ -71,6 +71,19 @@ flowchart TD
 | 4. Hide the other cubes | The chosen cube and SAM 3's outlines | The two cubes the command does not name are painted over with the empty table and bin, in the top and the wrist picture. | `src/so101_smolvla/picture_editor.py` |
 | 5. Move the arm | The edited pictures and the trained sentence | SmolVLA predicts 50 joint targets per plan, 400 steps per command. The simulator's rule decides when the cube counts as placed. | SmolVLA `Harrysunshine/so101-smolvla-sim-real-10task`, SAPIEN twin |
 
+### Automated testing
+
+Video of the first layout of the run commanded by typed sentences
+(`vla_testing/random-three-cubes-sapien-others-painted-sam3-gemma-typed-20261122-184944`,
+seed 0: "pick up the blue cube and put it in the box", "put the red cube in
+the bin", "grab the green one and drop it in the box", all three placed):
+[media/three-cubes-gemma-typed/seed-00000-feeds.mp4](media/three-cubes-gemma-typed/seed-00000-feeds.mp4).
+Each row is one camera, top and wrist, with three pictures: the scene as the
+camera takes it at every step; the outlines SAM 3 gave when SmolVLA last
+planned, tinted by what was done with each (target, painted over, not used);
+and the picture SmolVLA was given. The caption carries Gemma's call for the
+current command.
+
 Measured on ten random layouts (three commands each, `TESTING_LEDGER.md`,
 [the fast SAM 3 run](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-run) and
 [the run commanded by sentences](TESTING_LEDGER.md#t-2026-11-22-gemma-commands)):
