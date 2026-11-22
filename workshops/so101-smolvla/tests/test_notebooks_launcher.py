@@ -1,7 +1,8 @@
 """notebooks/run_notebooks.sh: the kernel it registers and the Jupyter server it starts.
 
 The tests run the launcher itself, with JUPYTER_DATA_DIR in a temporary directory, so the user's own kernels are
-not touched. They need the voice workshop's Python (workshops/vvla-pipeline/.venv), as the launcher does.
+not touched. They need ipykernel and JupyterLab in the workshop's .venv (scripts/setup_voice.sh), as the launcher
+does.
 """
 import json
 import os
@@ -15,42 +16,39 @@ from pathlib import Path
 WORKSHOP = Path(__file__).resolve().parents[1]
 NOTEBOOKS = WORKSHOP / "notebooks"
 LAUNCHER = NOTEBOOKS / "run_notebooks.sh"
-VOICE_WORKSHOP = WORKSHOP.parent / "vvla-pipeline"
+VENV = WORKSHOP / ".venv"
 KERNEL = "so101-smolvla-notebooks"
-# What a kernel is asked: which Python it is, one variable of scripts/ryzen_ai_env.sh, and where it started.
+# What a kernel is asked: which Python it is, whether it carries the server's graphics override (it must not:
+# that variable is the llama-server process's alone), whether the package imports, and where it started.
 PROBE = ("import json, os, sys\n"
+         "import so101_smolvla.voice.settings\n"
          "print(json.dumps({'prefix': sys.prefix, 'gfx': os.environ.get('HSA_OVERRIDE_GFX_VERSION'), "
          "'cwd': os.getcwd()}))\n")
 
 
 def _environment(tmp_path) -> dict:
-    """The caller's environment without the workshop's variable, and with Jupyter's data and settings in tmp_path."""
+    """The caller's environment without the server's variable, and with Jupyter's data and settings in tmp_path."""
     env = dict(os.environ, JUPYTER_DATA_DIR=str(tmp_path / "jupyter"), JUPYTER_CONFIG_DIR=str(tmp_path / "config"))
-    env.pop("HSA_OVERRIDE_GFX_VERSION", None)  # the kernel has to set it itself
+    env.pop("HSA_OVERRIDE_GFX_VERSION", None)
     return env
 
 
-def test_kernel_starts_in_the_voice_workshop_environment(tmp_path):
+def test_kernel_starts_in_the_workshops_environment_with_its_package(tmp_path):
     env = _environment(tmp_path)
     subprocess.run([str(LAUNCHER), "--kernel-only"], env=env, check=True, timeout=120)
     spec = json.loads((tmp_path / "jupyter" / "kernels" / KERNEL / "kernel.json").read_text(encoding="utf-8"))
     assert spec["language"] == "python"
-
-    # The value the workshop's own scripts give, not a number typed here.
-    expected = subprocess.run(
-        ["bash", "-c", 'source "$1/.venv/bin/activate" && source "$1/scripts/ryzen_ai_env.sh" >&2 && '
-                       'printf %s "$HSA_OVERRIDE_GFX_VERSION"', "probe", str(VOICE_WORKSHOP)],
-        env=env, check=True, capture_output=True, text=True, timeout=120).stdout
-    assert expected
+    assert Path(spec["argv"][0]).resolve() == (VENV / "bin" / "python").resolve()
+    assert Path(spec["env"]["PYTHONPATH"]).resolve() == (WORKSHOP / "src").resolve()
 
     probe = tmp_path / "probe.py"
     probe.write_text(PROBE, encoding="utf-8")
     # "jupyter run" starts the kernel from its registered start command, as a notebook front end does.
-    ran = subprocess.run([str(VOICE_WORKSHOP / ".venv" / "bin" / "jupyter"), "run", "--kernel", KERNEL, str(probe)],
+    ran = subprocess.run([str(VENV / "bin" / "jupyter"), "run", "--kernel", KERNEL, str(probe)],
                          env=env, cwd=tmp_path, check=True, capture_output=True, text=True, timeout=120)
     got = json.loads(ran.stdout.strip().splitlines()[-1])
-    assert Path(got["prefix"]).resolve() == (VOICE_WORKSHOP / ".venv").resolve()
-    assert got["gfx"] == expected
+    assert Path(got["prefix"]).resolve() == VENV.resolve()
+    assert got["gfx"] is None
     assert Path(got["cwd"]).resolve() == tmp_path.resolve()  # the start command does not change directory
 
 

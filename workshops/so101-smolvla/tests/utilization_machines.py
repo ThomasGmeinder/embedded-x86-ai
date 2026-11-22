@@ -10,9 +10,6 @@ import socket
 from pathlib import Path
 
 WORKSHOP = Path(__file__).resolve().parents[1]
-# The voice workshop beside this one: its Python environment carries the NPU runtime (Vitis AI
-# execution provider) and the YOLO26s detector that the NPU test runs as its load.
-VOICE_WORKSHOP = WORKSHOP.parent / "vvla-pipeline"
 
 MACHINES = {
     "xdetgmeinde-lx01": {
@@ -28,7 +25,9 @@ MACHINES = {
         # matrix-multiplication loop without pause must read at least this.
         "gpu_busy_full_load_percent": 50.0,
         # YOLO26s on the NPU: columns 32, 58, 77 to 78 % while the load ran, power 1.24 W mean
-        # (step 0, item 1).
+        # (step 0, item 1). Measured once by hand. The automated NPU load test was removed on
+        # 2026-11-22 with the NPU runtime it borrowed from outside this workshop; no test reads
+        # these two until this workshop has an NPU load of its own.
         "npu_columns_mean_under_load_percent": 30.0,
         "npu_power_under_load_w": 0.5,
     },

@@ -1,0 +1,50 @@
+{
+  "_about": "The Gemma 4 voice path: one source for scripts/setup_voice.sh (shell) and so101_smolvla.voice.settings (Python). Paths are relative to the workshop. Models are never stored in the workshop: the Gemma files live in the Hugging Face cache, the Silero model inside the silero-vad package.",
+  "llama_cpp": {
+    "repository": "https://github.com/ggml-org/llama.cpp.git",
+    "commit": "781dbc5ac98921dbdb5e5b2ec5b7a50960e937d4",
+    "checkout": "third_party/llama.cpp",
+    "server_bin": "third_party/llama.cpp/build/bin/llama-server",
+    "gfx_target": "gfx1100",
+    "_gfx_target": "The HIP kernels for the native gfx1150/gfx1151 crash on this machine's integrated graphics; built for gfx1100, presented as such through hsa_override_gfx_version below, they run."
+  },
+  "gemma": {
+    "repo": "ggml-org/gemma-4-E4B-it-GGUF",
+    "model_file": "gemma-4-E4B-it-Q4_0.gguf",
+    "mmproj_file": "mmproj-gemma-4-E4B-it-Q8_0.gguf"
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8082,
+    "runner_port": 8083,
+    "_ports": "port is the notebook's and the default; runner_port is where the three-cube runner and the tests start their own server, so a server the user runs on the default port is left alone.",
+    "n_gpu_layers": 99,
+    "ctx_size": 4096,
+    "parallel": 2,
+    "temperature": 0.0,
+    "no_warmup": true,
+    "hsa_override_gfx_version": "11.0.0",
+    "_hsa_override_gfx_version": "Set in the environment of the llama-server process only, never in the caller's: SmolVLA's PyTorch runs natively on gfx1151 and must not see it.",
+    "ready_timeout_s": 120,
+    "request_timeout_s": 30,
+    "max_tokens": 96
+  },
+  "listening": {
+    "sample_rate": 16000,
+    "mic_device": null,
+    "window_s": 6,
+    "hop_s": 2,
+    "min_dbfs": -35,
+    "vad_threshold": 0.5,
+    "min_voice_ms": 100,
+    "cooldown_s": 5,
+    "max_age_s": 10
+  },
+  "synthetic_voice": {
+    "library": "libespeak-ng.so.1",
+    "voice": "en-us",
+    "words_per_minute": 150,
+    "peak": 0.5,
+    "lead_s": 0.5
+  }
+}

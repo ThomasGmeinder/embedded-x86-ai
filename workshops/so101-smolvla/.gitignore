@@ -14,3 +14,6 @@ vla_testing/*
 # Jupyter's autosave copies, and the log of the Gemma server the voice notebook starts.
 .ipynb_checkpoints/
 notebooks/logs/
+# llama.cpp, cloned and built by scripts/setup_voice.sh. Models are never here: the
+# Gemma files live in the Hugging Face cache, the Silero model in the silero-vad package.
+third_party/

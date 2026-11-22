@@ -9,7 +9,7 @@ draws an output again that it already shows.
 
     python notebook_display_updates.py KERNEL NOTEBOOK EXECUTED.ipynb REDRAWS.json
 
-Run it with a Python that has nbconvert (the voice workshop's), in the directory the kernel is to start in.
+Run it with a Python that has nbconvert (the workshop's .venv), in the directory the kernel is to start in.
 REDRAWS.json is a list, in the order sent, of {"cell": position of the cell in the notebook, "data": what the
 output shows from then on}.
 """

@@ -2899,3 +2899,35 @@ simulator. SAM 3's median call stayed at 0.26 to 0.32 s. One run each;
 the spread between layouts of the 17:12 run was 92 to 128 s, so the 12 s
 gain is within that spread and needs more layouts to be claimed as a
 gain; the drop in processor load does not.
+
+<a id="t-2026-11-22-voice-standalone"></a>
+## 2026-11-22 — The voice path on its own: the setup script's build and download, the unit tests, the real Gemma, one layout end to end, the full suite
+
+What was tested: the Gemma voice path after its move into
+`src/so101_smolvla/voice/` and the workshop's own `.venv`
+(`DEVELOPMENT_LEDGER.md`, [the entry of this night](DEVELOPMENT_LEDGER.md#d-2026-11-22-voice-standalone-what-the-user-asked-for)),
+with no file of `workshops/vvla-pipeline` in play. Every long job ran in
+a tmux session of its own with an exit file and a completion event.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `voice-setup-221529` | 22:15:29 to 22:2x, exit 2 | `scripts/setup_voice.sh` | Step 1 installed 79 packages into `.venv` (Torch 2.14.0+rocm10.1.0 and numpy 2.2.6 untouched, checked). Step 2 failed in llama.cpp's web-page target: the prebuilt page for build tag b11548 is gone from the Hugging Face bucket and the "latest" page fails the commit's own file check (`scripts/ui-assets.cmake:137`). Fix: build with `-DLLAMA_USE_PREBUILT_UI=OFF -DLLAMA_BUILD_UI=OFF`; the server embeds an empty page table. |
+| `voice-setup-222302` | 22:23:02 to 22:39:26, exit 0 | the same | `llama-server` built at 22:24:59 (2 min, 32 processors, 236 MB build tree), `--version`: "version: 0.6.0-dev (build 11548, commit 781dbc5ac)". The two Gemma files downloaded into `~/.cache/huggingface/hub/models--ggml-org--gemma-4-E4B-it-GGUF` (4.8 GB on disk) by 22:39:26, 14.5 min. `--check` afterwards: everything present; `voice_ready()` is `(True, "ready")`. |
+| unit tests, foreground | 22:3x, 32.0 s | `pytest tests/test_voice_commands.py tests/test_notebooks_launcher.py tests/test_cube_commands.py tests/test_three_cube_rollout.py tests/test_utilization.py` (`/tmp/so101-voice-unit-1.log`) | **48 passed.** The new voice tests (8), the launcher in `.venv` with the package importable and the override absent (3), and the runner's tests with the voice stand-in. |
+| `gemma-tests-224028` | 22:40:28 to 22:43, exit 1, 156.93 s | `pytest tests/test_gemma_cube_commands_integration.py tests/test_gemma_three_cubes_integration.py -rA -s` | 2 passed, 2 failed. **Typed: 37 of 37** as they should be (seconds per request min 0.62, median 0.90, max 1.53). **Synthetic voice: 34 of 37**; the spoken test red on the user's word (the question and the negation gave the red cube, as on 19:05). The real layout through Gemma, SAM 3 and the scene with the arm held: passed. The provenance test failed on the test's own parse of `llama-server --version` (it read the last line, "built with GNU 13.3.0", not the first, which names the commit); `AGENT_MISTAKES.md`, entry of this night. |
+| provenance test rerun, foreground | 22:4x, 9.52 s | `pytest tests/test_gemma_cube_commands_integration.py::test_the_voice_reports_the_server_it_started_and_the_client_it_is` | passed: base `:8083`, two slots, context 4,096, server commit `781dbc5ac` from the binary itself, override `11.0.0` recorded as the server's setting and absent from the test process. |
+| `three-cubes-e2e-224528` | 22:45:29 to 22:48:04, exit 0 | `scripts/run_sapien_rollout.sh --task pick-place-three-cubes --pictures others-painted --outlines sam3 --sentences built-in --count 1` | `vla_testing/random-three-cubes-sapien-others-painted-sam3-gemma-typed-20261122-224529`: **succeeded 1 of 1**; layout 0 (seed 0) placed blue in 189, red in 180, green in 212 steps, the three sentences read as `pick_place` of blue cube, red cube, green one. **Identical** to layout 0 of the run of 18:49 through the copied client in every sentence row (sentence, how, heard, call, cube) and in the result row; only the seconds per request differ (1.43, 0.87, 0.92 against 2.29, 0.81, 0.86). `summary.json` carries the server's commit and settings; the server's log is in the batch folder. |
+| `test-suite-224901` | 22:49:01 to 22:56:09, exit 1 | `pytest tests -v --tb=short -rA --ignore=tests/test_voice_notebook.py` (`/tmp/test-suite-224901.log`) | **1 failed, 223 passed, 1 expected failure in 425.98 s.** The one failure is the spoken Gemma test, red on the user's word. Against the suite of 20:44 (220 passed): the eight voice tests replace four, the NPU load test is gone, the provenance and launcher tests changed with the path. |
+
+Measured beside the tests: in a process of `.venv` with
+`HSA_OVERRIDE_GFX_VERSION=11.0.0`, Torch reports the device but a kernel on
+it fails ("Device-side assertion tracking was not enabled by user", no
+result); without the variable the device is "AMD Radeon 8060S Graphics"
+and the kernel runs. The override therefore stays in the server process's
+environment alone (`GemmaServer.start`).
+
+Not run: `tests/test_voice_notebook.py`. It requires that nothing answers
+on the default port 8082, and the user's own `llama-server` of the other
+workshop's notebook session (pid 3037368) holds it; stopping it is the
+user's call. The notebook's kernel and launcher are covered by the
+launcher tests above; the notebook itself waits for the port.

@@ -15,16 +15,27 @@ dependencies = [
   # The utilization and power table (so101_smolvla.utilization_window): Qt 6 through the official
   # Python binding; the sampler and open_meters() stay standard library.
   "PySide6-Essentials>=6.12",
+  # The Gemma 4 voice path (so101_smolvla.voice): the server's HTTP client, the synthetic
+  # voice's resampling, the microphone, Silero speech detection on the CPU and its model
+  # (shipped by its official package), the Gemma files from the Hugging Face cache.
+  "requests",
+  "scipy",
+  "sounddevice",
+  "onnxruntime",
+  "silero-vad==6.2.3",
+  "huggingface_hub",
 ]
 
 [project.optional-dependencies]
 test = ["pytest"]
+# The notebooks' kernel and JupyterLab (notebooks/run_notebooks.sh), and the notebook test.
+notebooks = ["ipykernel", "jupyterlab", "nbconvert"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-so101_smolvla = ["*.qml"]
+so101_smolvla = ["*.qml", "voice/*.gbnf"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

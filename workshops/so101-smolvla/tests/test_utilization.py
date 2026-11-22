@@ -29,7 +29,7 @@ from so101_smolvla.utilization import (
     find_amdgpu_device,
     read_cpu_times,
 )
-from utilization_machines import VOICE_WORKSHOP, WORKSHOP, this_machine
+from utilization_machines import WORKSHOP, this_machine
 
 DATA = Path(__file__).with_name("data")
 RECORDED = DATA / "gpu_metrics_v3_0_ryzen_ai_max_395.bin"
@@ -222,30 +222,6 @@ def test_graphics_utilization_and_power_rise_inside_a_rocm_load():
     print(f"idle: {idle.gpu_percent} %, {idle.gpu_power_w} W; inside the load: {inside.gpu_percent} %, {inside.gpu_power_w} W; {out.strip()}")
     assert inside.gpu_percent >= MACHINE["gpu_busy_full_load_percent"]
     assert inside.gpu_power_w > idle.gpu_power_w
-    _no_power_sums_above_the_chip(inside)
-
-
-@live
-def test_npu_columns_and_power_rise_inside_an_npu_load_and_are_zero_before_it():
-    activate = VOICE_WORKSHOP / "activate_venv.sh"
-    assert activate.is_file(), f"the voice workshop's {activate} is missing on a machine that has the NPU"
-    sampler = Sampler()
-    time.sleep(0.5)
-    idle = sampler.sample()
-    assert idle.npu_columns == (0.0,) * NPU_COLUMNS and idle.npu_power_w == 0.0, "the NPU is busy before the test's own load"
-    command = [
-        "bash", "-c",
-        f"cd {VOICE_WORKSHOP} && source ./activate_venv.sh >/dev/null && exec python -u {Path(__file__).with_name('npu_load.py')}",
-    ]
-    load = LoadProcess(command)
-    try:
-        _, inside = _two_readings(sampler)
-    finally:
-        out = load.stop()
-    print(f"inside the NPU load: columns {inside.npu_columns}, mean {inside.npu_percent:.1f} %, {inside.npu_power_w} W; {out.strip()}")
-    assert all(0.0 <= value <= 100.0 for value in inside.npu_columns)
-    assert inside.npu_percent >= MACHINE["npu_columns_mean_under_load_percent"]
-    assert inside.npu_power_w >= MACHINE["npu_power_under_load_w"]
     _no_power_sums_above_the_chip(inside)
 
 

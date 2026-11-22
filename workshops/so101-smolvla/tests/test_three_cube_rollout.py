@@ -756,7 +756,7 @@ class StandInVoice:
         self.asked: list[tuple[str, bool]] = []
 
     def ask(self, sentence: str, spoken: bool = False):
-        from so101_smolvla.voice_commands import CommandFields
+        from so101_smolvla.voice.commands import CommandFields
 
         self.asked.append((sentence, spoken))
         command, obj, place = self.FIELDS[sentence]
@@ -847,7 +847,7 @@ def test_sentences_need_the_voice_and_exclude_an_order_and_all_refused_is_a_faul
     with pytest.raises(ValueError, match="colours or as sentences, not both"):
         _run(tmp_path, monkeypatch, "unedited", order=("red", "green", "blue"),
              sentences=[{"say": "grab the blue one", "cube": "blue"}], voice=StandInVoice())
-    with pytest.raises(ValueError, match="need the voice worker"):
+    with pytest.raises(ValueError, match="need the voice"):
         _run(tmp_path, monkeypatch, "unedited", sentences=[{"say": "grab the blue one", "cube": "blue"}])
     with pytest.raises(RuntimeError, match="every command was refused"):
         _run(tmp_path, monkeypatch, "unedited",

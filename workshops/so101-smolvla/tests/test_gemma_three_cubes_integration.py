@@ -1,7 +1,8 @@
 """One real layout commanded by sentences: Gemma 4, the real SAM 3 and the real scene, the arm held.
 
-Needs the voice workshop (Gemma), the SAM 3 reference's environment and model
-files, and the SAPIEN backend; skipped while one is not set up.
+Needs the voice path (llama-server and the Gemma files, scripts/setup_voice.sh),
+the SAM 3 reference's environment and model files, and the SAPIEN backend;
+skipped while one is not set up.
 """
 
 from __future__ import annotations
@@ -19,14 +20,14 @@ from so101_smolvla.cube_commands import TEMPLATES, call_text
 from so101_smolvla.sam3_outlines import CAMERAS
 from so101_smolvla.sapien_config import SAPIEN_PYTHON, SAPIEN_SOURCE, THREE_CUBE_TASK
 from so101_smolvla.three_cube_rollout import COMMANDS_FROM, OUTLINE_SOURCES, draw_order
-from so101_smolvla.voice_commands import voice_workshop_ready
+from so101_smolvla.voice.commands import voice_ready
 
 WORKSHOP = Path(__file__).resolve().parents[1]
 SETTINGS = json.loads((WORKSHOP / "configs" / "sam3_reference.json").read_text())
 SAM3_READY = (WORKSHOP / ".venv-sam3" / "bin" / "python").is_file() and (
     Path(os.path.expanduser(SETTINGS["compiled_dir"])) / "ARTIFACT_MANIFEST.json"
 ).is_file()
-VOICE_READY, VOICE_REASON = voice_workshop_ready()
+VOICE_READY, VOICE_REASON = voice_ready()
 
 pytestmark = [
     pytest.mark.skipif(
@@ -37,7 +38,7 @@ pytestmark = [
         not SAM3_READY,
         reason="run scripts/setup_sam3_env.sh and build the reference's model files",
     ),
-    pytest.mark.skipif(not VOICE_READY, reason=f"voice workshop: {VOICE_REASON}"),
+    pytest.mark.skipif(not VOICE_READY, reason=f"voice: {VOICE_REASON}"),
 ]
 
 

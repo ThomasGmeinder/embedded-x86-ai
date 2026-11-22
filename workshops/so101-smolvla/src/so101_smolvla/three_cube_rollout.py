@@ -3,8 +3,9 @@
 Every command names one cube: ``pick_place(object: green cube, place: box)``.
 The commands come either as colours (the user's order, or a draw from the
 layout's seed) or as sentences a user types or says, which Gemma 4 turns into
-the voice client's fields (voice_commands) and cube_commands.choose_cube reads
-for the cube; a sentence that names no one cube is refused and moves nothing.
+the fields of the voice client (so101_smolvla.voice) and
+cube_commands.choose_cube reads for the cube; a sentence that names no one
+cube is refused and moves nothing.
 SmolVLA is given its trained sentence and, depending on the picture mode, the
 pictures as they are or with the cubes the command does not name painted over.
 """
@@ -33,7 +34,7 @@ from so101_smolvla.sapien_rollout import (
     _package_versions,
 )
 from so101_smolvla.track import CHECKPOINT, JOINT_NAMES, trajectory_metrics
-from so101_smolvla.voice_commands import VoiceCommands
+from so101_smolvla.voice.commands import VoiceCommands
 
 # Steps for one command: the episode length the simulator registers for its
 # bin scenes (so101_sim/envs.py:902). A command runs all of them, so the arm
@@ -177,7 +178,7 @@ def run_three_cube_episode(
     if sentences is not None and order is not None:
         raise ValueError("a layout takes its commands as colours or as sentences, not both")
     if sentences is not None and voice is None:
-        raise ValueError("sentences need the voice worker that asks Gemma")
+        raise ValueError("sentences need the voice that asks Gemma")
     torch.manual_seed(policy_seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(policy_seed)
@@ -649,8 +650,8 @@ def run_three_cube_batch(
     spoken: bool = False,
 ) -> list[dict]:
     """``sentences``: per layout the sentences of its commands (cube_commands);
-    then Gemma runs in its worker for the batch, with its server's log in the
-    batch's folder."""
+    then Gemma runs on a server of its own for the batch, with the server's
+    log in the batch's folder."""
     if count < 1:
         raise ValueError(f"count must be positive, got {count}")
     if steps_per_pick < 1:

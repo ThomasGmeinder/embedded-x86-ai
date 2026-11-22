@@ -2,7 +2,7 @@
 
 The three-cube test (three_cube_rollout) can take its commands as sentences a
 user types or says. Gemma 4 turns a sentence into the voice client's fields
-``command``, ``object``, ``place`` and ``heard`` (voice_commands). This module
+``command``, ``object``, ``place`` and ``heard`` (so101_smolvla.voice.commands). This module
 is the one place that reads those fields for the three-cube scene: the cube is
 the one colour of the scene's three that the object names. It decides from
 ``command`` and ``object`` only. The place is recorded with the command and
@@ -36,8 +36,8 @@ OTHER_COLOURS = frozenset(
 # Ten ways to ask for one cube, with the colour left open: the verbs pick up,
 # put, grab, place, move, take; the place as box, bin, container or not named;
 # and a filler word or two. None is among the examples in the instructions to
-# the model (voice/vla_pipeline/llm/intents.py) or in the voice notebook's
-# table (voice/notebook_tools.py).
+# the model (so101_smolvla/voice/intents.py) or in the voice notebook's
+# table (so101_smolvla/voice/examples.py).
 TEMPLATES = (
     "pick up the {colour} cube and put it in the box",
     "put the {colour} cube in the bin",

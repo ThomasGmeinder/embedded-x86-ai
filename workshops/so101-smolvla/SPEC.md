@@ -69,9 +69,9 @@ Terms used throughout:
 - **VLA (vision-language-action model):** one neural network that takes
   camera pictures and a sentence and gives robot commands. Here it is the
   SmolVLA checkpoint `Harrysunshine/so101-smolvla-sim-real-10task`.
-- **Gemma 4 E4B:** the language model that the voice control of
-  `workshops/vvla-pipeline` already runs on this machine's integrated
-  graphics, through the program `llama-server`.
+- **Gemma 4 E4B:** the language model, run on this machine's integrated
+  graphics through the program `llama-server` of llama.cpp, which
+  `scripts/setup_voice.sh` builds under `third_party/`.
 - **SAM 3 (Segment Anything Model 3):** a model that outlines every
   object named by a text phrase in a picture and follows each outline
   through a stream of pictures.
@@ -104,7 +104,8 @@ Terms used throughout:
 - It is built in `workshops/so101-smolvla`; the Gemma server client is
   taken over from the Gemma branch, as a copy of its files in `voice/`
   (the user's answer to the question form on the commit plan; section
-  5.1, "Where the client is").
+  5.1, "Where the client is"). Until 2026-11-22: see the last bullet of
+  this section.
 - Task 3 has two commands, "learn the stack" and "rebuild the stack".
   They can be spoken, or sent to Gemma 4 as text. The marker is parked
   (15:43).
@@ -137,9 +138,21 @@ Terms used throughout:
   the new commands `learn_stack` and `rebuild_stack` as for the others
   (15:57). Section 5.1 says how.
 - The Gemma server may run with two slots and a context of 4,096
-  (15:03). Not set in the client's `voice/config/pipeline.yaml`, which
-  keeps the branch's one slot and 2,048 (lines 26 and 22); the notebook
-  of section 4.6 passes the two values when it starts the server.
+  (15:03). Until 2026-11-22 not set in the client's copied
+  `config/pipeline.yaml`, which kept the branch's one slot and 2,048;
+  the notebook passed the two values when it started the server. Since
+  then they are the settings in `configs/voice.json`.
+- 2026-11-22, late evening (the user: "I do not want a dependency on
+  vvla-pipeline"; models go to global caches): the workshop stands on
+  its own. The client is this workshop's package
+  `src/so101_smolvla/voice/`, run in `.venv`; `llama-server` is built by
+  `scripts/setup_voice.sh` under `third_party/` (not in git); the two
+  Gemma files live in the Hugging Face cache, the Silero model in its
+  package `silero-vad`; no model file is in the workshop. The live
+  microphone path stays; the utilization meters' NPU load test, which
+  borrowed the other workshop's NPU runtime, goes. The rule of 16:01
+  holds for what the model sees and hears (section 5.1); where the code
+  lives and how it is run is this workshop's.
 
 <a id="s-3-the-principle"></a>
 ## 3. The principle
@@ -325,12 +338,13 @@ object and place all as expected.
 ### 4.6 The voice test notebook and its automated test
 
 `notebooks/voice_control_test.ipynb` shows, for a typed or spoken
-sentence, the transcript and the call (`you:` and `->`), through the
-client in `voice/` with the form of way 1. Its table has 30 sentences:
+sentence, the transcript and the call (`you:` and `->`), through this
+workshop's client (`so101_smolvla.voice`, since 2026-11-22; before, the
+copy in `voice/`) with the form of way 1. Its table has 30 sentences:
 the 21 of section 4.5 and 9 more from the branch's own list
-(`_SELFTEST_CASES` in `voice/vla_pipeline/llm/llama_intent.py`). Its
-sections 6 and 7 are for a person at the microphone: one recorded clip,
-and the branch's live voice session.
+(`CLIENT_CASES` in `so101_smolvla/voice/examples.py`). Its sections 6
+and 7 are for a person at the microphone: one recorded clip, and the
+live voice session (`microphone.py`).
 
 `tests/test_voice_notebook.py` runs the notebook through its Jupyter
 kernel against the real server (two slots, context 4,096) and leaves
@@ -377,12 +391,13 @@ names exactly one of red, green and blue, and no other kind of thing,
 is that cube; anything else is refused with its reason and moves
 nothing. The `place` field is recorded and not judged (section 6: a
 pick ends in the bin; a cube named as the place is the stacking case,
-decision 9, tested on its own on the user's word). The client runs in
-the voice workshop's environment as a worker process
-(`voice_worker.py` through `scripts/run_voice_env.sh`, the same
-launcher the notebooks' kernel now starts with) and starts its own
-Gemma server on port 8083, so a server the user runs on the client's
-port 8082 is left alone. The runner's switches are `--sentences
+decision 9, tested on its own on the user's word). The client
+(`so101_smolvla.voice.commands.VoiceCommands`) runs in the main process
+and starts its own Gemma server on the runner's port of
+`configs/voice.json` (8083), so a server the user runs on the default
+port (8082, the notebook's) is left alone; until 2026-11-22 it ran as a
+worker process in the other workshop's environment. The runner's
+switches are `--sentences
 built-in` (ten phrasings per colour, section of `cube_commands.py`) or
 a file of sentences, and `--spoken`.
 
@@ -448,14 +463,43 @@ flowchart LR
   used from the set-up voice workshop `workshops/vvla-pipeline` on the
   same machine: its Python environment, `llama-server`, the two model
   files and the speech-detection model
-  (`voice/notebook_tools.py:38-40` and `:85-93`).
+  (`voice/notebook_tools.py:38-40` and `:85-93`). That was the state
+  until 2026-11-22.
+- Where the client is since 2026-11-22 (the user: no dependency on
+  `vvla-pipeline`; large models in global caches): the package
+  `src/so101_smolvla/voice/`, run in the workshop's `.venv`, with its
+  settings in `configs/voice.json`. What came from where: `intents.py`
+  from `vla_pipeline/llm/intents.py` (the commands, the instructions,
+  one answer; the keyword stand-in and the handler registry, unused
+  here, left out); `intent.gbnf` as it was; `server.py` and `client.py`
+  from `llama_intent.py` (the server start, its readiness line and the
+  two requests; the `autostart`, `ubatch_size`, `cu_mask` and
+  `extra_args` settings, unused here, left out); `microphone.py` from
+  `voice.py` and `audio/gemma_listen.py` (the listening loop, Silero,
+  the windows and the filter; the request thread now ends on a queue
+  sentinel instead of polling its queue); `speech.py` and `examples.py`
+  from `notebook_tools.py`; `settings.py` and `configs/voice.json` from
+  `utils/config.py` and the `gemma4-e4b-it` section of
+  `pipeline.yaml`. Not in git: `llama-server`, built by
+  `scripts/setup_voice.sh` from llama.cpp commit `781dbc5ac` for
+  `gfx1100` under `third_party/`, without the server's web page; the two
+  Gemma files, in the Hugging Face cache (`ggml-org/gemma-4-E4B-it-GGUF`,
+  Q4_0 and the Q8_0 audio projector, never downloaded at run time). The
+  Silero model is the file the package `silero-vad==6.2.3` ships, the
+  same bytes as before. The graphics override is set in the environment
+  of the server process only. The worker process and its launcher are
+  gone: the client is asked in the main process.
 - The rule (user, 2026-11-21, 16:01): the branch is the working
   reference and is followed closely. The listening loop, the speech
   detection, the windows, the filter for repeated commands, the server
   start, the request, the instructions to the model, the grammar and
   the console lines are the branch's, unchanged. A command is added the
   branch's own way (the bullet "A new command is three changes" below)
-  and in no other way.
+  and in no other way. Since 2026-11-22 the rule holds for what the
+  model sees and hears: the instructions, the grammar, the two request
+  bodies, the clip, the listening parameters and the filter are the
+  branch's in effect; the code's home and the way it is run are this
+  workshop's (the bullet above).
 - Departures from the branch, each needing the user's word:
   1. Two server slots and a context of 4,096 instead of one slot and
      2,048. Accepted by the user at 15:03 (section 2); measured with
@@ -554,9 +598,9 @@ command" appears. A typed text that gives no command is shown, as
 **Tool calls (requirement of 2026-11-21, 16:14; read, nothing run).**
 The aim is an answer such as
 `pick_place(object: small red cube, place: box)`. Read in the server's
-source the voice workshop was built from
-(`workshops/vvla-pipeline/third_party/llama.cpp`, commit `781dbc5ac`)
-and in Google's page
+source (llama.cpp commit `781dbc5ac`, then the other workshop's build,
+since 2026-11-22 built here under `third_party/llama.cpp`) and in
+Google's page
 [Gemma prompt formatting](https://ai.google.dev/gemma/docs/core/prompt-formatting-gemma4):
 
 - Gemma 4 is trained to call tools. Its own form is
@@ -840,14 +884,14 @@ section 5.2. Pass counts are still the user's (decision 4). Detail:
   (M6).
 - A command that takes longer to say than one hop of the live voice
   session can lose what is said last. The session sends the last 6 s
-  of sound to Gemma every 2 s in which it hears speech
-  (`voice/config/pipeline.yaml:30-31`,
-  `voice/vla_pipeline/audio/gemma_listen.py:41-52`), so the first
-  window with speech can hold only the beginning of a sentence. Once
-  Gemma has made a command of a window, the same command is refused
-  from every later window that overlaps it and for 5 s
-  (`gemma_listen.py:62-69`, `voice/vla_pipeline/llm/voice.py:122-125`,
-  `pipeline.yaml:35`). The filter compares the command's name, not its
+  of sound to Gemma every 2 s in which it hears speech (`hop_s` and
+  `window_s` in `configs/voice.json`; `HopWindows.feed` in
+  `src/so101_smolvla/voice/microphone.py`), so the first window with
+  speech can hold only the beginning of a sentence. Once Gemma has made
+  a command of a window, the same command is refused from every later
+  window that overlaps it and for 5 s (`CommandFilter.accept` and
+  `Listener._request` there; `cooldown_s` in the settings). The filter
+  compares the command's name, not its
   arguments. Seen in one stored run: "pick up the small red cube and
   put it in the box", 3.2 s long in the synthetic voice, played into
   the live session (job `notebook-kernel-1795276154`; its outputs are
@@ -857,8 +901,9 @@ section 5.2. Pass counts are still the user's (decision 4). Detail:
   cube" and `pick_place` with "small red cube", without the place, and
   nothing after it. The later windows were not logged, so that they
   were refused is read from the code, not seen. Not tested with a
-  person's voice. The loop and the filter are the branch's, unchanged
-  (commit `6cc7eae`). One complete clip, as in section 4.5 and in the
+  person's voice. The loop and the filter are the branch's in what they
+  do (commit `6cc7eae`; since 2026-11-22 in `microphone.py`, 5.1). One
+  complete clip, as in section 4.5 and in the
   notebook's section 6, is not affected. Decision 11.
 - Everything here is for the twin. Nothing is measured on the real arm.
 

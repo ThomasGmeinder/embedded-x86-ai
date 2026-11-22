@@ -1,6 +1,6 @@
 """notebooks/voice_control_test.ipynb, run the way a person runs it: its registered kernel and the real Gemma server.
 
-Two runs, both with nbconvert of the voice workshop's Python:
+Two runs, both with nbconvert of the workshop's own .venv:
 
 1. The notebook file, run by tests/notebook_display_updates.py: the class `jupyter nbconvert
    --execute` runs a notebook with, which also keeps every redraw the kernel sends. It leaves out the cells
@@ -14,10 +14,11 @@ Two runs, both with nbconvert of the voice workshop's Python:
    Gemma, a second start of the server (has to be refused), a cell that sets MIC to a microphone that does not
    exist, the live-session cell (has to stop with its error), stop of Gemma.
 
-Needed on the machine: the set-up voice workshop (workshops/vvla-pipeline: Python environment, model files,
-llama-server), its graphics processor, espeak-ng, and nothing answering on the Gemma port. A missing piece fails
-the tests; nothing is skipped. Jupyter's data and settings go to a temporary directory, as in the launcher's
-tests, so the user's own kernels are not touched. The server's log is notebooks/logs/llama-server.log.
+Needed on the machine: the set-up voice path (scripts/setup_voice.sh: the packages in .venv, llama-server, the
+Gemma files in the Hugging Face cache), its graphics processor, espeak-ng, and nothing answering on the Gemma
+port. A missing piece fails the tests; nothing is skipped. Jupyter's data and settings go to a temporary
+directory, as in the launcher's tests, so the user's own kernels are not touched. The server's log is
+notebooks/logs/llama-server.log.
 """
 import copy
 import json
@@ -28,12 +29,11 @@ import urllib.request
 import uuid
 
 import pytest
-import yaml
 
-from test_notebooks_launcher import KERNEL, LAUNCHER, NOTEBOOKS, VOICE_WORKSHOP, WORKSHOP, _environment
+from so101_smolvla.voice.settings import load_settings
+from test_notebooks_launcher import KERNEL, LAUNCHER, NOTEBOOKS, VENV, WORKSHOP, _environment
 
 NOTEBOOK = NOTEBOOKS / "voice_control_test.ipynb"
-CLIENT_CONFIG = WORKSHOP / "voice" / "config" / "pipeline.yaml"
 REDRAW_KEEPER = WORKSHOP / "tests" / "notebook_display_updates.py"
 SKIP_TAG = "skip-execution"
 # Ends a run that hangs. The whole notebook took 66 s when it was first run (2026-11-21, 60 requests to Gemma).
@@ -41,10 +41,10 @@ RUN_LIMIT_S = 600
 
 
 def _gemma_answers() -> bool:
-    """Whether a server answers on the port the client's own settings name."""
-    section = yaml.safe_load(CLIENT_CONFIG.read_text(encoding="utf-8"))["gemma4-e4b-it"]
+    """Whether a server answers on the default port of configs/voice.json, the notebook's."""
+    server = load_settings().server
     try:
-        urllib.request.urlopen(f"http://{section['host']}:{section['port']}/health", timeout=5).close()
+        urllib.request.urlopen(f"http://{server['host']}:{server['port']}/health", timeout=5).close()
     except urllib.error.HTTPError:
         return True  # it answers, with an error status
     except OSError:
@@ -66,7 +66,7 @@ def _execute(env: dict, out, source=None, allow_errors: bool = False, redraws=No
     source: the notebook's JSON text, handed to nbconvert on its standard input; without it, the notebook file.
     redraws: a file to write the kernel's redraws to; then the notebook file is run by REDRAW_KEEPER."""
     assert not _gemma_answers(), "something already answers on the Gemma port; stop it before this test"
-    tools = VOICE_WORKSHOP / ".venv" / "bin"
+    tools = VENV / "bin"
     if redraws is not None:
         assert source is None and not allow_errors
         command = [str(tools / "python"), str(REDRAW_KEEPER), KERNEL, str(NOTEBOOK), str(out), str(redraws)]
@@ -160,7 +160,7 @@ def test_live_cell_stops_with_an_error_without_a_microphone_and_a_second_server_
 
     live = copy.deepcopy(live)
     live["metadata"] = {}  # without the tag that leaves it out
-    second_start = added("t.start_server(LOG_DIR, {}, [])")
+    second_start = added("GemmaServer(LOG_DIR, settings=settings).start()")
     no_microphone = added("MIC = 'no-such-microphone'")  # what a user does to choose another input
     notebook["cells"] = [setup, start, second_start, no_microphone, live, stop]
 
@@ -169,7 +169,7 @@ def test_live_cell_stops_with_an_error_without_a_microphone_and_a_second_server_
     for cell in (ran_setup, ran_start, ran_mic, ran_stop):
         assert not _errors(cell), "".join(cell["source"])
     (name, message), = _errors(ran_second)
-    assert name == "RuntimeError" and message.startswith("SETUP FAILURE: something already answers")
+    assert name == "SetupFailure" and message.startswith("SETUP FAILURE: something already answers")
     (name, message), = _errors(ran_live)
     assert name == "RuntimeError"
     assert message.startswith("The microphone or the speech detection could not be opened"), message

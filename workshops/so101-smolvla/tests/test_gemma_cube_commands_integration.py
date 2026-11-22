@@ -1,12 +1,15 @@
 """The real Gemma 4 on the three-cube test's sentences, typed and in the synthetic voice.
 
-The worker starts its own server on voice_commands.PORT in the voice
-workshop's environment and stops it at the end. Skipped while that workshop
-(its Python, llama-server, the model files) is not set up; anything else that
-goes wrong fails.
+VoiceCommands starts its own server on the runner's port of configs/voice.json
+and stops it at the end. Skipped while the voice path is not set up
+(llama-server, the Gemma files in the Hugging Face cache, espeak-ng:
+scripts/setup_voice.sh); anything else that goes wrong fails.
 """
 
 from __future__ import annotations
+
+import os
+import re
 
 import pytest
 
@@ -17,19 +20,23 @@ from so101_smolvla.cube_commands import (
     choose_cube,
     pick_sentences,
 )
-from so101_smolvla.voice_commands import VoiceCommands, voice_workshop_ready
+from so101_smolvla.voice.commands import VoiceCommands, voice_ready
+from so101_smolvla.voice.settings import load_settings
 
-READY, REASON = voice_workshop_ready()
-pytestmark = pytest.mark.skipif(not READY, reason=f"voice workshop: {REASON}")
+READY, REASON = voice_ready()
+pytestmark = pytest.mark.skipif(not READY, reason=f"voice: {REASON}")
+
+
+ENVIRONMENT_OVERRIDE_BEFORE = os.environ.get("HSA_OVERRIDE_GFX_VERSION")
 
 
 @pytest.fixture(scope="module")
 def voice(tmp_path_factory):
-    worker = VoiceCommands(log_dir=tmp_path_factory.mktemp("gemma"))
+    commands = VoiceCommands(log_dir=tmp_path_factory.mktemp("gemma"))
     try:
-        yield worker
+        yield commands
     finally:
-        worker.close()
+        commands.close()
 
 
 def _ask_all(voice, spoken: bool) -> list[tuple]:
@@ -56,19 +63,24 @@ def _ask_all(voice, spoken: bool) -> list[tuple]:
     return rows
 
 
-def test_the_worker_reports_the_server_it_started_and_the_client_it_is(voice):
+def test_the_voice_reports_the_server_it_started_and_the_client_it_is(voice):
+    settings = load_settings()
     provenance = voice.provenance
     assert provenance["route"].startswith("gemma4-e4b-it voice client")
-    assert provenance["base"].endswith(":8083")
+    assert provenance["base"].endswith(f":{settings.runner_port}") and settings.runner_port == 8083
     assert provenance["settings"]["parallel"] == 2 and provenance["settings"]["ctx_size"] == 4096
     assert provenance["model_gguf"].endswith(".gguf") and provenance["mmproj"].endswith(".gguf")
-    assert provenance["branch_commit"] == "1d231e1"
+    # The server names the commit it was built from; it is the pinned one of the settings.
+    built = re.search(r"commit ([0-9a-f]{7,})", provenance["server_version"])
+    assert built and settings.llama_cpp["commit"].startswith(built.group(1)), provenance["server_version"]
     assert len(provenance["grammar_sha256"]) == 64 and len(provenance["instructions_sha256"]) == 64
     assert provenance["synthetic_voice"]["sample_rate"] == 16000
     assert provenance["synthetic_voice"]["clip_s"] == 6
-    # The environment launcher gave the server the voice workshop's graphics override.
-    assert provenance["gfx_override_in_environment"] is not None
-    print({key: provenance[key] for key in ("settings", "gfx_override_in_environment", "server_log")})
+    # The graphics override is the server process's alone: recorded as its setting, never put into
+    # this process, where SmolVLA's PyTorch would see it.
+    assert provenance["settings"]["hsa_override_gfx_version"] == settings.server["hsa_override_gfx_version"]
+    assert os.environ.get("HSA_OVERRIDE_GFX_VERSION") == ENVIRONMENT_OVERRIDE_BEFORE
+    print({key: provenance[key] for key in ("settings", "server_version", "server_log")})
 
 
 def test_every_typed_sentence_gives_its_cube_and_every_other_one_is_refused(voice):
