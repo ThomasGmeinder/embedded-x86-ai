@@ -30,8 +30,8 @@ What follows for a demo:
   trained scene with two objects.
 - Choosing between objects by the sentence is a known limit of this class of
   models, not a fault of the twin. The measurements and the published
-  sources are in `DEVELOPMENT_LEDGER.md`, section "Several objects in one
-  scene".
+  sources are in `DEVELOPMENT_LEDGER.md`, section ["Several objects in one
+  scene"](DEVELOPMENT_LEDGER.md#d-2026-11-20-several-objects-in-one-scene).
 
 Compared from their model cards only and not run here:
 `Project-IRA/TPSoSe2026_SmolVLA_LeRobot_SO101_Finetuning_V6_Full`,

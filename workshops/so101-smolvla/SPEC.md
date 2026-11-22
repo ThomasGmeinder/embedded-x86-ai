@@ -48,6 +48,13 @@ section 11, decision 6). Section 4.6 has the voice test notebook and
 its automated test. Section 10 has a weak point of the live voice
 session with a long command; section 11 has it as decision 11.
 
+Changed 2026-11-22, after 17:45, on the user's decisions of that
+afternoon: SAM 3 runs through the reference `sam3-tracker-rocm` in a
+Python environment of its own, without Docker, as a worker process of
+this workshop; the plain PyTorch route is removed (sections 5.2 and 9,
+measurement M4; section 11, decisions 2 and 3). Measurements are in the
+ledgers and linked, not repeated.
+
 Terms used throughout:
 
 - **VLA (vision-language-action model):** one neural network that takes
@@ -63,6 +70,7 @@ Terms used throughout:
   it, with a number that stays the same from picture to picture.
 - **Twin:** the simulated SO-101 of this workshop (SAPIEN simulator).
 
+<a id="s-1-the-three-tasks"></a>
 ## 1. The three tasks
 
 1. Cubes, balls and cylinders of different colours lie anywhere on the
@@ -75,6 +83,7 @@ Terms used throughout:
    2026-11-21, 15:43, a turned marker, a blue cylinder joined to a red
    cuboid, gave the two signals. That is parked.)
 
+<a id="s-2-decisions-the-user-fixed-on"></a>
 ## 2. Decisions the user fixed on 2026-11-21
 
 - The arm is moved by the VLA only. No pick by measured position and
@@ -123,21 +132,24 @@ Terms used throughout:
   keeps the branch's one slot and 2,048 (lines 26 and 22); the notebook
   of section 4.6 passes the two values when it starts the server.
 
+<a id="s-3-the-principle"></a>
 ## 3. The principle
 
 Something other than the policy decides which object is meant, and the
-policy is shown only that object (`RESEARCH.md`, "Main conclusion" and
-Finding 8). SmolVLA keeps what it is measured to do, moving the arm to
+policy is shown only that object (`RESEARCH.md`, ["Main conclusion"](RESEARCH.md#r-main-conclusion) and
+[Finding 8](RESEARCH.md#r-finding-8)). SmolVLA keeps what it is measured to do, moving the arm to
 one object. Everything else on the table is painted over with table in
 the pictures SmolVLA gets.
 
+<a id="s-4-what-was-measured-for-this"></a>
 ## 4. What was measured for this spec
 
+<a id="s-4-1-reading-a-stack-and"></a>
 ### 4.1 Reading a stack and planning the rebuild from two pictures
 
 12 rendered picture pairs (stack, then the same cubes scattered), one
 question per pair, one scorer. Details and files: `RESEARCH.md`, section
-"Unfinished".
+["Unfinished"](RESEARCH.md#r-unfinished).
 
 | Subject | Pairs fully correct | Pick points on the right cube |
 |---|---|---|
@@ -157,6 +169,7 @@ that it matched each remembered cube to the right outline, not that it
 found the cubes. Whether SAM 3's outlines are as good as the
 simulator's is not measured.
 
+<a id="s-4-2-the-gemma-server-with"></a>
 ### 4.2 The Gemma server with pictures
 
 Read in `logs/gemma-12-pairs-1795262096.log` and
@@ -173,6 +186,7 @@ Read in `logs/gemma-12-pairs-1795262096.log` and
 - The two larger picture sizes need the server's context raised from
   2,048 to 4,096 tokens.
 
+<a id="s-4-3-what-follows-from-4"></a>
 ### 4.3 What follows from 4.1 and 4.2
 
 - **Gemma 4 E4B does not read the scene.** In the plan this spec was
@@ -194,6 +208,7 @@ Read in `logs/gemma-12-pairs-1795262096.log` and
   around the marker and in 72 of 96 whole pictures. The marker itself is
   parked; the result says that a cut-out helps this model.
 
+<a id="s-4-4-the-two-new-commands"></a>
 ### 4.4 The two new commands, typed and spoken
 
 Job `command-test-1795272820`, files in
@@ -223,6 +238,7 @@ Counted: sentences for which Gemma gave the expected command.
   sentence. The microphone loop with its overlapping windows was not
   part of this test, and no person's voice.
 
+<a id="s-4-5-pickplace-object-place-in"></a>
 ### 4.5 `pick_place(object, place)` in two forms, typed and spoken
 
 Job `tool-call-test-1795274571` (16:22:51 to 16:24:01, exit status 0),
@@ -296,6 +312,7 @@ object and place all as expected.
   complete clip per sentence, no microphone loop. The transcripts were
   not scored.
 
+<a id="s-4-6-the-voice-test-notebook"></a>
 ### 4.6 The voice test notebook and its automated test
 
 `notebooks/voice_control_test.ipynb` shows, for a typed or spoken
@@ -337,6 +354,7 @@ and, where the table names one, the place. Three runs on 2026-11-21
   clip per sentence. No count has been taken with a person's voice or
   through the live session.
 
+<a id="s-5-parts-and-what-each-one"></a>
 ## 5. Parts and what each one owns
 
 Each fact has one owner. No part keeps a copy of another part's fact.
@@ -368,6 +386,7 @@ flowchart LR
   SmolVLA --> Arm
 ```
 
+<a id="s-5-1-voice"></a>
 ### 5.1 Voice
 
 - Taken over from branch `gemma4-e4b-it_voice_intent`:
@@ -522,7 +541,7 @@ Three ways to get the call. Ways 1 and 2 are measured (section 4.5);
 way 3 is not:
 
 1. **The branch's request, the grammar written as calls.** The answer
-   stays one object, `{"command": "pick_place", "object": "small red
+   stays one object, `{"command": ["pick_place"](DEVELOPMENT_LEDGER.md#d-2026-11-21-pickplace-object-place-in-two-forms), "object": "small red
    cube", "place": "box", "heard": "..."}`; the command is the tool's
    name and the other fields are its arguments. Changed: the grammar
    rule for the object (three words), one new field for the place, the
@@ -546,6 +565,7 @@ Way 2's request is about twice as long and its answers were not
 slower. Neither way is better at leaving a spoken non-command alone (3
 of 6 each).
 
+<a id="s-5-2-sam-3-service"></a>
 ### 5.2 SAM 3 service
 
 - The reference's live interface: one object `SAM3Live`, built once,
@@ -567,6 +587,31 @@ of 6 each).
   Whatever is chosen is one-way, bounded, and drops the oldest picture
   when a newer one waits; it never makes the control loop wait.
 
+**Amendment, 2026-11-22, after 17:45, to this section.** The service is
+built and in use for the three-cube test; the bullets above describe the
+reading of 2026-11-21. As built: there is no container. The reference
+(v0.4.0-rc1, commit `8005dc6`, the address of the user's link) is checked
+out beside the repository, its model files are compiled at 504 pixels
+without Docker, and it runs in the Python environment `.venv-sam3`
+(`scripts/setup_sam3_env.sh`), started through
+`scripts/run_sam3_reference.sh`, which also sets the one setting the
+convolution library needs on this machine. The worker
+(`src/so101_smolvla/sam3_worker.py`) is a process of this workshop,
+asked over two pipes by `src/so101_smolvla/sam3_outlines.py`; it holds one
+`SAM3Live` per camera, so two cameras are two sessions, runs the full
+detection on every call, and caps no number of objects (the "at most
+five" above is the reference's default and is switched off). Measured
+(M4, answered): 0.29 s per top picture and 0.32 s per wrist picture, 640
+by 480, median over 240 plans, against 6.9 and 9.2 s for the PyTorch
+route; the two routes outline the same cubes in 250 of 254 pairs on
+stored pictures; the test's result is the same on the same ten layouts
+(9 of 10). Detail: [`TESTING_LEDGER.md`](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-run)
+and the two sections before it; meaning:
+[`DEVELOPMENT_LEDGER.md`](DEVELOPMENT_LEDGER.md#d-2026-11-22-fast-sam3).
+Not measured: the reference's own demo, and SAM 3 on balls and
+cylinders ("cube" is the only phrase in use).
+
+<a id="s-5-3-scene-facts-and-choosing"></a>
 ### 5.3 Scene facts and choosing the target
 
 - For every outline of the top picture: kind from SAM 3's phrase, colour
@@ -581,6 +626,7 @@ of 6 each).
 - The decision is made in the task state in one call, from the scene
   facts it is handed; the caller does not combine queries.
 
+<a id="s-5-4-picture-editor"></a>
 ### 5.4 Picture editor
 
 - Input: the camera's picture, SAM 3's outlines for that camera, and the
@@ -602,6 +648,7 @@ of 6 each).
   wrist picture before either call. Making the two calls one is
   decision 5.
 
+<a id="s-5-5-smolvla"></a>
 ### 5.5 SmolVLA
 
 - Unchanged checkpoint, not retrained at first.
@@ -612,6 +659,7 @@ of 6 each).
   `Pick up a small cube and place in the bin`,
   `Stack the smaller cube on the larger one`.
 
+<a id="s-6-task-1"></a>
 ## 6. Task 1: pick the named object
 
 1. Voice gives the branch's command `pick_place` with the object the
@@ -628,6 +676,7 @@ What the checkpoint is trained to do with a picked object is to put it
 into the bin. "Pick" in this spec therefore ends in the bin. Balls and
 cylinders were never run with this checkpoint (measurement M7).
 
+<a id="s-7-task-2"></a>
 ## 7. Task 2: stack cubes as commanded
 
 1. Voice gives the cube to move and the cube to put it on, or a whole
@@ -639,6 +688,7 @@ cylinders were never run with this checkpoint (measurement M7).
 3. A move that the checker reports as not done is tried again once, then
    the system stops and says which move failed.
 
+<a id="s-8-task-3"></a>
 ## 8. Task 3: rebuild a remembered stack
 
 1. Two commands, spoken or typed: "learn the stack" and "rebuild the
@@ -664,6 +714,7 @@ How a standing stack is read level by level from SAM 3's outlines (cubes
 of one colour that touch, a small cube on a large one) is not measured;
 it is part of measurement M1.
 
+<a id="s-9-first-phase"></a>
 ## 9. First phase: measurements before anything is built on
 
 All in the twin. A count is written "k of n". Every pass count below is
@@ -686,13 +737,23 @@ Order: M1 and M2 first, because they need neither SAM 3 nor Gemma and
 decide whether the principle holds for this checkpoint. Then M4, M3, M7,
 M5, M6, M8.
 
+Amendment, 2026-11-22, after 17:45, to the rows M2, M3 and M4. Measured
+on 2026-11-22 in a three-cube form (three 40 mm cubes and a bin, one
+command per cube, 10 layouts): M2 with the simulator's outlines 7 of 10
+layouts against 0 of 10 unedited; M3 with SAM 3's outlines 9 of 10, with
+the PyTorch route and with the reference alike; M4 as in the amendment of
+section 5.2. Pass counts are still the user's (decision 4). Detail:
+[`TESTING_LEDGER.md`](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-run) and
+[`RESEARCH.md`, Finding 8](RESEARCH.md#r-finding-8).
+
+<a id="s-10-known-weak-points"></a>
 ## 10. Known weak points
 
 - Stacking with this checkpoint stands at 24 of 60 in the twin, for the
   one pair it was trained on (red 20 mm cube on a 40 mm cube). Tasks 2
   and 3 depend on it.
 - The wrist camera. The one published method that edits a wrist picture
-  reports objects lost by the tracker there (`RESEARCH.md`, Finding 8).
+  reports objects lost by the tracker there (`RESEARCH.md`, [Finding 8](RESEARCH.md#r-finding-8)).
 - Removing objects is not always a gain: in one published test it made
   the policy worse (same finding).
 - The published tests of painting objects over used other policies and
@@ -736,6 +797,7 @@ M5, M6, M8.
   notebook's section 6, is not affected. Decision 11.
 - Everything here is for the twin. Nothing is measured on the real arm.
 
+<a id="s-11-decisions-that-are-the-users"></a>
 ## 11. Decisions that are the user's
 
 1. **Gemma does not read the scene** (4.3). Confirm, or name what Gemma
@@ -783,6 +845,19 @@ M5, M6, M8.
    - Not measured: SAM 3 with tracking (`Sam3VideoModel` of the same
      package, or the reference's `SAM3Live`), which is what section 5.2
      describes.
+
+   **Amendment, 2026-11-22, after 17:45, to decisions 2 and 3: settled.**
+   Decision 2: none of the three ways. The reference runs as a worker
+   process of this workshop in its own Python environment, without a
+   container, and hands its outlines over two pipes (section 5.2, its
+   amendment). Decision 3: v0.4.0-rc1 at commit `8005dc6`, from the
+   address of the user's link, checked out at
+   `~/GitHub/sam3-tracker-rocm-v0.4.0-rc1`; the old checkout stays
+   untouched. The PyTorch route (the third way) was built first, measured
+   with tracking (9 of 10 layouts, 6.9 and 9.2 s per picture), used as the
+   baseline for the comparison and then removed on the user's word of
+   17:23; the user notes that it could be made significantly faster if
+   ever needed, with evidence outside this repository.
 4. **The pass counts of section 9.**
 5. **One call of the policy instead of two** (5.4), or the editor in
    front of both.
@@ -841,6 +916,7 @@ M5, M6, M8.
     first step is the user's own try by voice in section 7 of the
     notebook.
 
+<a id="s-12-rules-for-building-it"></a>
 ## 12. Rules for building it
 
 - No part waits by sleeping or asking again in a loop. A part that needs

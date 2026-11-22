@@ -1,5 +1,6 @@
 # Research: picking the named object, stacking, and rebuilding a memorised stack
 
+<a id="r-main-conclusion"></a>
 ## Main conclusion
 
 > **Something other than the policy decides which object is meant, and
@@ -17,8 +18,8 @@ sentence, it takes the wrong object or fails in most trials.
 | A segmentation model (SAM 3) makes a mask of the target from a text phrase, a click or a box; the policy gets the mask with the first picture. MaskWAM, [arXiv 2606.13515](https://arxiv.org/abs/2606.13515) | Real two-arm robot, about 100 demonstrations per task, four tasks in which the sentence alone does not say which object is meant, 60 trials per task and setting | 92.9 % under trained conditions, 90.4 % with unseen extra objects on the table | Target written into the sentence as coordinates, trained conditions: 41.7 % (π0) and 26.3 % (FastWAM) |
 | A planner names the next object by its place in the row, SAM 3 makes the mask, a vision-language model (Qwen3.5) checks the mask before the motion and the result after it, at every step. MaskHarness-WAM, [arXiv 2609.19974](https://arxiv.org/abs/2609.19974) | Real two-arm robot, 3, 4 and 5 look-alike blocks to be handled in a commanded order, 25 trials each. Counted: the whole sequence in the right order | 88.0, 84.0 and 84.0 % (22, 21 and 21 of 25) | π0: 20.0, 28.0 and 0.0 % (5, 7 and 0 of 25) |
 | A person clicks the target in the camera picture, a segmentation model (SAM2) makes the mask and follows it. VCA, [arXiv 2602.23583](https://arxiv.org/abs/2602.23583) | Real two-arm robot, four orange and four blue blocks, 100 trials. Counted: the clicked block ends in the right bin | 96 of 100, no wrong target. With seven rings of one colour and different sizes: 94 of 100, 3 wrong targets, each time the neighbouring ring | – (the comparison policy in that paper is given no target) |
-| The same idea with the mask used to blank out every other object in the policy's pictures. OBEYED-VLA, Finding 6 | Real arm, 100 runs per setting | "above 90%" with one other object, "around 80%" with seven | "below 10%" |
-| Decided outside, and no policy in the pick: the arm goes to the measured place. RefGuard, Finding 2 | Real arm, objects on the table twice, 90 trials | 81 of 90, no wrong object | π0.5: 42 of 90, 36 wrong objects |
+| The same idea with the mask used to blank out every other object in the policy's pictures. OBEYED-VLA, [Finding 6](#r-finding-6) | Real arm, 100 runs per setting | "above 90%" with one other object, "around 80%" with seven | "below 10%" |
+| Decided outside, and no policy in the pick: the arm goes to the measured place. RefGuard, [Finding 2](#r-finding-2) | Real arm, objects on the table twice, 90 trials | 81 of 90, no wrong object | π0.5: 42 of 90, 36 wrong objects |
 | Decided outside, policy not told by a mask: an agent finds the target with SAM 3, lets the policy grasp on unchanged pictures, watches and can take over. SO-101 Bench, Findings 5 and 6 | Real SO-101, 45 layouts | 29 of 45, no wrong object | Best policy alone: 24 of 45 |
 | No outside decision at all. [arXiv 2606.08881](https://arxiv.org/abs/2606.08881) | Real SO-101, 100 demonstrations per task, 20 runs per model, "Put the pink block in the plate and remove the others" | – | ACT 0 %, SmolVLA 5 %, Wall-X 0 %, π0.5 10 % |
 
@@ -42,7 +43,7 @@ Three limits that belong to this conclusion:
   (OBEYED-VLA); the workshop's checkpoint was trained on neither." The
   first half was wrong. Two published methods remove the other objects
   from the pictures of an unchanged policy, without any training, and
-  raise its success (CGVD and BYOVLA, Finding 8). The user pointed this
+  raise its success (CGVD and BYOVLA, [Finding 8](#r-finding-8)). The user pointed this
   out on 2026-11-21.
 
 This section was added on 2026-11-21 at 11:46. The numbers of the three
@@ -61,7 +62,7 @@ was counted and in which setting. Nothing in this file was measured on
 the SO-101 arm of this workshop.
 
 Findings 5 to 7, the section on SO-101 Bench and the second table under
-Finding 3 were added later on 2026-11-21. Their numbers were read in the
+[Finding 3](#r-finding-3) were added later on 2026-11-21. Their numbers were read in the
 full text of each paper, README, issue thread or page linked next to
 them. Where a source gives only a percentage, the percentage is quoted
 as the source gives it.
@@ -75,6 +76,7 @@ Two terms used throughout:
 - **Wrong-object pick:** the arm carries out a clean grasp, but on an
   object the sentence did not name.
 
+<a id="r-the-three-tasks"></a>
 ## The three tasks
 
 1. Objects of different kinds and colours (cubes, balls, cylinders) lie
@@ -87,6 +89,7 @@ Two terms used throughout:
    robot rebuilds the stack. The reference for this task is the project
    `~/GitHub/VLA-VLM`.
 
+<a id="r-finding-1"></a>
 ## Finding 1: a policy alone picks the named object unreliably once objects can lie anywhere or occur twice
 
 It is not true that such models cannot do it. With objects at nearly
@@ -110,8 +113,8 @@ only the choice of object.
 Ten further sources on the same weakness, among them a test on a real
 SO-101 (picking the pink block among other blocks, four models, 20 trials
 each, all between 0 and 10 %; SmolVLA 5 %), are in
-`DEVELOPMENT_LEDGER.md`, section "2026-11-20 — Several objects in one
-scene" (line 4283). They were read on 2026-11-20 and not read again for
+`DEVELOPMENT_LEDGER.md`, section ["2026-11-20 — Several objects in one
+scene"](DEVELOPMENT_LEDGER.md#d-2026-11-20-several-objects-in-one-scene) (line 4283). They were read on 2026-11-20 and not read again for
 this file.
 
 What was measured in this workshop agrees with it (`README.md`, table
@@ -119,6 +122,7 @@ What was measured in this workshop agrees with it (`README.md`, table
 pulled 30 to 44 % of the way towards it whichever sentence is given, and
 on 5 of 10 layouts the red cube was never lifted in nine runs.
 
+<a id="r-finding-2"></a>
 ## Finding 2: deciding outside the policy which object is meant gives better results in the published tests
 
 | Test | Policy alone | Object decided outside the policy |
@@ -148,9 +152,10 @@ Reading these:
 - TiPToP uses no robot training data. RefGuard's two policies were
   fine-tuned on its robot.
 
+<a id="r-the-design-these-systems-share"></a>
 ### The design these systems share
 
-"The design" in this file means: which object to pick is decided by
+["The design"](#r-the-design-these-systems-share) in this file means: which object to pick is decided by
 separate parts, not inside the policy network.
 
 1. A language model turns the command into a description of the target
@@ -182,8 +187,9 @@ success counts were not read):
 [Gemini Robotics-ER 2 on an SO-101](https://ekumenlabs.com/blog/posts/give-robot-arm-a-brain/).
 A third example,
 [so101-vlm-agent](https://github.com/daniiarabdiev/so101-vlm-agent), was
-read later; its counts are under Finding 5.
+read later; its counts are under [Finding 5](#r-finding-5).
 
+<a id="r-finding-3"></a>
 ## Finding 3: stacking two blocks works at moderate rates with a fine-tuned policy; taller stacks are where policies fail
 
 | Test | Setting | Result |
@@ -196,6 +202,7 @@ This workshop's own number for one fine-tuned SmolVLA checkpoint, in
 simulation: 24 of 60 two-cube stacks (`README.md`, table "Models
 evaluated").
 
+<a id="r-added-later-on-2026-11-21"></a>
 ### Added later on 2026-11-21: cube stacking on a real SO-101, and in the ManiSkill simulator
 
 Read in the project's README, in the ManiSkill task documentation and
@@ -248,6 +255,7 @@ this file:
   blue cube) fits StackPyramid-v1 by the task documentation, not
   PickCube.
 
+<a id="r-finding-4"></a>
 ## Finding 4: rebuilding a memorised stack needs the memory outside the policy
 
 A policy that sees only the current pictures has no record of the stack
@@ -287,12 +295,13 @@ For a fixed protocol triggered by the marker, a program that holds the
 layout is enough. A language or vision model adds something where that
 program is limited: colours and sizes outside the four fixed ones, and
 commands in free wording. Whether an AI agent does the whole task better
-than the program was not tested (see "Unfinished" below).
+than the program was not tested (see ["Unfinished"](#r-unfinished) below).
 
+<a id="r-finding-5"></a>
 ## Finding 5: a distinct object named directly, after fine-tuning on that table, is picked 82 to 89 times in 100 on a real SO-101; descriptions, untrained rooms and released models without fine-tuning stay weak
 
 Added later on 2026-11-21, after a search for existing projects. The
-numbers of Finding 1 are from the hardest settings; these are the
+numbers of [Finding 1](#r-finding-1) are from the hardest settings; these are the
 easier ones. Counts were read in the saved full texts of the two papers
 and in the projects' own pages.
 
@@ -334,6 +343,7 @@ manipulation model
 described as completing "12 categories of complex manipulation tasks",
 with no success count in its README.
 
+<a id="r-so-101-bench"></a>
 ## SO-101 Bench: what taking it over would need
 
 Added later on 2026-11-21. Read in the repository
@@ -383,6 +393,7 @@ Added later on 2026-11-21. Read in the repository
   (`scripts/pyrua_eval.py:194-209`); the fine-tuned policy checkpoints
   and the two data sets.
 
+<a id="r-finding-6"></a>
 ## Finding 6: four ways to keep a policy from being pulled to the other objects; only one makes it see a single object
 
 Added later on 2026-11-21. Nothing in a policy by itself hides the other
@@ -391,7 +402,7 @@ objects. The systems read for this file do one of four things.
 1. **No policy in the pick.** A program measures where the chosen object
    lies and the arm goes there by inverse kinematics. RefGuard does it
    (its planner "samples grasps on the selected object"), TiPToP, the
-   classical cube-stacking pipeline under Finding 3 and `VLA-VLM` too.
+   classical cube-stacking pipeline under [Finding 3](#r-finding-3) and `VLA-VLM` too.
 2. **Blank out everything else before the policy gets the picture.**
    OBEYED-VLA, [arXiv 2512.22519](https://arxiv.org/abs/2512.22519): a
    segmentation model outlines every object, a vision-language model
@@ -409,12 +420,12 @@ objects. The systems read for this file do one of four things.
    grasp policy gets the unchanged pictures and the whole command
    (`scripts/pyrua_eval.py:272`, `:303`); the agent looks at least every
    5 seconds and on motion triggers and can take the arm over
-   (`:194-209`). Result under Finding 5: no wrong object in 45 real
+   (`:194-209`). Result under [Finding 5](#r-finding-5): no wrong object in 45 real
    runs, 3 runs in which another object was moved. How the agent
    prepares the hand-off, for example whether it first brings the
    gripper over the target, was not found in the published files.
 4. **Give the policy a hint and leave the picture alone.** Pointing-VLA
-   (under Finding 2): 79 to 121 of 150, with at most one other object on
+   (under [Finding 2](#r-finding-2)): 79 to 121 of 150, with at most one other object on
    the table.
 
 For this workshop: the checkpoint in use puts a single 40 mm cube into
@@ -422,6 +433,7 @@ the bin in 10 of 10 layouts of the twin (`README.md`, table "Models
 evaluated"). It was trained on unchanged pictures; how it behaves on
 blanked-out pictures is not measured.
 
+<a id="r-finding-7"></a>
 ## Finding 7: in commercial use, such models run one narrow task, are trained on that site's own data, and keep people as fallback; the picking that runs at the largest scale is not such a model
 
 Added later on 2026-11-21. Every figure here was read on the linked
@@ -458,6 +470,7 @@ Reading these:
   10 million interactions at Sereact. What can be downloaded and run on
   an SO-101 are the models under Findings 1, 3 and 5.
 
+<a id="r-finding-8"></a>
 ## Finding 8: the other objects can be taken out of an unchanged policy's pictures at run time, if they are painted over with background and not blacked out; the wrist camera is the weak spot
 
 Added on 2026-11-21 at 12:27, after the user's objection that a policy
@@ -474,7 +487,7 @@ of the paper at that time.
 
 Reading these:
 
-- The sentence under "Main conclusion" that a policy has to be trained
+- The sentence under ["Main conclusion"](#r-main-conclusion) that a policy has to be trained
   for it was wrong (see the amendment there). CGVD and BYOVLA leave the
   policy as it is.
 - How the other objects are removed matters. In CGVD's own comparison a
@@ -532,6 +545,7 @@ Reading these:
   [`TESTING_LEDGER.md`](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-run);
   what it means for the work: [`DEVELOPMENT_LEDGER.md`](DEVELOPMENT_LEDGER.md#d-2026-11-22-fast-sam3).
 
+<a id="r-finding-9"></a>
 ## Finding 9: playing all 50 predicted actions before the next look is the shipped default, not the best published method; a prediction at every step is not smoother by itself
 
 Added on 2026-11-22 after 14:13, on the user's question whether "50
@@ -586,24 +600,25 @@ Reading these:
   17 of 60, with overlapping ranges (`:3474-3477`). Jitter was not
   counted in those runs.
 
+<a id="r-what-follows-for-this-workshop"></a>
 ## What follows for this workshop
 
 - The plan to fine-tune SmolVLA so that it chooses one of four objects by
   the sentence
   (`~/.cursor/plans/four-object_sorting_fine-tune_608f9494.plan.md`) asks
-  the policy for exactly what Finding 1 shows to be unreliable. The user
+  the policy for exactly what [Finding 1](#r-finding-1) shows to be unreliable. The user
   dropped that plan on 2026-11-21.
 - Whatever replaces it follows the main conclusion at the top of this
   file: a separate part decides which object is meant, and the policy,
   if one is kept, is told by a mask.
-- Open, and the user's decision: which form of it. Way 1 of Finding 6
+- Open, and the user's decision: which form of it. Way 1 of [Finding 6](#r-finding-6)
   (no policy in the pick, as `VLA-VLM` does it), way 2 (SmolVLA kept for
   the motion, every other object blanked out of its pictures), or a
   policy that takes the mask as an input (MaskWAM, MaskHarness-WAM).
   None has been tried in this workshop.
 
   Amendment, 2026-11-21 12:27: the user decided on 2026-11-21 for way 2
-  in the form of Finding 8. The arm is moved by SmolVLA only; Gemma 4
+  in the form of [Finding 8](#r-finding-8). The arm is moved by SmolVLA only; Gemma 4
   E4B (the model already used for voice control) hears, reads the scene
   and plans; SAM 3 makes and follows the outlines; the other objects are
   painted over in SmolVLA's pictures. Not tried in this workshop yet.
@@ -616,15 +631,15 @@ Reading these:
   put to the user in the spec's section 11.
 - Task 3 does not need a policy with memory. The memory belongs in the
   program or agent that calls the pick and place steps.
-- Added 2026-11-22 (Finding 9): the checkpoint's 50 actions per
+- Added 2026-11-22 ([Finding 9](#r-finding-9)): the checkpoint's 50 actions per
   prediction stay until a test says otherwise. Every extra prediction
   also costs one SAM 3 call per camera, so fewer actions per prediction
   are only practical with the fast SAM 3. The test that would decide is
-  listed as open in `TESTING_LEDGER.md`, section "2026-11-22 — How often
-  SmolVLA is asked for a new plan"; whether to run it is the user's
+  listed as open in `TESTING_LEDGER.md`, section ["2026-11-22 — How often
+  SmolVLA is asked for a new plan"](TESTING_LEDGER.md#t-2026-11-22-how-often-smolvla-is-asked-for); whether to run it is the user's
   decision.
-- Added 2026-11-22: way 2 in the form of Finding 8 has now been tried in
-  simulation (amendment under Finding 8), so "Not tried in this workshop
+- Added 2026-11-22: way 2 in the form of [Finding 8](#r-finding-8) has now been tried in
+  simulation (amendment under [Finding 8](#r-finding-8)), so "Not tried in this workshop
   yet" in the amendment of 2026-11-21 12:27 above no longer holds for
   the simulation. What stands in the way of using it is SAM 3's time:
   through plain PyTorch a call took 6.93 s (top camera) and 9.18 s
@@ -637,16 +652,16 @@ Reading these:
 
   Amendment, 2026-11-22 after 17:17: it runs now, without Docker, in
   `.venv-sam3` (model files built at 504 pixels; one MIOpen setting
-  needed, `TESTING_LEDGER.md`, "The fast SAM 3 model built"). On the
+  needed, `TESTING_LEDGER.md`, ["The fast SAM 3 model built"](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-built)). On the
   stored plan pictures of two layouts (48 per camera, 640 by 480) it
   took 0.25 s per picture in the median against 6.55 s (top camera) and
   8.61 s (wrist) for the PyTorch route, and outlined the same cubes in
   250 of the 254 (plan, cube) pairs in which either route outlined a
   cube, with a median overlap of 0.95 (top) and 0.98 (wrist) between the
-  two routes' outlines (`TESTING_LEDGER.md`, "The fast SAM 3 connected").
+  two routes' outlines (`TESTING_LEDGER.md`, ["The fast SAM 3 connected"](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-connected)).
   The 10-layout run with it, same layouts and seeds as the 9 of 10 above,
   was in progress when this was written; its result goes into the table
-  under Finding 8 when it is in.
+  under [Finding 8](#r-finding-8) when it is in.
 
   Amendment, 2026-11-22 after 17:23: on the user's word the reference
   now is the workshop's SAM 3 (`--outlines sam3`); the plain PyTorch
@@ -655,6 +670,7 @@ Reading these:
   it ever be needed again; that evidence is not part of this repository
   and was not read for this file.
 
+<a id="r-not-verified-not-measured"></a>
 ## Not verified, not measured
 
 - Nothing here was run on this workshop's SO-101, in simulation or real.
@@ -668,13 +684,13 @@ Reading these:
   in simulation. SAM 3 runs on this machine's AMD graphics under ROCm
   through plain PyTorch, at seconds per picture, and the checkpoint was
   run on pictures with the other cubes painted over (amendment under
-  Finding 8; counts and times in `TESTING_LEDGER.md`, sections of
+  [Finding 8](#r-finding-8); counts and times in `TESTING_LEDGER.md`, sections of
   2026-11-22). Still not measured: anything on the real SO-101; SAM 3 on
   balls and cylinders; the fast SAM 3 reference on this machine.
 
   Amendment, 2026-11-22 after 17:17: the fast SAM 3 reference has now
-  run on this machine (the amendment at the end of "What follows for
-  this workshop"). Still not measured: the real SO-101, and SAM 3 on
+  run on this machine (the amendment at the end of ["What follows for
+  this workshop"](#r-what-follows-for-this-workshop)). Still not measured: the real SO-101, and SAM 3 on
   balls and cylinders.
 - The number of simulation trials per task in RMBench.
 - Success counts of two of the SO-101 example projects (so101-gap and
@@ -687,7 +703,7 @@ Reading these:
 - Whether the SO-101 port of PyRUA-Lean can be had from its author.
 - Any independent figure for Sereact's pick success or intervention
   rate.
-- For Finding 9: whether fewer actions per prediction, or RTC, reduces
+- For [Finding 9](#r-finding-9): whether fewer actions per prediction, or RTC, reduces
   the jitter or raises the success of this workshop's checkpoint; RTC's
   success counts; the defaults in the blog's list against their primary
   sources.
@@ -698,6 +714,7 @@ Reading these:
   comparison of SmolVLA with larger models under changed conditions
   ([arXiv 2611.13160](https://arxiv.org/abs/2611.13160)).
 
+<a id="r-unfinished"></a>
 ## Unfinished
 
 A test of whether a vision-language model can read a stack and plan the

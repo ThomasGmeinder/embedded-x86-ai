@@ -2,6 +2,7 @@
 
 Checkpoint runs live in `vla_testing/`. Scripted runs live in `scripted_testing/`. Each entry names the command, the seeds, and the counts from that run's own report.
 
+<a id="t-2026-11-18-100-randomized-pickups"></a>
 ## 2026-11-18 — 100 randomized pickups
 
 Command: `PYTHONPATH=src .venv/bin/python -u -m so101_smolvla.vla_test random 100`
@@ -21,6 +22,7 @@ Reports: `vla_testing/random/summary.json` and `vla_testing/random/seed-00000/re
 
 `in_box` is the cube center inside the tray after the run. `lifted` is that same last step, so a cube that was picked up and then set in the bin counts as not lifted. The 44 seeds that did not finish in the bin: 0, 1, 5, 6, 7, 11, 12, 13, 15, 19, 22, 23, 27, 31, 32, 36, 37, 40, 41, 42, 43, 46, 47, 50, 53, 55, 57, 58, 59, 60, 62, 63, 65, 67, 73, 76, 78, 82, 83, 84, 86, 93, 95, 96.
 
+<a id="t-2026-11-18-sapien-policy-backend-acceptance"></a>
 ## 2026-11-18 — SAPIEN policy-backend acceptance
 
 Focused command:
@@ -45,6 +47,7 @@ Eight failures require its NVIDIA CUDA GPU backend. One CPU gripper test failed:
 the commanded 60% position reached 1.697% after 20 steps. This failure was not
 excluded. The repository's real CPU SAPIEN reset/step/shutdown test passed.
 
+<a id="t-2026-11-18-clean-two-backend-baseline"></a>
 ## 2026-11-18 — Clean two-backend baseline
 
 After removing the hybrid SAPIEN renderer, analytical action-padding patch,
@@ -74,6 +77,7 @@ Result: seed 0 first succeeded at step 244. Raw lift/elbow targets reversed
 `sapien`, records the pinned simulator commit and complete environment
 arguments, and has episode and batch completion markers.
 
+<a id="t-2026-11-18-ten-random-layouts-per-backend-300"></a>
 ## 2026-11-18 — Ten random layouts per backend, 300 steps
 
 One command shape now selects either backend:
@@ -96,6 +100,7 @@ generated its own deterministic random layouts, so equal seed numbers do not
 mean equal cube/bin coordinates across the two independently implemented
 environments.
 
+<a id="t-2026-11-18-random-two-cube-stacking-baseline"></a>
 ## 2026-11-18 — Random two-cube stacking baseline
 
 Targeted command:
@@ -132,6 +137,7 @@ run. Frame inspection found that the opening wrist view does not contain a
 cube, unlike the real training frames. This result therefore measures the
 current SAPIEN reconstruction, not the checkpoint's final stacking capability.
 
+<a id="t-2026-11-19-two-cube-stacking-after-measured-reset"></a>
 ## 2026-11-19 — Two-cube stacking after measured reset-pose correction
 
 Targeted command:
@@ -160,6 +166,7 @@ Artifacts:
 `vla_testing/random-stacking-training-sapien-20261119-073618/REPORT.md` and
 `COMPLETE.json`.
 
+<a id="t-2026-11-19-two-cube-stacking-inside-the-shared"></a>
 ## 2026-11-19 — Two-cube stacking inside the shared reachable workspace
 
 Targeted result: 25 passed in 20.48 s. The tests cover 100 seeds for each
@@ -182,6 +189,7 @@ Artifacts:
 `vla_testing/random-stacking-training-sapien-20261119-074701/REPORT.md` and
 `COMPLETE.json`.
 
+<a id="t-2026-11-19-exact-20-40-mm-training-cubes"></a>
 ## 2026-11-19 — Exact 20/40 mm training cubes
 
 Targeted result: 14 passed in 17.91 s.
@@ -203,6 +211,7 @@ Artifacts:
 `vla_testing/random-stacking-training-sapien-20261119-075418/REPORT.md` and
 `COMPLETE.json`.
 
+<a id="t-2026-11-19-earlier-runs-of-this-day-recorded"></a>
 ## 2026-11-19 — Earlier runs of this day, recorded from their own reports
 
 These three runs were not entered when they ran. Counts are read from each
@@ -219,6 +228,7 @@ run's `summary.json`, `REPORT.md` and per-seed `trajectory.npz`.
   Small cube lifted on seeds 0, 1 and 8; seeds 1 and 8 dropped it. Cube
   displaced without grasp on seeds 2, 3 and 7. No lift on seeds 4, 5, 6 and 9.
 
+<a id="t-2026-11-19-stacking-in-the-measured-recording-rig"></a>
 ## 2026-11-19 — Stacking in the measured recording rig
 
 Full project command, run after the change:
@@ -255,6 +265,7 @@ Artifacts:
 `vla_testing/random-stacking-recording-rig-sapien-20261119-170422/REPORT.md`
 and `COMPLETE.json`.
 
+<a id="t-2026-11-19-which-sentence-picks-up-the-red"></a>
 ## 2026-11-19 — Which sentence picks up the red cube, with and without the blue cube
 
 Diagnostic runs, not regression tests. No repository code changed, so the
@@ -294,6 +305,7 @@ Analysis, nothing re-simulated, `.venv-sapien`:
   largest picture difference 0 of 255 levels in both cameras, at the start
   pose and at an approach pose.
 
+<a id="t-2026-11-19-black-hand-in-sapien"></a>
 ## 2026-11-19 — Black hand in SAPIEN
 
 Full project command, run after the change:
@@ -314,6 +326,7 @@ picture, 0 and 0 in the wrist picture.
 
 No model run has been made yet that changes only the hand colour.
 
+<a id="t-2026-11-19-cubes-painted-in-the-recorded-colours"></a>
 ## 2026-11-19 — Cubes painted in the recorded colours
 
 Diagnostic runs, not regression tests. Script:
@@ -348,6 +361,7 @@ both painted (CIE Lab distance; recordings: 52, 48, 18).
 Gripper paths of all nine runs:
 `~/.cache/so101-stack-training/analysis/gripper-paths.json`.
 
+<a id="t-2026-11-19-two-cube-stacking-with-the-black"></a>
 ## 2026-11-19 — Two-cube stacking with the black hand
 
 Command: `make random-stacking COUNT=10 BACKEND=sapien TASK=stack2-sim-view`
@@ -366,6 +380,7 @@ Also written: `overall-top.mp4` and `overall-wrist.mp4` in
 `vla_testing/random-stacking-recorded-blue-stack-sentence-sapien-20261119-184549/`
 (the ten seeds of that run joined with `record.accumulate`).
 
+<a id="t-2026-11-19-cube-places"></a>
 ## 2026-11-19 — Cube places: recordings against tests
 
 Analysis only, no model loaded, nothing simulated forward (`.venv-sapien`):
@@ -384,6 +399,7 @@ Analysis only, no model loaded, nothing simulated forward (`.venv-sapien`):
   0.88 × red cube's + 0.07 × blue cube's (13 mm left over). Red cube alone,
   20 episodes: direction 0.88 × red cube's (1.3° left over), distance 1.0 ×.
 
+<a id="t-2026-11-19-the-model-on-the-real-pictures"></a>
 ## 2026-11-19 — The model on the real pictures of 38 stacking recordings
 
 Offline check, no simulator. One tmux job (`real-pictures-1795113013`, log
@@ -412,6 +428,7 @@ direction 0.57 / 0.06 (124 answers); rendered pictures, first answer 0.42 /
 0.42 (50 episodes). Cubes on opposite sides of the arm, real pictures: turned
 to the red cube's side 16 of 16.
 
+<a id="t-2026-11-19-large-cube-painted-green"></a>
 ## 2026-11-19 — Large cube painted green
 
 Diagnostic runs, not regression tests. No repository code changed, so the
@@ -444,6 +461,7 @@ red cube's direction, as a share of the direction from the red to the large
 cube: green 0.30 (20 episodes, correlation 0.95), recorded blue 0.36 (40),
 simulator's pale blue 0.44 (30).
 
+<a id="t-2026-11-19-which-picture-carries-the-pull"></a>
 ## 2026-11-19 — Which picture carries the pull
 
 Offline check, no new episode. No repository code changed, so the project
@@ -482,9 +500,10 @@ moments) used a leave-out rule that also dropped seed 2, whose large cube
 settles 1.7 mm right after the reset without being touched; the rule now
 compares the two scenes directly.
 
+<a id="t-2026-11-20-recording-rig-measured-again"></a>
 ## 2026-11-20 — Recording rig measured again: tests and runs
 
-Amendment to "2026-11-19 — Stacking in the measured recording rig": the rig
+Amendment to ["2026-11-19 — Stacking in the measured recording rig"](#t-2026-11-19-stacking-in-the-measured-recording-rig): the rig
 values that run used (37° lens, pan relation 1.2, table 23 mm low) are
 replaced; the real-SAPIEN rig test now checks the measured cameras, joint
 zero points, arm drives and table height instead of the pan relation.
@@ -561,8 +580,9 @@ which replaces them; `release-top-parts-1795138884` and
 `release-top-cables-1795139620`, which replaces them.
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — The recording rig measured again".
+section ["2026-11-20 — The recording rig measured again"](DEVELOPMENT_LEDGER.md#d-2026-11-20-the-recording-rig-measured-again).
 
+<a id="t-2026-11-20-recorded-table-in-the-wrist-picture"></a>
 ## 2026-11-20 — Recorded table in the wrist picture: tests and runs
 
 Amendment to the section above: its last random run (011841, 0 stacks) is no
@@ -638,8 +658,9 @@ scene pictures, no episode simulated; about 0.31 s per answer). Each exited 0:
 | `wrist-table-from-top-1795143496` (tmux) | `wrist_table_from_top_picture.py release` and `grasp`, `release_aim_check.py`, `grasp_aim_predict.py`, `grasp_aim_check.py`, `release_answer_paths.py` | 33 and 38 | 132 and 152 | 172 s | `wrist-table-from-top-release.json`, `-release-aim.json`, `-release-paths.json`, `wrist-table-from-top-grasp.json`, `-grasp-aim.json` |
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — The wrist camera now sees the recorded table".
+section ["2026-11-20 — The wrist camera now sees the recorded table"](DEVELOPMENT_LEDGER.md#d-2026-11-20-the-wrist-camera-now-sees-the).
 
+<a id="t-2026-11-20-after-the-first-stacks"></a>
 ## 2026-11-20 — After the first stacks: diagnostic runs, no source change
 
 No file under `src/`, `tests/` or `configs/` changed after the full suite of
@@ -694,8 +715,9 @@ with the red cube nearer than 265 mm from the robot, in 19 of 23 with it
 farther.
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — After the first stacks".
+section ["2026-11-20 — After the first stacks"](DEVELOPMENT_LEDGER.md#d-2026-11-20-after-the-first-stacks).
 
+<a id="t-2026-11-20-the-reach-measured-offline"></a>
 ## 2026-11-20 — The reach measured offline: diagnostic jobs, no source change
 
 Still no change under `src/`, `tests/` or `configs/` since the full suite of
@@ -723,8 +745,9 @@ files were written by the first job only. The 105-frame pictures file and its
 two overview pictures were written again by the third job (same render).
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — The reach itself, measured".
+section ["2026-11-20 — The reach itself, measured"](DEVELOPMENT_LEDGER.md#d-2026-11-20-the-reach-itself-measured).
 
+<a id="t-2026-11-20-random-stacking-with-1-500-steps"></a>
 ## 2026-11-20 — Random stacking with 1,500 steps, and repeat runs of single seeds
 
 Still no change under `src/`, `tests/` or `configs/` since the full suite of
@@ -751,8 +774,8 @@ Step at which each stack is counted (`success_step` in `result.json`): seed
 1: 232, 3: 284, 4: 229, 5: 601, 7: 232, 8: 246, 9: 476, 12: 792, 13: 604,
 15: 395, 18: 274. Counted by step 300: 6; by 400: 7; by 600: 8; by 900: 11.
 
-The same seeds with 600 steps (runs 040630 and 041846, section "Recorded
-table in the wrist picture" above) gave 6/20. Compared step by step
+The same seeds with 600 steps (runs 040630 and 041846, section ["Recorded
+table in the wrist picture"](#t-2026-11-20-recorded-table-in-the-wrist-picture) above) gave 6/20. Compared step by step
 (`achieved` in each `trajectory.npz`, for as long as both runs lasted): 14
 seeds equal exactly; seeds 2, 7, 9, 17, 18 and 19 differ from steps 330, 124,
 391, 130, 187 and 127. The repeat runs: seed 7 equals the 1,500-step run
@@ -773,8 +796,9 @@ median 371, longest 898; longer than 300 frames: 155; than 400: 78; than
 (`sapien_rollout.py:35`); it was not changed.
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — More time per test".
+section ["2026-11-20 — More time per test"](DEVELOPMENT_LEDGER.md#d-2026-11-20-more-time-per-test).
 
+<a id="t-2026-11-20-the-same-seeds-with-900-steps"></a>
 ### The same seeds with 900 steps (requested by the user)
 
 `./scripts/run_random_stacking_regression.sh --count 20 --backend sapien
@@ -806,6 +830,7 @@ Amendment, later the same morning: "The cause is not verified" above is
 answered in the next section. The three runs differ because a test's course
 depended on the tests that ran before it in the same simulator.
 
+<a id="t-2026-11-20-a-new-environment-for-every-test"></a>
 ## 2026-11-20 — A new environment for every test: tests, repeat proof and runs
 
 All commands were run from `workshops/so101-smolvla` in a detached tmux
@@ -887,8 +912,9 @@ other source changes lie between the two runs, so the difference is not
 attributed to the worker.
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — Why the same seed ran differently".
+section ["2026-11-20 — Why the same seed ran differently"](DEVELOPMENT_LEDGER.md#d-2026-11-20-why-the-same-seed-ran-differently).
 
+<a id="t-2026-11-20-wrist-picture-at-the-reach-and"></a>
 ## 2026-11-20 — Wrist picture at the reach, and the stacking test's own step limit
 
 All commands were run from `workshops/so101-smolvla` in a detached tmux
@@ -928,6 +954,7 @@ me after the first test, because the user asked for the placement change
 before the rerun. It left `vla_testing/random-stacking-recording-rig-sapien-20261120-102611`
 with `seed-00000` only and no `COMPLETE.json`.
 
+<a id="t-2026-11-20-room-for-the-fingers-shared-finger"></a>
 ## 2026-11-20 — Room for the fingers, shared finger-angle measure: tests and run
 
 Same conventions as the section above.
@@ -1015,11 +1042,12 @@ written by that session (file times), and the 13 tests above that repeat
 exactly show the stacking run was not disturbed.
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-sections "2026-11-20 — The wrist picture at the reach, and a step limit of
-its own for the stacking test" and "2026-11-20 — Room for the fingers
+sections ["2026-11-20 — The wrist picture at the reach, and a step limit of
+its own for the stacking test"](DEVELOPMENT_LEDGER.md#d-2026-11-20-the-wrist-picture-at-the-reach) and "2026-11-20 — Room for the fingers
 between the cubes, one finger-angle measure for every test, and what the
 wrist roll does".
 
+<a id="t-2026-11-20-wrist-roll-in-the-training-set"></a>
 ## 2026-11-20 — Wrist roll in the training set: the jobs, entered by the session that ran them
 
 Amendment to the paragraph "Run by another agent session during this run" of
@@ -1062,17 +1090,18 @@ Read, not run: the model card of the checkpoint and the generation code in
 the data set's `source/0_dataset_gen/`.
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — What the training set teaches about the wrist roll,
-and whether the fine-tuning used the simulated part".
+section ["2026-11-20 — What the training set teaches about the wrist roll,
+and whether the fine-tuning used the simulated part"](DEVELOPMENT_LEDGER.md#d-2026-11-20-what-the-training-set-teaches-about).
 
+<a id="t-2026-11-20-why-room-for-the-fingers-cost"></a>
 ## 2026-11-20 — Why room for the fingers cost stacks: runs and diagnostic jobs, no source change
 
 Same conventions as the sections above: commands run from
 `workshops/so101-smolvla`, each in a detached tmux session with an exit
 file, logs in `~/.cache/so101-stack-training/logs/` under the job's name,
 result files in `~/.cache/so101-stack-training/analysis/`. Unchanged
-checkpoint (revision `7d9501d2…`). Written by the session that wrote "Room
-for the fingers" above.
+checkpoint (revision `7d9501d2…`). Written by the session that wrote ["Room
+for the fingers"](#t-2026-11-20-room-for-the-fingers-shared-finger) above.
 
 No file under `src/`, `tests/`, `configs/` or `scripts/` was changed in
 this part (none is newer than the log of `full-suite-1795168769`), so the
@@ -1125,8 +1154,9 @@ bases, and the checks of the counts in this section.
 ask for (recorded in `AGENT_MISTAKES.md`).
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — Why room for the fingers cost stacks".
+section ["2026-11-20 — Why room for the fingers cost stacks"](DEVELOPMENT_LEDGER.md#d-2026-11-20-why-room-for-the-fingers-cost).
 
+<a id="t-2026-11-20-gripper-reading-while-the-cube-is"></a>
 ## 2026-11-20 — Gripper reading while the cube is carried: diagnostic jobs, no source change
 
 Same conventions as the section above. Unchanged checkpoint (revision
@@ -1157,8 +1187,9 @@ the rules ask for (amendment in `AGENT_MISTAKES.md`); `let-go-places` was
 announced first.
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — The gripper reading while the cube is carried".
+section ["2026-11-20 — The gripper reading while the cube is carried"](DEVELOPMENT_LEDGER.md#d-2026-11-20-the-gripper-reading-while-the-cube).
 
+<a id="t-2026-11-20-the-carry-after-the-lift-tests"></a>
 ## 2026-11-20 — The carry after the lift, tests against humans: one diagnostic job, no source change
 
 Same conventions as above. No file under `src/`, `tests/`, `configs/` or
@@ -1184,11 +1215,12 @@ of under one second and no result file: `release-top-parts.json` (all
 eight combinations of table, cubes and robot) and
 `release-top-parts-predictions.npz` (joint targets at each answer's
 opening, scene robot against real robot), both written last night by the
-jobs of "The recording rig measured again".
+jobs of ["The recording rig measured again"](DEVELOPMENT_LEDGER.md#d-2026-11-20-the-recording-rig-measured-again).
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — After the lift, read from the tests themselves".
+section ["2026-11-20 — After the lift, read from the tests themselves"](DEVELOPMENT_LEDGER.md#d-2026-11-20-after-the-lift-read-from-the).
 
+<a id="t-2026-11-20-wrist-roll-zero-point-and-what"></a>
 ## 2026-11-20 — Wrist roll zero point and what happens after the landing: diagnostic jobs, no source change
 
 Same conventions as above. No file under `src/`, `tests/`, `configs/` or
@@ -1226,8 +1258,9 @@ announcement and the pre-code statement the rules ask for first
 before their launch.
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — Two open candidates closed".
+section ["2026-11-20 — Two open candidates closed"](DEVELOPMENT_LEDGER.md#d-2026-11-20-two-open-candidates-closed).
 
+<a id="t-2026-11-20-the-top-cameras-distance"></a>
 ## 2026-11-20 — The top camera's distance: lens scan and the model's answers at the release and at the grasp, no source change
 
 Same conventions as above. No file under `src/`, `tests/`, `configs/` or
@@ -1276,9 +1309,10 @@ held its readiness checks. `grasp-top-lens-1795178678` was announced
 first, and its readiness check built the scene once with the new script.
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — The top camera's distance: the outline asks for a
-nearer camera, the model's aim does not follow".
+section ["2026-11-20 — The top camera's distance: the outline asks for a
+nearer camera, the model's aim does not follow"](DEVELOPMENT_LEDGER.md#d-2026-11-20-the-top-cameras-distance).
 
+<a id="t-2026-11-20-stacking-at-the-recordings-own-places"></a>
 ## 2026-11-20 — Stacking at the recordings' own places and start poses, repeated in today's state: 4 of 20
 
 Same conventions as above. No file under `src/`, `tests/`, `configs/` or
@@ -1308,9 +1342,10 @@ central workspace (`reachable_workspace.is_reachable_xy`); the test-by-test
 comparison of the two runs.
 
 The job was announced before its launch. The measured numbers and what
-they mean are in `DEVELOPMENT_LEDGER.md`, section "2026-11-20 — Where the
-tests put the cubes, checked again in today's state".
+they mean are in `DEVELOPMENT_LEDGER.md`, section ["2026-11-20 — Where the
+tests put the cubes, checked again in today's state"](DEVELOPMENT_LEDGER.md#d-2026-11-20-where-the-tests-put-the-cubes).
 
+<a id="t-2026-11-20-random-stacking-with-the-model-asked"></a>
 ## 2026-11-20 — Random stacking with the model asked every 25 steps, three policy seed bases: 7, 8 and 6 of 20, no source change
 
 Same conventions as above. No file under `src/`, `tests/`, `configs/` or
@@ -1355,8 +1390,9 @@ launch held its readiness checks. `asked-every-25-more-1795181359`,
 `release_place_in_tests.py` and its run were announced first.
 
 The measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — Asking the model every 25 steps".
+section ["2026-11-20 — Asking the model every 25 steps"](DEVELOPMENT_LEDGER.md#d-2026-11-20-asking-the-model-every-25-steps).
 
+<a id="t-2026-11-20-the-cable-on-the-recording-robots"></a>
 ## 2026-11-20 — The cable on the recording robot's arm: pictures, the model's answers at the reach, no source change
 
 Same conventions as above. No file under `src/`, `tests/`, `configs/` or
@@ -1389,9 +1425,10 @@ pictures of recording 12 written to `/tmp/arm-cable-whole-105-rec3.png`
 and looked at.
 
 Both launches were announced first. The measured numbers and what they
-mean are in `DEVELOPMENT_LEDGER.md`, section "2026-11-20 — The cable on
-the recording robot's arm".
+mean are in `DEVELOPMENT_LEDGER.md`, section ["2026-11-20 — The cable on
+the recording robot's arm"](DEVELOPMENT_LEDGER.md#d-2026-11-20-the-cable-on-the-recording-robots).
 
+<a id="t-2026-11-20-the-table-in-the-wrist-picture"></a>
 ## 2026-11-20 — The table in the wrist picture during the reach: the leftover painted over, and the real table kept around cubes and hand; no source change
 
 Same conventions as above. No file under `src/`, `tests/`, `configs/` or
@@ -1439,8 +1476,9 @@ the real top and wrist pictures, in rings and directions.
 The first trial was run without being announced (amendment in
 `AGENT_MISTAKES.md`); everything after it was announced first. The
 measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — The table in the wrist picture during the reach".
+section ["2026-11-20 — The table in the wrist picture during the reach"](DEVELOPMENT_LEDGER.md#d-2026-11-20-the-table-in-the-wrist-picture).
 
+<a id="t-2026-11-20-addition-15-58"></a>
 ### Addition, 15:58: the same test at the release and at the grasp moment
 
 Still no file under `src/`, `tests/`, `configs/` or `scripts/` newer than
@@ -1476,6 +1514,7 @@ minus the real table under the scene's own cubes and hand from
 
 Both launches were announced first.
 
+<a id="t-2026-11-20-addition-17-30"></a>
 ### Addition, 17:30: the drawn robot by link, and the random stacking test with the base not drawn
 
 Still no file under `src/`, `tests/`, `configs/` or `scripts/` newer than
@@ -1540,8 +1579,9 @@ Announced first: all launches of this part. Not announced: the first two
 tool calls of the turn at 16:45 (a look at `tmux ls` and the logs, and the
 wait on the running session); recorded in `AGENT_MISTAKES.md`. The
 measured numbers and what they mean are in `DEVELOPMENT_LEDGER.md`,
-section "2026-11-20 — The drawn robot taken apart by link".
+section ["2026-11-20 — The drawn robot taken apart by link"](DEVELOPMENT_LEDGER.md#d-2026-11-20-the-drawn-robot-taken-apart-by).
 
+<a id="t-2026-11-20-addition-17-36"></a>
 ### Addition, 17:36: the 7 earlier layouts with their original policy seeds, today's code
 
 | Job | Started, ended | Command | Result |
@@ -1557,11 +1597,12 @@ of them stack in both; seed 17 "final stack unstable" with 900 steps and
 "dropped cube" with 650); `git log` and `git status` for the workshop
 (last commit `2e59205`, 2026-11-18 22:39; nothing since is committed).
 
+<a id="t-2026-11-20-addition-18-15"></a>
 ### Addition, 18:15: the earlier placement restored, the suite, and the random stacking test that gives 10 in 20 again
 
 On the user's instruction of 17:52, "check in the 10 out of 20 state".
 What was changed and what it means is in `DEVELOPMENT_LEDGER.md`, section
-"Placement back to the earlier rule on the user's word".
+["Placement back to the earlier rule on the user's word"](DEVELOPMENT_LEDGER.md#d-2026-11-20-placement-back-to-the-earlier-rule).
 
 | Job | Started, ended | Command | Result |
 |---|---|---|---|
@@ -1584,6 +1625,7 @@ of this part was announced first. The suite was run after the last edit
 of product source (17:55:02) and of the tests (17:57:02), and before the
 commit.
 
+<a id="t-2026-11-20-addition-18-20"></a>
 ### Addition, 18:20: the commit `e9f453c` and the suite run from an export of it
 
 The state above was committed at 18:16:07 as `e9f453c` on branch
@@ -1603,6 +1645,7 @@ tracked files equal the commit (`git status` lists no modified tracked
 file in the workshop after the commit). The folder
 `/tmp/so101-commit-e9f453c` was left in place.
 
+<a id="t-2026-11-20-addition-19-10"></a>
 ### Addition, 19:10: the push, and the checkpoint asked on its own training pictures
 
 The push: `git push origin so101-smolvla` after a fetch that showed no
@@ -1626,11 +1669,12 @@ simulator's side. Typed-in afterwards, from stored files only: the three
 result files printed; the same measure for the seven picture pairs of
 `early-reach-25-per-recording.npz`; a search of the data set's source
 folder and of the upstream simulator for a stacking task (none). The
-numbers and what they mean are in `DEVELOPMENT_LEDGER.md`, section "The
-checkpoint on its own training pictures". No product file changed, so
+numbers and what they mean are in `DEVELOPMENT_LEDGER.md`, section ["The
+checkpoint on its own training pictures"](DEVELOPMENT_LEDGER.md#d-2026-11-20-the-checkpoint-on-its-own-training). No product file changed, so
 the test suite was not run again. The ledger additions of 19:10 and the
 diagnostic are not committed.
 
+<a id="t-2026-11-20-addition-19-22"></a>
 ### Addition, 19:22: stored files read again, no job
 
 No tmux job, no model run, no simulation, no test run; `tmux ls` showed
@@ -1649,13 +1693,14 @@ Two of these prints stopped on a fault of their own and gave no number:
 one treated `summary.json` of the run as a dictionary (it is a list),
 one measured 15 steps after an opening command that is the last stored
 step of its test; the second was repeated with that case named. The
-numbers and what they say are in `DEVELOPMENT_LEDGER.md`, "Addition,
-19:22" at its end. No file under `src/`, `tests/`, `configs/` or
+numbers and what they say are in `DEVELOPMENT_LEDGER.md`, ["Addition,
+19:22"](DEVELOPMENT_LEDGER.md#d-2026-11-20-addition-19-22) at its end. No file under `src/`, `tests/`, `configs/` or
 `scripts/` changed, so the suite was not run again; its last run is the
 one of 18:16:38 from the export of commit `e9f453c` (103 passed, 1
 expected failure). Not committed: the ledger additions of 19:10 and of
 19:22 and the diagnostic `answers_on_own_training_pictures.py`.
 
+<a id="t-2026-11-20-addition-21-05"></a>
 ### Addition, 21:05: the humans' commands replayed, the stop-short of the real joints, and a model run with it
 
 No product file, test or configuration changed. Logs and exit files are
@@ -1703,7 +1748,7 @@ line is corrected and was tried with a failing command; the job of
 20:46:35 is the first whose exit file is the job's own status.
 
 The numbers and what they say are in `DEVELOPMENT_LEDGER.md`,
-"Addition, 21:05" at its end. No file under `src/`, `tests/`,
+["Addition, 21:05"](DEVELOPMENT_LEDGER.md#d-2026-11-20-addition-21-05) at its end. No file under `src/`, `tests/`,
 `configs/` or `scripts/` changed, so the suite was not run again; its
 last run is the one of 18:16:38 from the export of commit `e9f453c`
 (103 passed, 1 expected failure). Not committed: the ledger additions
@@ -1712,6 +1757,7 @@ of 19:10, 19:22 and 21:05 and the diagnostics
 `replay_recordings_fresh_scene.py`, `servo_stop_short.py`,
 `servo_hold.py` and `stacking_with_servo_stop_short.py`.
 
+<a id="t-2026-11-20-addition-21-30"></a>
 ### Addition, 21:30: the humans' commands with the cubes from the first top picture
 
 Started after the final response of 21:02 on the automatic goal
@@ -1729,17 +1775,18 @@ changed. Simulator side, `.venv-sapien`, from the workshop folder.
 The waiting call of the tmux job was aborted before it printed
 anything; the job itself ran to its end, and its exit file, log and
 result files were read at 21:27. The numbers and what they say are in
-`DEVELOPMENT_LEDGER.md`, "Addition, 21:30". The suite was not run again
+`DEVELOPMENT_LEDGER.md`, ["Addition, 21:30"](DEVELOPMENT_LEDGER.md#d-2026-11-20-addition-21-30). The suite was not run again
 (no file under `src/`, `tests/`, `configs/` or `scripts/` changed).
 Nothing is committed.
 
+<a id="t-2026-11-20-addition-22-05"></a>
 ### Addition, 22:05: cleanup of uncommitted files; no test and no model run
 
 On the user's "go" of 22:00. No tmux job, no model run, no simulation;
 `tmux ls` showed no server before and after. Every step was a
 foreground command run from `workshops/so101-smolvla`; how long each
 took was not noted. What was deleted and why is in
-`DEVELOPMENT_LEDGER.md`, "Addition, 22:05".
+`DEVELOPMENT_LEDGER.md`, ["Addition, 22:05"](DEVELOPMENT_LEDGER.md#d-2026-11-20-addition-22-05).
 
 | Step | When | Command | Result |
 |---|---|---|---|
@@ -1767,6 +1814,7 @@ does. Rows that name `random-stacking-servo-stop-short-sapien-20261120-204636`,
 `…-204302` or `stacking_with_servo_stop_short.py` name files that were
 deleted here.
 
+<a id="t-2026-11-21-gemma-4-voice-control-the-voice"></a>
 ## 2026-11-21 — Gemma 4 voice control, the voice notebook and its tests
 
 Written after 19:01. The jobs of this day ran through
@@ -1781,9 +1829,9 @@ log; commands are read from each job's script.
 The jobs of this day before 16:06 (picture reading by Gemma, the voice
 loop beside picture requests, the plain program on outlines, the marker
 question, the two stack commands) are listed with job names, clock
-times and results in `DEVELOPMENT_LEDGER.md`, sections "2026-11-21 —
-Gemma 4 beside SmolVLA" and "2026-11-21 — Task 3 without Gemma reading
-pictures". They are not copied here.
+times and results in `DEVELOPMENT_LEDGER.md`, sections ["2026-11-21 —
+Gemma 4 beside SmolVLA"](DEVELOPMENT_LEDGER.md#d-2026-11-21-gemma-4-beside-smolvla) and ["2026-11-21 — Task 3 without Gemma reading
+pictures"](DEVELOPMENT_LEDGER.md#d-2026-11-21-task-3-without-gemma-reading-pictures). They are not copied here.
 
 Tests of the Gemma client outside the workshop's suite:
 
@@ -1845,7 +1893,7 @@ and the bin test (no file under `src/`, `configs/` or `scripts/`
 changed).
 
 What the numbers mean is in `DEVELOPMENT_LEDGER.md`, section
-"2026-11-21 — Voice control for task 1", and in `SPEC.md`, sections 4.5
+["2026-11-21 — Voice control for task 1"](DEVELOPMENT_LEDGER.md#d-2026-11-21-voice-control-for-task-1), and in `SPEC.md`, sections 4.5
 and 4.6.
 
 Amendment, 2026-11-21, after 19:08 (clock read in the step before), to
@@ -1880,6 +1928,7 @@ this section.
   line as "Listening…". The log line is "Listening to your microphone.
   Speak; interrupt the cell to stop.", followed by "Stopped listening."
 
+<a id="t-2026-11-21-addition-after-19"></a>
 ### Addition, after 19:20: the table of the notebook's section 5 grows row by row
 
 On the user's request of 19:06 ("the latest result is immediately added
@@ -1930,6 +1979,7 @@ was opened; the tests show that the kernel sends the redraws. The
 development ledger has no entry for this change: it was not read again
 in full in this part of the session, so it was not edited.
 
+<a id="t-2026-11-22-three-cubes-into-one-bin"></a>
 ## 2026-11-22 — Three cubes into one bin: the test, its video of three feeds, and SAM 3 outlines
 
 Written after 13:10, the end of the last suite run below, and checked
@@ -1953,6 +2003,7 @@ option `--pictures` says what SmolVLA is shown; the option `--outlines`
 (new today) says whether the picture editor paints by the simulator's
 outlines or by SAM 3's (SAM 3 = Segment Anything Model 3).
 
+<a id="t-2026-11-22-the-scenes-start-measured-before-any"></a>
 ### The scene's start, measured before any model run
 
 Typed-in scripts under `/tmp`, through the real simulator worker, no
@@ -1968,6 +2019,7 @@ model:
 | `three-cubes-hold3-1795312604` | 02:56:44 to 02:57:11, exit 0 | the same | with bin and cubes kept clear of the resting arm: bin and cubes move 0.00 mm in five held steps on seeds 0 to 29 (`AGENT_MISTAKES.md:2099-2100`) |
 | `three-cubes-pixels2-1795312631` | 02:57:11 to 02:57:35, exit 0 | `… /tmp/three-cubes-measure.py` | as the first row with the new layouts: shares 1.0000 and 1.0000, 9,410 pixels removed, 0 changed outside; top picture: red 1,207, green 1,376, blue 696 pixels |
 
+<a id="t-2026-11-22-the-three-model-runs-of-03"></a>
 ### The three model runs of 03:04
 
 Job `three-cube-runs-1795313049`, 03:04:09 to 03:37:53, exit 0, command
@@ -1995,6 +2047,7 @@ each layout folder holds `top.mp4`, `wrist.mp4` and `rollout.mp4` and no
 (listed for `seed-00000` of each run in the turn this section was
 written in).
 
+<a id="t-2026-11-22-sam-3-on-the-stored-pictures"></a>
 ### SAM 3 on the stored pictures of the unedited run (no simulator, no SmolVLA)
 
 Scripts in `~/.cache/stack-memory-agent-test/`, run with `.venv/bin/python
@@ -2028,6 +2081,7 @@ as not visible (`sam3-tracking/result.json`, `per_picture`):
 | tracking, fed a picture every 10 steps | top | 24 of 24 | 5 of 24 | 6.81, 2.44, 7.43 |
 | the same | wrist | 22 of 24 (blue cube not outlined at steps 250 and 350) | 24 of 24 | 9.55, 2.69, 11.53 |
 
+<a id="t-2026-11-22-tests"></a>
 ### Tests
 
 | Job | Clock, exit | Command | Result |
@@ -2071,9 +2125,10 @@ Not run: a model run with `--outlines sam3` (SmolVLA moving the arm by
 SAM 3's outlines). The three model runs above used the simulator's
 outlines. No test with a person's voice.
 
-What the numbers mean is in `DEVELOPMENT_LEDGER.md`, section "2026-11-22
-— Three cubes into one bin".
+What the numbers mean is in `DEVELOPMENT_LEDGER.md`, section ["2026-11-22
+— Three cubes into one bin"](DEVELOPMENT_LEDGER.md#d-2026-11-22-three-cubes-into-one-bin).
 
+<a id="t-2026-11-22-how-often-smolvla-is-asked-for"></a>
 ## 2026-11-22 — How often SmolVLA is asked for a new plan: what is tested and what is open; no new run
 
 Written after 14:16:44 (clock printed in the step before). No model run
@@ -2081,7 +2136,7 @@ and no test run was made for this section. It puts stored results under
 one question the user raised at 14:07: would the arm move more smoothly
 if SmolVLA predicted more often than every 50 steps? This ledger was
 read in full (2,075 lines) in the same turn. The published side is in
-`RESEARCH.md`, Finding 9.
+`RESEARCH.md`, [Finding 9](RESEARCH.md#r-finding-9).
 
 "Actions played" is how many of the 50 predicted actions are carried
 out before new pictures are taken (`n_action_steps` in LeRobot). Every
@@ -2115,7 +2170,7 @@ Open, each to be run only on the user's word:
    can be counted without a model run.
 2. The three-cube bin test at 25 and at 10 actions played. It has only
    been run at 50.
-3. Real-Time Chunking (RTC; `RESEARCH.md`, Finding 9). The installed
+3. Real-Time Chunking (RTC; `RESEARCH.md`, [Finding 9](RESEARCH.md#r-finding-9)). The installed
    LeRobot 0.7.0 has it for SmolVLA, through `predict_action_chunk` and
    not through `select_action` (`modeling_smolvla.py:270-272` in
    `.venv`). The runner calls `select_action`
@@ -2130,6 +2185,7 @@ today's medians of 6.40 s (top) and 7.87 s (wrist) per call (lines
 figures are multiplied, not measured. Fewer actions per plan are only
 practical with the fast SAM 3.
 
+<a id="t-2026-11-22-three-cubes-into-one-bin-by"></a>
 ## 2026-11-22 — Three cubes into one bin by SAM 3's outlines: 9 of 10 layouts, 29 of 30 commands; and the environment for the fast SAM 3
 
 Appended at about 14:54 from my notes of the turn before, before this
@@ -2202,6 +2258,7 @@ SAM 3 in this run, from `plans[i]["sam3"]` of the ten `result.json`
   picture at all (arm and bin hide cubes). So these are counts of
   missing outlines, not yet of SAM 3's misses.
 
+<a id="t-2026-11-22-the-environment-for-the-fast-sam"></a>
 ### The environment for the fast SAM 3 (`sam3-tracker-rocm` v0.4.0-rc1 without Docker)
 
 New, uncommitted: `configs/sam3_reference.json`,
@@ -2247,6 +2304,7 @@ event `tmux wait-for`), logs under `/tmp/test-<id>.log` and
 `started-` and `ended-` lines of each log or the `date` printed with
 the command; counts are from each log, read in this turn.
 
+<a id="t-2026-11-22-the-cursor-sessions-last-jobs-read"></a>
 ### The Cursor session's last jobs, read from their logs (not entered by it)
 
 | Job | Clock, exit | Command | Result |
@@ -2259,6 +2317,7 @@ its failure; its last recorded step is a readiness check that found
 `scipy` missing from `.venv-sam3` (the reference imports it in one
 fallback only, `tracker/rocm_patches.py`; the build never reached it).
 
+<a id="t-2026-11-22-the-cause-measured"></a>
 ### The cause, measured
 
 The failing step is the first of the build that runs the live pipeline.
@@ -2293,6 +2352,7 @@ it (the reference sets no MIOpen variable anywhere). The upstream
 repository has no commit after the pinned `8005dc6` (`git fetch` at
 about 16:10; v0.4.0-rc1 is its newest tag).
 
+<a id="t-2026-11-22-the-fix-and-its-tests"></a>
 ### The fix and its tests
 
 Changed, uncommitted: `scripts/run_sam3_reference.sh` exports
@@ -2316,6 +2376,7 @@ frame (plan step 0.4; the prewarm result holds no timing). Not run: the
 reference on our pictures (step 0.5); nothing of the workshop calls the
 reference yet (step 1).
 
+<a id="t-2026-11-22-commits-of-this-turn-after-the"></a>
 ### Commits of this turn, after the suite
 
 `e1e54bb` (the three-cube test with SAM 3 outlines: 7 new modules, 9
@@ -2376,6 +2437,7 @@ graphics processor and wait for the run); the full suite after these
 changes. The comparison of the finished run with the PyTorch run is
 entered below when the run ends.
 
+<a id="t-2026-11-22-addition-after-17"></a>
 ### Addition, after 17:23:50: the reference supersedes the PyTorch route
 
 On the user's word of this turn ("supersede pytorch sam3 with fast
@@ -2489,3 +2551,18 @@ measured: the reference's own demo frame time (plan step 0.4); the run
 above gives 0.29 and 0.32 s per 640 by 480 picture with full detection
 on every call, against its README's 0.09 s for one object at 504 pixels
 with its own pipeline.
+
+<a id="t-2026-11-22-cross-links"></a>
+### Addition, after 17:45: anchors and links, a format pass over the documents
+
+On the user's decision of this evening every level-two and level-three
+heading of `TESTING_LEDGER.md`, `DEVELOPMENT_LEDGER.md`, `RESEARCH.md`
+and `SPEC.md` carries a short id in an HTML anchor line above it
+(prefixes `t-`, `d-`, `r-`, `s-`), and quoted section titles in the five
+documents (the `README.md` too) that name exactly one heading are now
+links to it. No sentence, number or table was changed; a quoted title
+reads as before and is clickable. From here on: a number from a log or a
+result file is written in the testing ledger only, the development
+ledger and the research file link to it, the spec links to both. The
+script ran once and is not kept; the check that every link resolves to
+an anchor found none unresolved.

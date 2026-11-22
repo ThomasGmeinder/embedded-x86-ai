@@ -4,6 +4,7 @@ What was learned while making the SO-101 digital twin, simulated in MuJoCo, run 
 
 The task string the checkpoint path uses is `Pick up a cube and place in the bin`. One inference is 50 absolute joint targets, played one per tick at 30 Hz. Nothing is averaged before the command.
 
+<a id="d-2026-11-17-digital-twin-cameras-bin-first-pickup"></a>
 ## 2026-11-17 — Digital twin, cameras, bin, first pickup
 
 Commits `d0cdaca` through `80a4ec2`.
@@ -14,6 +15,7 @@ A 500-step rollout of the digital twin puts the cube in the bin. The arm jitters
 
 Lesson: the jitter is in the commanded targets. Smoothing them was tried and removed. The project rule forbids a filter the published controller does not run.
 
+<a id="d-2026-11-18-randomized-runs-then-the-wrist-picture"></a>
 ## 2026-11-18 — Randomized runs, then the wrist picture
 
 Commits `a5fc0b2`, `cb43e02`, `bda51df` existed when this entry was written. The rest of the entry had no commit on 2026-11-18.
@@ -29,6 +31,7 @@ Work done the same day. It had no commit when this entry was written:
 
 `make random COUNT=1` is the local launcher (`Makefile`, `scripts/run_random_regression.sh`). It writes a timestamped directory.
 
+<a id="d-finding-the-model-is-smooth-on"></a>
 ## Finding — the model is smooth on training pictures and jagged on the digital twin’s wrist picture
 
 The published sampler draws one normal value at every step of the 50 and integrates the checkpoint’s 10 Euler steps. On 14 training episodes (484–497), at the window where the lift and elbow move the most, that sampler reverses on 4.4% of steps and misses the recorded action by about 4°. The direction matches the recording every time.
@@ -56,8 +59,10 @@ The dataset stores no cube pose and no bin pose. The digital twin’s cube and b
 
 Lesson: the checkpoint follows a smooth demonstration when the wrist picture is one it was trained on. It does not carry that smooth trajectory over to the digital twin’s wrist picture. A pick can still finish. With the cube at (0.206, 0.150) and the bin at (0.297, −0.021), seed 0 ends in the bin and the arm is still jittery.
 
+<a id="d-2026-11-18-finger-contact-ten-seeds-the-pause"></a>
 ## 2026-11-18 — Finger contact, ten seeds, the pause after the drop
 
+<a id="d-2026-11-18-mistake-the-finger-contact-was-turned"></a>
 ### Mistake — the finger contact was turned off, then the wrong file was restored
 
 The Robot Studio file `so101_new_calib.xml` collides with the finger meshes `wrist_roll_follower_so101_v1` and `moving_jaw_so101_v1`. Those geoms use class `collision`. They are the pinch surfaces.
@@ -70,6 +75,7 @@ Asked to put `so101.xml` back to the original, the restore used `git checkout`. 
 
 The disabled collision was hiding a real grasp failure. `Expert.run((0.22, -0.08), azimuth=0.4)` returns false. The cube is at z 0.085 m and the jaws are not touching it. The mesh knocks the cube out of the fingers. `tests/test_expert.py` fails on that. The collision disable is not going back in.
 
+<a id="d-2026-11-18-ten-seeds-on-the-published-finger"></a>
 ### Ten seeds on the published finger mesh
 
 `./scripts/run_random_regression.sh 10` exited 0 in 39 s. Seeds 0–9. Six cubes ended in the bin. All ten were picked up. The jaws touched the cube on every seed. Seed 3 was the only one not held. Finger-to-face angle at grip: mean 8.4°, median 7.4°, max 19.0° on seed 9. Those rows used the old hold flag, which became true on a squeeze even while the cube was still on the table. A hold now requires the cube off the table on the same step, still in the jaws.
@@ -87,16 +93,19 @@ The disabled collision was hiding a real grasp failure. `Expert.run((0.22, -0.08
 | 8 | pass | pass | 6.8° |
 | 9 | pass | pass | 19.0° |
 
+<a id="d-2026-11-18-the-arm-sits-still-after-the"></a>
 ### The arm sits still after the cube is in the bin
 
 `rollout` plays until `EVAL_STEPS` (500) and does not look at `in_box`. `in_box` is recorded after the loop. 500 steps is 16.7 s on every seed. On seed 1 the top picture matches the final frame from 8.9 s on, so the last 7.8 s are the open gripper over the cube in the bin. Seeds 5 and 8 hold the same way for 6.9 s and 8.3 s. The later 50-step chunks leave the arm there, and the loop keeps commanding them. The published training env stops at 400 steps. This runner uses 500, and it does not stop when the cube is down.
 
+<a id="d-conclusion-the-finetuned-model-does-not"></a>
 ## Conclusion — the finetuned model does not generalize to this digital twin
 
 The checkpoint `Harrysunshine/so101-smolvla-sim-real-10task` was trained in the SAPIEN simulation that produced `Harrysunshine/so101-sim-pickplace-v2`. It does not generalize to this MuJoCo digital twin.
 
 Shown a training picture, it follows the recorded shoulder command to about 1°. Shown this twin’s pictures, the same checkpoint reverses direction by 1–2° and the arm jiggles. A pick can still finish. In the ten-seed run, 6 of 10 cubes ended in the bin. That success count has not improved.
 
+<a id="d-comparison-the-training-simulation-and-this"></a>
 ## Comparison — the training simulation and this simulation
 
 The training simulation is SAPIEN through ManiSkill, environment `SO101PickPlaceCube40-v1`. Physics is 120 Hz. Control is 30 Hz. An episode stops at 400 steps. The arm color in that rig is (0.05, 0.05, 0.05). A training top frame has no yellow pixels. The cube is 40 mm and 12.8 g.
@@ -107,12 +116,14 @@ Same joints, episode 490. On the training pictures the lift error is 0.88° at f
 
 The cameras match: 640×480, 59.17° vertical field, wrist lens on the KIT optical frame. Both use absolute joint targets, the same task string, and the same 40 mm pale-blue cube. The recorded training motion does not jiggle. The lift reverses on 1.45% of 167,804 steps, and on 0% of the busiest 50 steps in all 498 episodes. A training clip’s picture never reverses direction (0 of 129 moving frames). This twin’s ten-seed video reverses on 27–53% of moving frames.
 
+<a id="d-2026-11-18-i-reported-that-the-pickups-did"></a>
 ## 2026-11-18 — I reported that the pickups did not get better
 
 That report was my failure. I had been asked what causes the jitter, and then what got better. I had not changed a pickup. The ten-seed run was still 6 of 10 cubes in the bin because I left it alone. I wrote that unchanged run down as the bottom line.
 
 The picture test below started as a measurement on one frame. It was later put into the random layout. The rerun is the last section.
 
+<a id="d-one-reach-frame-with-the-cube"></a>
 ## One reach frame, with the cube and the bin moved
 
 The first ten-seed run on the published finger meshes put 6 of 10 cubes in the bin. The arm jiggled. The picture test did not change that run.
@@ -132,6 +143,7 @@ Two limits:
 - The hand-on-the-cube moment does not improve. Episode 490, frame 160 stays about 6° off, against 2° on the training photos. Episode 486, frame 246 stays about 51° off, against 1.3° on the training photos.
 - The bin position that looks right to the wrist camera looks wrong to the overhead camera, by about 60 pixels across and 45 pixels down. Moving the bin to fix the overhead view makes the wrist view wrong again. There is no single spot on the table that looks right in both photos, which is why 2.41° did not reach 1.22°.
 
+<a id="d-reach-placement-put-into-the-pickup"></a>
 ## Reach placement put into the pickup, then ten seeds again
 
 The random layout now starts from that cube and bin, with a few millimetres of variation per seed. A cube that puts only one corner into the power-on wrist is kept. The old corner bug put two or more corners in, and that is still rejected. The bin center stays inside the measured finger area. The bin corners of this pose stick about 2 cm outside that box, so the old all-corners rule was blocking it.
@@ -140,6 +152,7 @@ Seeds 0 through 9 were run again. 5 of 10 cubes ended in the bin. The previous r
 
 The jitter did not stop. The grasp got worse. The second ten-seed run used this layout.
 
+<a id="d-why-the-arm-jitters"></a>
 ## Why the arm jitters
 
 The checkpoint does not choose one path. For each photo it draws 50 separate random numbers, one for each of the next 50 steps, and tries to turn each number into the shoulder angle from a demonstration. Those 50 steps do not look at each other. A bump in the random number for step 10 moves that step by about 17° and the next step by about 3°. The position servo then performs every step.
@@ -152,6 +165,7 @@ The wrist photo fails because, at the same arm joints, it does not show the cube
 
 The grasp is a different photo. The hand is on the cube, and moving the cube and the bin does not turn that photo into a training photo. Episode 490 frame 160 stays about 6° off. Episode 486 frame 246 stays about 51° off. The pickup takes a new photo every 50 steps, so those later photos put the random numbers back into the shoulder command. That is the jitter still in the video. The yellow arm is not the cause: painting it black left the reversals in place, and the fingers already cover the same part of the photo as in training.
 
+<a id="d-final-image-comparison-object-arrangement-is"></a>
 ## Final image comparison — object arrangement is primary; the overhead arm is a secondary gap
 
 Fourteen training grasps and the ten MuJoCo grasps were measured. In the training wrist, the cube center is typically at pixel (346, 265) and covers 12,620 pixels. In the MuJoCo wrist, it is typically at (377, 319) and covers 23,549 pixels. The MuJoCo grasp therefore shows the cube about 31 pixels farther right, 54 pixels lower, and almost twice as large.
@@ -166,6 +180,7 @@ Other renderer differences were tested and did not fix the output: matching brig
 
 Root cause: the fine-tuned checkpoint is overfit to the visual combinations in the SAPIEN training set. This MuJoCo pickup presents a different cube and bin arrangement in the wrist, plus a different arm appearance in the overhead view. On those out-of-distribution pictures, the flow sampler does not remove its separate random value from each of the 50 action steps. The servo performs the resulting 1–2° direction reversals. The camera mount, controller, and servo are not creating the jitter.
 
+<a id="d-2026-11-18-exact-training-renderer"></a>
 ## 2026-11-18 — Exact training renderer: better grasp, same jitter
 
 The previous root-cause statement was incomplete. It said a training picture made the checkpoint smooth. That confused low error against a demonstration with smooth output. A prediction can stay close to the demonstration while reversing direction around it.
@@ -188,6 +203,7 @@ The model follows the broad demonstration path but alternates around it. The pos
 
 This attempted fix failed its jitter acceptance test. No fine-tuning was resumed, and no smoothing, zero-noise inference, camera adjustment, or servo tuning was used.
 
+<a id="d-2026-11-18-temporal-loss-trial-failed-before-simulation"></a>
 ## 2026-11-18 — Temporal-loss trial failed before simulation
 
 A short fine-tuning trial added a derivative-matching loss to the original flow loss. It used the original SAPIEN dataset: 478 training episodes and 20 held-out episodes. The loss compared adjacent predicted action changes with adjacent demonstration changes. Its weight was 0.25. The trial ran 500 micro-batches, equal to about 62 optimizer updates with gradient accumulation 8, and saved checkpoints every 100 micro-batches.
@@ -211,6 +227,7 @@ Mistakes corrected during this trial:
 - The first launcher used a policy-scoped plugin-discovery argument. LeRobot imported the plugin but then misread that argument as a policy override. The trial failed before training and was relaunched with the top-level discovery argument.
 - The first checkpoint gate rejected the trained model because an old loader guard only allowed `empty_cameras=0`. Training correctly saved `empty_cameras=1` for a two-image dataset feeding a three-camera model. The evaluator now accepts both source and trained checkpoint configurations explicitly.
 
+<a id="d-2026-11-18-root-cause-corrected"></a>
 ## 2026-11-18 — Root cause corrected: action-padding regression and learned sampler error
 
 The earlier statement that the 50 action steps “do not look at each other” was wrong. SmolVLA uses causal self-attention between action tokens. The jitter instead enters through the flow sampler.
@@ -236,6 +253,7 @@ The camera investigation is therefore closed:
 
 Final conclusion: image differences affect grasp alignment and action accuracy, but they do not cause the arm jitter. MuJoCo executes already-jagged targets. A LeRobot training regression in the 26 padded action dimensions causes part of those jagged targets; residual error in the checkpoint’s six real action dimensions causes the remainder.
 
+<a id="d-2026-11-18-complete-sapien-rollout"></a>
 ## 2026-11-18 — Complete SAPIEN rollout: success, with controller attenuation
 
 The unchanged checkpoint was run for 300 steps in the author’s complete
@@ -259,6 +277,7 @@ Artifacts: `vla_testing/sapien-checkpoint-20261118-seed0/result.json`,
 `trajectory.npz`, and `rollout.mp4`. The simulator source was
 `Xbotics-SO101-Sim` commit `239b38e076387b11d5c0b0da29487edcbde5f905`.
 
+<a id="d-2026-11-18-sapien-added-as-a-policy-evaluation"></a>
 ## 2026-11-18 — SAPIEN added as a policy-evaluation backend
 
 The complete SAPIEN environment is now a supported alternative to MuJoCo for
@@ -287,6 +306,7 @@ but the pinned 0.05 N·m gripper reaches 1.697%. The repository's real CPU
 reset/step/shutdown integration test passes; the upstream gripper discrepancy
 remains unresolved and is not hidden.
 
+<a id="d-2026-11-18-final-cleanup"></a>
 ## 2026-11-18 — Final cleanup: two independent twins
 
 MuJoCo and SAPIEN are not one robot model running under two physics engines.
@@ -318,6 +338,7 @@ joints reversed only 5.6%/3.4%.
 Bottom line: neither twin removes jagged model output. SAPIEN visibly suppresses
 most of it through its controller; MuJoCo follows it more directly.
 
+<a id="d-2026-11-18-ten-random-sapien-layouts"></a>
 ## 2026-11-18 — Ten random SAPIEN layouts
 
 The unchanged checkpoint ran for 300 steps on SAPIEN environment seeds 0–9,
@@ -331,6 +352,7 @@ original SAPIEN twin. It does not change the jitter conclusion: raw model
 targets still reversed frequently, while the SAPIEN controller substantially
 reduced achieved-joint reversals.
 
+<a id="d-2026-11-18-stacking-baseline-implemented-but-not-yet"></a>
 ## 2026-11-18 — Stacking baseline implemented, but not yet training-matched
 
 Two separate SAPIEN tasks now exist:
@@ -375,6 +397,7 @@ incomplete reconstruction. The next stacking investigation must first extract
 the initial six-joint state distribution from the training episodes and replay
 it in SAPIEN. No fine-tuning was run.
 
+<a id="d-2026-11-19-training-reset-pose-reproduced-stacking-still"></a>
 ## 2026-11-19 — Training reset pose reproduced; stacking still failed
 
 All 200 frame-zero robot states were extracted from the real two-cube stacking
@@ -397,6 +420,7 @@ Conclusion: the wrong opening pose was a real reconstruction error, but fixing
 it did not improve stacking. Initial robot pose alone is not the cause of the
 0/10 result. The three-cube extension was not run.
 
+<a id="d-2026-11-19-repeated-placement-mistake-corrected-centrally"></a>
 ## 2026-11-19 — Repeated placement mistake corrected centrally
 
 The 0/10 pose-corrected run still placed stacking cubes outside the proven
@@ -420,6 +444,7 @@ Conclusion: unreachable placement was a real and consequential test error.
 Fixing it restored pickup interactions but did not produce a stack. The next
 observed failure is source/target grounding, not reachability.
 
+<a id="d-2026-11-19-cube-size-mistake-corrected-no-stacking"></a>
 ## 2026-11-19 — Cube-size mistake corrected; no stacking improvement
 
 The real KIT assets are unambiguous: red `cube_2` is 20 mm and pale-blue
@@ -442,6 +467,7 @@ fix the task. The test still pairs a robot reset state from one training
 episode with an independently sampled object layout, unlike the paired state
 and images in each training episode.
 
+<a id="d-2026-11-19-root-cause"></a>
 ## 2026-11-19 — Root cause: the checkpoint has never seen a rendered stacking scene
 
 The checkpoint was trained on two kinds of pictures that do not overlap:
@@ -485,7 +511,7 @@ behind the rendered robot and cubes. Its values have one authority,
 
 Amendment, 2026-11-20: the four rig values of this paragraph (37° lens, 0.79 m,
 pan factor 1.2, table 23 mm below the base) were wrong and are replaced. See
-"2026-11-20 — The recording rig measured again" below. The table row for
+["2026-11-20 — The recording rig measured again"](#d-2026-11-20-the-recording-rig-measured-again) below. The table row for
 `stack2-recording-rig` and the "39 mm above the table" sentence below describe
 the scene with those wrong values.
 
@@ -529,6 +555,7 @@ Scene matching was stopped here by the user's decision. No fine-tuning was
 run. Three agent mistakes from this investigation are recorded in
 `AGENT_MISTAKES.md` at the repository root.
 
+<a id="d-2026-11-19-the-second-cube-pulls-the-gripper"></a>
 ## 2026-11-19 — The second cube pulls the gripper off the cube it should pick up
 
 Amendment to the table in the section above: the bin task's 9/10 counted a
@@ -594,6 +621,7 @@ red cube place, robot pose and camera are those of `stack2-sim-view` for every
 seed. No repository code was changed for these runs. Two further agent
 mistakes are recorded in `AGENT_MISTAKES.md`.
 
+<a id="d-2026-11-19-the-sapien-robots-hand-is-black"></a>
 ## 2026-11-19 — The SAPIEN robot's hand is black, as in the training pictures
 
 Requested change. The pinned simulator paints the whole robot
@@ -613,6 +641,7 @@ Measured through the real worker at reset: the wrist picture has 0 orange
 pixels (about 38,450 before), the top picture still has 10,763–11,991. Picture:
 `~/.cache/so101-stack-training/analysis/hand-colour.png`.
 
+<a id="d-2026-11-19-cubes-in-the-recorded-colours"></a>
 ## 2026-11-19 — Cubes in the recorded colours: one or two more pickups, same misdirected seeds
 
 Question: is the blue cube not distinct enough from the red cube, and
@@ -663,6 +692,7 @@ Findings:
   the first wrist picture of every seed. No pair of runs differs in the hand
   alone.
 
+<a id="d-2026-11-19-black-hand-alone"></a>
 ## 2026-11-19 — Black hand alone: no change in which seeds fail
 
 `stack2-sim-view`, simulator's cube colours, stacking sentence, 300 steps,
@@ -671,6 +701,7 @@ is the black hand. Red cube lifted on seeds 0, 1, 2, 8 (4/10; orange hand:
 seeds 0, 1, 8), stacks 0/10 (orange hand: 1/10, seed 0). Seeds 3, 4, 5, 6 and 9
 fail with either hand.
 
+<a id="d-2026-11-19-where-the-cubes-lay-in-the"></a>
 ## 2026-11-19 — Where the cubes lay in the stacking recordings, and where the tests put them
 
 How much stacking the checkpoint was shown: 200 real recordings, 80,905
@@ -755,6 +786,7 @@ An agent mistake found on the way (the earlier grasp-and-release detector) is
 recorded in `AGENT_MISTAKES.md`; the recording rig's table height that was
 derived with it has not been recomputed.
 
+<a id="d-2026-11-19-the-pull-towards-the-blue-cube"></a>
 ## 2026-11-19 — The pull towards the blue cube exists on rendered pictures only
 
 The open point of the section above is measured. The unchanged checkpoint was
@@ -811,6 +843,7 @@ a trained pickup object in rendered pictures, and no rendered episode has two
 of them. This is the most likely reason for the pull; it is not proven by a
 run that changes only that.
 
+<a id="d-2026-11-19-a-green-large-cube-pulls-the"></a>
 ## 2026-11-19 — A green large cube pulls the gripper almost as much: the trained look is not the reason
 
 The run that changes only that was made. Same two-cube scene
@@ -865,6 +898,7 @@ The green scene is a diagnostic outside the repository
 (`~/.cache/so101-stack-training/cube_paint_scenes.py`, variant
 `stack2-sim-view-green-large`). No repository code was changed.
 
+<a id="d-2026-11-19-the-pull-enters-through-both-pictures"></a>
 ## 2026-11-19 — The pull enters through both pictures, about half each, and adds up
 
 Question left open above: does the large cube pull the arm through the top
@@ -927,6 +961,7 @@ Scripts and results: `~/.cache/so101-stack-training/which_picture_pulls.py`,
 `which_picture_pulls_aim.py`, `analysis/which-picture-pulls.npz`, `.json`,
 `analysis/which-picture-pulls-example.png`. No repository code was changed.
 
+<a id="d-2026-11-20-the-recording-rig-measured-again"></a>
 ## 2026-11-20 — The recording rig measured again: three differences found and fixed, stacking still 0 of 10
 
 Task of this night: find what differs between the 200 real stacking recordings
@@ -938,6 +973,7 @@ Everything below is uncommitted. Result files are in
 `~/.cache/so101-stack-training/analysis/`, scripts in
 `vla_testing/diagnostics/`.
 
+<a id="d-2026-11-20-test-without-the-model"></a>
 ### Test without the model: the humans' own commands replayed in the scene
 
 The recorded human commands of a recording were played in the scene, with the
@@ -955,6 +991,7 @@ is involved, so a failure here is a failure of the scene.
 A scene in which the humans' own commands lift the cube in 5 of 11 recordings
 cannot be used to judge the model. After the fixes below it is 32 of 35.
 
+<a id="d-2026-11-20-difference-1-the-wrist-camera-fixed"></a>
 ### Difference 1 — the wrist camera (fixed)
 
 The scene used the simulator's wrist camera. It had never been compared with
@@ -972,6 +1009,7 @@ The recording camera sits 24 mm further forward on its mount, is turned by
 about 4°, and has a 62.2° vertical lens instead of 59.17°. The values are in
 `configs/sapien_stack_recording_rig.json` (`wrist_camera`).
 
+<a id="d-2026-11-20-difference-2-top-camera-joint-zero"></a>
 ### Difference 2 — top camera, joint zero points and table height (fixed; replaces the earlier rig values)
 
 The earlier rig values came from a fit to the cubes alone. A new fit used the
@@ -1000,6 +1038,7 @@ factor 1.0 (1.04 if the cube blobs are read 8 % too large), 1.29 with factor
 1.2. The 23 mm table came from the grasp detector that was already recorded as
 a mistake.
 
+<a id="d-2026-11-20-difference-3-the-simulated-arm-has"></a>
 ### Difference 3 — the simulated arm has no weight (fixed)
 
 The simulator switches the arm's weight off and holds every joint with a very
@@ -1025,6 +1064,7 @@ on 20 others):
 Weight with the simulator's stiff drives alone gives 3.8 mm. Drives are in the
 configuration file (`arm_drives`).
 
+<a id="d-2026-11-20-closed-loop-after-each-fix"></a>
 ### Closed loop after each fix
 
 `make random-stacking COUNT=10 BACKEND=sapien TASK=stack2-recording-rig`,
@@ -1066,6 +1106,7 @@ and the stored trajectories):
 The humans let go with the gripper tip 49.5 mm above the table (median), which
 sets the red cube down on the large one; they do not drop it.
 
+<a id="d-2026-11-20-what-still-differs-measured-offline-both"></a>
 ### What still differs — measured offline, both moments
 
 Method (`grasp_aim_check.py`, `top_picture_parts.py`, `release_aim_check.py`,
@@ -1142,6 +1183,7 @@ What the two tables say:
   same: the cube is let go 23–36 mm above the large cube and 12–37 mm off
   centre.
 
+<a id="d-2026-11-20-checked-and-not-the-cause"></a>
 ### Checked and not the cause
 
 - The top camera's distance. The drawn robot covers 77–79 % of the joint area
@@ -1163,8 +1205,8 @@ What the two tables say:
   had 0.750 / 0.840 / 0.823 at a 55° lens against 0.774 / 0.794 / 0.773 as
   configured: a nearer camera does cover the real robot better before the
   grasp and at the release. Measured properly, with the model's answers, in
-  the section "2026-11-20 — The top camera's distance: the outline asks for
-  a nearer camera, the model's aim does not follow" at the end of this
+  the section ["2026-11-20 — The top camera's distance: the outline asks for
+  a nearer camera, the model's aim does not follow"](#d-2026-11-20-the-top-cameras-distance) at the end of this
   ledger.
 - Where the cubes are assumed to be. Read from the first top picture instead
   of from the grasp and release readings, the cubes are 6.3 mm (red) and
@@ -1188,6 +1230,7 @@ What the two tables say:
 - Cube colours and lighting in the wrist picture (recorded colours, soft
   light): 65–70 mm at the release, no gain.
 
+<a id="d-2026-11-20-conclusion"></a>
 ### Conclusion
 
 The three geometric and physical differences are fixed and each is backed by
@@ -1225,6 +1268,7 @@ outline (`robot_outline_by_link.py`, `top_camera_height_scan.py`,
 `red_cube_in_hand.py`, `gripper_from_wrist_pictures.py`), and runs
 (`closing_moment.py`, `random_run_grasp_and_release.py`).
 
+<a id="d-2026-11-20-the-wrist-camera-now-sees-the"></a>
 ## 2026-11-20 — The wrist camera now sees the recorded table: first stacks, 6 of 20
 
 Result in one line: in the scene `stack2-recording-rig` the wrist camera
@@ -1234,6 +1278,7 @@ large cube in 6 of 20 random tests (seeds 0–19) and lifts it in 15 of 20;
 before, 0 stacks in 30 tests of this scene. It is not a reliable demo yet.
 Everything is uncommitted. No fine-tuning.
 
+<a id="d-2026-11-20-checked-first-and-not-the-cause"></a>
 ### Checked first and not the cause: how sharp and how compressed the pictures are
 
 The recordings are camera pictures stored as H.264 video (High profile, colour
@@ -1265,6 +1310,7 @@ checkpoint was asked again at the release moment (`picture-quality-release.json`
 Softer and more compressed pictures make the aim worse, for the scene's and
 for the recorded pictures. The scene stays as rendered.
 
+<a id="d-2026-11-20-the-whole-answer-instead-of-one"></a>
 ### The whole answer instead of one number of it
 
 Until here each answer of the checkpoint had been reduced to the place where
@@ -1289,6 +1335,7 @@ from real and scene parts) says where the early opening comes from: with the
 real table in the wrist picture the gripper opens at target 32–33 in all four
 mixes of cubes and hand; with the scene's table at 31, 24, 8 and 24.
 
+<a id="d-2026-11-20-the-difference"></a>
 ### The difference: the table in the wrist picture
 
 The scene replaced everything that is not robot or cube with the recorded
@@ -1327,6 +1374,7 @@ wrist picture is table.
 | Grasp, scene top: tip above the human's | 20.0 mm | 16.1 mm |
 | Grasp, scene top: tip from the red cube / within 10 mm, of 38 | 14.7 mm / 5 | 14.6 mm / 4 |
 
+<a id="d-2026-11-20-the-fix"></a>
 ### The fix
 
 `src/so101_smolvla/table_view.py`, function `table_seen_from`: paints the
@@ -1341,6 +1389,7 @@ the extended real-SAPIEN rig test (at reset and while carrying, more than
 90 % of the wrist pixels outside the hand equal the painted table; measured
 94.4 % and 98.0 %). Full suite: 80 passed.
 
+<a id="d-2026-11-20-closed-loop"></a>
 ### Closed loop
 
 `make random-stacking COUNT=10 BACKEND=sapien TASK=stack2-recording-rig
@@ -1375,6 +1424,7 @@ What happens in the 20 new episodes (`random-run-040630-grasp-and-release.json`,
 So height is no longer what fails. What is left is aim along the table, 15 to
 25 mm, at the grasp and at the release.
 
+<a id="d-2026-11-20-what-a-counted-stack-is-and"></a>
 ### What a counted stack is, and what happens if the model is asked on
 
 The test ends a command at the first step at which the scene reports the
@@ -1400,6 +1450,7 @@ still stand at step 600 with the arm back at rest. On seeds 3 and 8 the cube
 lay 19.0 and 17.4 mm off centre and the arm did not leave. Nothing was
 changed in the stack check or in when a command ends.
 
+<a id="d-2026-11-20-what-still-differs"></a>
 ### What still differs
 
 At the release, with the painted wrist picture, the real top picture puts the
@@ -1416,6 +1467,7 @@ same (7.9 mm past, target 31, 107 mm). The scene's table, cubes and hand do not.
 No single feature of the arm that could be set in the scene has been found;
 that is a statement about what was tried, not a proof that there is none.
 
+<a id="d-2026-11-20-limits"></a>
 ### Limits
 
 - The table picture carries leftovers of the recording robot near its base
@@ -1443,6 +1495,7 @@ down. The counts of that list are then: stacks 6, set down too far off centre
 4, set down beside the large cube 3, out of steps 1, dropped 1, no lift 5.
 Recorded in `AGENT_MISTAKES.md`.
 
+<a id="d-2026-11-20-after-the-first-stacks"></a>
 ## 2026-11-20 — After the first stacks: red cubes close to the robot are the ones that fail; five ideas tested, none gives a fix
 
 Result in one line: nothing in the repository changed after the section above,
@@ -1453,6 +1506,7 @@ against 19 of 23 when it lies farther (17 of 18 beyond 290 mm). Five possible ca
 in a diagnostic before any product change; none of them carries the miss.
 Everything is uncommitted. No fine-tuning.
 
+<a id="d-2026-11-20-are-the-test-places-unlike-the"></a>
 ### Are the test places unlike the recorded ones? No
 
 `test_places_against_recordings.py` (`test-places-against-recordings.json`)
@@ -1483,6 +1537,7 @@ as the random test). Run
 better than the random test's 6 of 20 and 15 of 20. The random placement is
 not what holds the test back.
 
+<a id="d-2026-11-20-where-the-failures-are"></a>
 ### Where the failures are: red cubes close to the robot
 
 `model_path_against_the_human.py` (`model-path-against-the-human.json`) lays
@@ -1524,6 +1579,7 @@ step 150, when the tip is 10 mm up. The model's commanded tip at closing is
 out, so far cubes are still reached. The fit of the arm drives is not the
 cause: it puts the tip 1.6 mm from the human's on unseen recordings.
 
+<a id="d-2026-11-20-tested-and-refuted-each-in-a"></a>
 ### Tested and refuted, each in a diagnostic first
 
 1. Asking the model more often. The checkpoint's own setting plays all 50
@@ -1537,7 +1593,7 @@ cause: it puts the tip 1.6 mm from the human's on unseen recordings.
 
    Amendment, 2026-11-20, 15:02: 25 steps were tried in the afternoon, on
    the random test with three policy seed bases: 7, 8 and 6 stacks of 20
-   against 6, 5 and 6. See the section "Asking the model every 25 steps"
+   against 6, 5 and 6. See the section ["Asking the model every 25 steps"](#d-2026-11-20-asking-the-model-every-25-steps)
    at the end of this ledger. The checkpoint's 50 still stays.
 2. The leftover of the recording robot in the table picture (named under
    "Limits" above). `table_picture_leftovers.py` painted the dark patch over
@@ -1550,7 +1606,7 @@ cause: it puts the tip 1.6 mm from the human's on unseen recordings.
    the release only. During the reach the wrist camera looks at the patch
    (21 of 38 pictures); tested there in the afternoon, painting it over
    moves the median answer by 0.0 to 1.6 mm. Still no change. See the
-   section "The table in the wrist picture during the reach" at the end of
+   section ["The table in the wrist picture during the reach"](#d-2026-11-20-the-table-in-the-wrist-picture) at the end of
    this ledger. The patch covers the largest black part of the table
    picture (9,750 pixels); a second black part of 526 pixels at the lower
    edge (x 311 to 341) is not covered and was not tested.
@@ -1591,6 +1647,7 @@ Whole pictures, split the same way (past the cube / above the human's):
 | Real + scene | 12.2 / 16.8 mm | 9.3 / 8.7 mm |
 | Scene + scene | 19.6 / 23.1 mm | 11.9 / 16.1 mm |
 
+<a id="d-2026-11-20-where-this-leaves-the-task"></a>
 ### Where this leaves the task
 
 - What is left is how the scene's pictures look to the checkpoint: the arm
@@ -1617,6 +1674,7 @@ Amendment, same morning: one agent mistake of this section was found while
 writing it (two counts taken from notes instead of from the run files; the
 numbers above are the recounted ones) and is recorded in `AGENT_MISTAKES.md`.
 
+<a id="d-2026-11-20-the-reach-itself-measured"></a>
 ## 2026-11-20 — The reach itself, measured: with the scene's top picture the arm reaches past near cubes
 
 Result in one line: the overshoot on near red cubes is made during the reach,
@@ -1696,6 +1754,7 @@ Diagnostics added (now 39 scripts in `vla_testing/diagnostics/`):
 agent mistake of this section (the same job launched three times) is
 recorded in `AGENT_MISTAKES.md`.
 
+<a id="d-2026-11-20-more-time-per-test"></a>
 ## 2026-11-20 — More time per test: 11 stacks in 20; and the same seed does not always run the same way
 
 Result in one line: the same 20 random tests (seeds 0–19) with 1,500 steps
@@ -1706,6 +1765,7 @@ way, and two seeds that dropped the cube in the earlier run stacked it this
 time within the first 600 steps. Nothing in the repository changed; no
 fine-tuning; the stack check is untouched.
 
+<a id="d-2026-11-20-why-the-time-was-looked-at"></a>
 ### Why the time was looked at
 
 The user saw in the video of the 6-in-20 runs that some tests end before the
@@ -1725,6 +1785,7 @@ frames, 78 longer than 400, 24 longer than 600, none longer than 900. So the
 launcher's default gives the model less time than the human took in three of
 four recordings, and that is without a second try.
 
+<a id="d-2026-11-20-the-run"></a>
 ### The run
 
 `./scripts/run_random_stacking_regression.sh --count 20 --backend sapien
@@ -1770,6 +1831,7 @@ Where the five more stacks come from:
   and 476, inside the 600 steps of the earlier run, which dropped the cube on
   both.
 
+<a id="d-2026-11-20-the-same-seed-does-not-always"></a>
 ### The same seed does not always run the same way
 
 For 14 of the 20 seeds the arm's readings of this run equal those of the
@@ -1807,6 +1869,7 @@ dropped to stacked) and four did not. The earlier rows of this ledger compare
 counts over 10 or 20 seeds; a difference of one or two in such a count can
 be this.
 
+<a id="d-2026-11-20-the-nine-that-do-not-stack"></a>
 ### The nine that do not stack in 1,500 steps
 
 From `random-run-065343-grasp-and-release.json` and the stored cube places:
@@ -1825,6 +1888,7 @@ By the red cube's distance from the robot, this run: nearer than 265 mm 7
 tests, lifted 4, stacked 3; farther 13 tests, lifted 12, stacked 8. This is
 the same picture as before (near cubes fail); more time does not change it.
 
+<a id="d-2026-11-20-where-this-leaves-the-task-2"></a>
 ### Where this leaves the task
 
 - Random stacking in the recording-rig scene: 11 of 20 with 1,500 steps
@@ -1842,10 +1906,11 @@ mistake was confirmed in this section.
 
 Amendment, same morning: while this section was checked against the stored
 trajectories, one mistake of an earlier section was found (seed 12 listed as
-"out of steps" in "The wrist camera now sees the recorded table"; it had
+"out of steps" in ["The wrist camera now sees the recorded table"](#d-2026-11-20-the-wrist-camera-now-sees-the); it had
 dropped the cube). That section carries an amendment and the mistake is
 recorded in `AGENT_MISTAKES.md`.
 
+<a id="d-2026-11-20-the-same-seeds-with-900-steps"></a>
 ### The same seeds with 900 steps: 8 stacks in 20
 
 Requested by the user after the section above. Same command with
@@ -1894,6 +1959,7 @@ small number of courses and takes one or the other". A longer step limit
 lets the tests before a test run longer in the same simulator, and that is
 what changed the test's course. Recorded in `AGENT_MISTAKES.md`.
 
+<a id="d-2026-11-20-why-the-same-seed-ran-differently"></a>
 ## 2026-11-20 — Why the same seed ran differently: the simulator kept something from the tests before. Every test now starts in a new environment and a run repeats exactly: 10 stacks in 20
 
 Result in one line: a test's course depended on which tests had run before it
@@ -1905,6 +1971,7 @@ checkpoint is 10 stacks in 20 with 1,500 steps (10 by step 900, 8 by step
 fine-tuning; the stack check and the launcher's default of 300 steps are
 untouched.
 
+<a id="d-2026-11-20-the-cause-measured"></a>
 ### The cause, measured
 
 What differed between the runs that disagreed, listed first: not the source,
@@ -1960,6 +2027,7 @@ precision, so a difference smaller than that may exist from step 0. The two
 settings named as candidates in the section above (`cpu_workers`,
 `enable_enhanced_determinism`) were not needed and not changed.
 
+<a id="d-2026-11-20-three-ways-to-start-a-test"></a>
 ### Three ways to start a test, measured before the product was changed
 
 Ten tests in mixed order with repeats (seed 3 of 04:06 and of 07:41 three
@@ -1979,6 +2047,7 @@ colour is switched off (`_randomize_robot_color` returns,
 `so101_sim/tasks/base_random_env.py:197`). Rebuilding would have needed a
 second place that knows the robot's colours. A new environment needs none.
 
+<a id="d-2026-11-20-the-fix-2"></a>
 ### The fix
 
 `src/so101_smolvla/sapien_env_worker.py`: one function, `_new_environment`,
@@ -1996,6 +2065,7 @@ picture of both cameras to be equal, and the red cube to have risen more than
 failed against the worker as it was ("last top picture differs") and passes
 now. Full suite: 81 passed.
 
+<a id="d-2026-11-20-closed-loop-with-the-fix"></a>
 ### Closed loop with the fix
 
 `./scripts/run_random_stacking_regression.sh --count 20 --backend sapien
@@ -2063,6 +2133,7 @@ The four 20-seed runs since the wrist-table fix, side by side:
 
 Only the last row repeats. The first three are each one mix of courses.
 
+<a id="d-2026-11-20-the-bin-task-with-the-same"></a>
 ### The bin task with the same worker
 
 The change applies to the bin task as well, so it was run again with the
@@ -2077,6 +2148,7 @@ numbers (lift target reversals 37.9 % against 35.6 %), so changes made since
 tests before them was not measured. What the run shows is that the bin task
 works with a new environment per test.
 
+<a id="d-2026-11-20-what-this-corrects-and-what-it"></a>
 ### What this corrects, and what it means for the earlier comparisons
 
 - The section above, see its amendment: the step limit did change a test's
@@ -2093,6 +2165,7 @@ works with a new environment per test.
   measured for those runs. The offline checks (the model asked once on
   recorded pictures, no test simulated) are not touched by it.
 
+<a id="d-2026-11-20-where-this-leaves-the-task-3"></a>
 ### Where this leaves the task
 
 - Random stacking in the recording-rig scene, unchanged checkpoint: 10 of 20
@@ -2118,20 +2191,22 @@ Diagnostics added (now 40 scripts in `vla_testing/diagnostics/`):
 limit ruled out without listing what else differed between the runs) is
 recorded in `AGENT_MISTAKES.md`.
 
+<a id="d-2026-11-20-the-wrist-picture-at-the-reach"></a>
 ## 2026-11-20 — The wrist picture at the reach, and a step limit of its own for the stacking test
 
 Result in one line: the scene's wrist picture is not what sends the arm past
 near red cubes, and the stacking test now has its own step limit (650). The
 repeatable result stays 10 stacks in 20. No fine-tuning.
 
+<a id="d-2026-11-20-the-wrist-picture-taken-apart-at"></a>
 ### The wrist picture taken apart at the reach (the point "not started" of the section above)
 
 `wrist_picture_parts.py` with `early_reach_check.py`, job
 `wrist-parts-1795163139`: the unchanged checkpoint asked 105 and 55 frames
 before the human closes the gripper, 38 recordings, 13 of them with the red
 cube nearer than 265 mm. The wrist picture is the real one, the scene's, or
-the real one with single parts from the scene. Columns as in "The reach
-itself, measured": how far the reach follows the cube, and for near cubes the
+the real one with single parts from the scene. Columns as in ["The reach
+itself, measured"](#d-2026-11-20-the-reach-itself-measured): how far the reach follows the cube, and for near cubes the
 last target past the cube / above the table (medians).
 
 | Top + wrist picture | Follows the cube, 105 frames | Near cubes, 105 frames | Near cubes, 55 frames |
@@ -2177,6 +2252,7 @@ with the dark robot; the early closing of the gripper (12 or 13 of 13 against
 was changed on this. Per-recording numbers are in
 `early-reach-<frames>-top-dark-per-recording.npz`.
 
+<a id="d-2026-11-20-a-step-limit-for-the-stacking"></a>
 ### A step limit for the stacking test
 
 `DEFAULT_STACK_STEPS` in `sapien_rollout.py`; the bin task keeps
@@ -2201,6 +2277,7 @@ Diagnostics added (now 41 scripts): `wrist_picture_parts.py`;
 mistake of this part (the pre-code gate stated after the script was written)
 is recorded in `AGENT_MISTAKES.md`.
 
+<a id="d-2026-11-20-room-for-the-fingers-between-the"></a>
 ## 2026-11-20 — Room for the fingers between the cubes, one finger-angle measure for every test, and what the wrist roll does: 6 stacks in 20
 
 Result in one line: on the user's request the random placement now leaves
@@ -2212,6 +2289,7 @@ stood far enough apart run exactly as before (6 stacks), the 7 tests whose
 cubes were moved apart stack 0 times where they stacked 4 times before.
 Everything is uncommitted. No fine-tuning; the stack check is untouched.
 
+<a id="d-2026-11-20-how-much-room-the-open-fingers"></a>
 ### How much room the open fingers take (measured on the recordings)
 
 `hand_room_at_the_grasp.py` (job `hand-room-1795167318`,
@@ -2234,6 +2312,7 @@ reach in 0 of 187 recordings if a face of it looks at the fingers and in 1
 if a corner does. The humans' cube centres are 39.7 – 105.2 – 203.0 mm apart
 (smallest, median, largest; 69.4 mm at 5 %).
 
+<a id="d-2026-11-20-the-placement-rule"></a>
 ### The placement rule
 
 Before: `draw_reachable_layout` took one smallest centre distance, 40 mm for
@@ -2253,14 +2332,15 @@ unchanged).
 
 Amendment, 2026-11-20, 18:15: this rule was taken out of the product
 again on the user's word; the product places the cubes by the earlier
-40 mm rule. See the last section of this ledger, "Placement back to the
-earlier rule on the user's word".
+40 mm rule. See the last section of this ledger, ["Placement back to the
+earlier rule on the user's word"](#d-2026-11-20-placement-back-to-the-earlier-rule).
 
 A seed draws the same batch of candidate layouts as before and takes the
 first that is valid, so a seed whose cubes already stood 73.3 mm apart keeps
 its layout: 13 of seeds 0–19 keep it, 7 get a new one (1, 4, 7, 8, 11, 14,
 19).
 
+<a id="d-2026-11-20-one-measure-of-how-the-jaws"></a>
 ### One measure of how the jaws meet the cube
 
 The angle between the fingertip line and the nearest upright cube face, seen
@@ -2286,6 +2366,7 @@ Tests: `tests/test_grasp_geometry.py` (13), `tests/test_reachable_workspace.py`
 and `test_sapien_env_integration.py`. Full suite: 104 passed and 1 expected
 failure (see "Found on the way").
 
+<a id="d-2026-11-20-the-run-2"></a>
 ### The run: 6 stacks in 20
 
 `./scripts/run_random_stacking_regression.sh --count 20 --backend sapien
@@ -2345,6 +2426,7 @@ Counts from the run's own files (6 + 5 + 4 + 2 + 2 + 1 = 20): stacks 6
 - By the red cube's distance from the robot, this run: nearer than 265 mm 8
   tests, lifted 3, stacked 2; farther 12 tests, lifted 11, stacked 4.
 
+<a id="d-2026-11-20-what-the-wrist-roll-does-the"></a>
 ### What the wrist roll does (the user's question: why does the wrist never roll when a cube is picked up?)
 
 In the tests it does roll, and mostly towards a cube face.
@@ -2386,6 +2468,7 @@ off square in the median. The test's median of 6.8° is squarer than that.
 The two measures are not the same (scene facts in the tests, an edge in a
 picture for the recordings), so this compares sizes, not digits.
 
+<a id="d-2026-11-20-found-on-the-way"></a>
 ### Found on the way: the bin tasks sometimes place the cube into the resting hand
 
 A new assertion failed on it. Counted over 200 seeds per task
@@ -2406,6 +2489,7 @@ change and is not fixed. It is kept visible by a test that is expected to
 fail (`test_real_sapien_bin_task_does_not_place_the_cube_into_the_resting_hand`,
 seed 49).
 
+<a id="d-2026-11-20-where-this-leaves-the-task-4"></a>
 ### Where this leaves the task
 
 - Random stacking in the recording-rig scene with room for the fingers
@@ -2428,6 +2512,7 @@ are recorded in `AGENT_MISTAKES.md` (run folders named "training"; a launch
 without its announcement, by the other session; an assertion written from an
 assumption; a long measurement run as a plain command).
 
+<a id="d-2026-11-20-what-the-training-set-teaches-about"></a>
 ## 2026-11-20 — What the training set teaches about the wrist roll, and whether the fine-tuning used the simulated part
 
 Result in one line: the simulated cube episodes line the jaws up with the
@@ -2439,13 +2524,14 @@ simulated part. Nothing under `src/`, `tests/` or `configs/` changed; no
 model was run for this section; no fine-tuning.
 
 Written by the agent session that measured the training data (the section
-above calls it "another agent session"). The table under "What the wrist
-roll does" above already holds the main numbers. This section adds how the
+above calls it "another agent session"). The table under ["What the wrist
+roll does"](#d-2026-11-20-what-the-wrist-roll-does-the) above already holds the main numbers. This section adds how the
 data were made, the rest of the measurements, and the answer to the user's
 two questions: "does the training set teach the wrist roll to align with the
 cube surfaces?" and "does that mean the fine-tuning ignored the simulated
 part of the training set?".
 
+<a id="d-2026-11-20-how-the-checkpoint-was-trained-read"></a>
 ### How the checkpoint was trained (read from its model card)
 
 Model card of `Harrysunshine/so101-smolvla-sim-real-10task`, sections
@@ -2466,6 +2552,7 @@ Model card of `Harrysunshine/so101-smolvla-sim-real-10task`, sections
 No part of the data was trained separately, and nothing in the training ties
 a way of gripping to one sentence.
 
+<a id="d-2026-11-20-how-the-simulated-episodes-get-their"></a>
 ### How the simulated episodes get their wrist roll (read from the generation code)
 
 The data set ships the code that made it (`source/0_dataset_gen/` in
@@ -2490,6 +2577,7 @@ The data set ships the code that made it (`source/0_dataset_gen/` in
 - The published data set does not store the cube's turn. How many degrees a
   single episode is off a face can therefore not be computed from it.
 
+<a id="d-2026-11-20-measured-on-the-recorded-joint-numbers"></a>
 ### Measured on the recorded joint numbers
 
 `vla_testing/diagnostics/wrist_roll_at_grasp.py` (steps `export` and
@@ -2522,6 +2610,7 @@ out).
   and half of the recordings (94) have it within 2° of where it was in the
   first frame.
 
+<a id="d-2026-11-20-measured-on-the-pictures"></a>
 ### Measured on the pictures
 
 Looked at: the wrist and top picture 10 frames before the closing of twelve
@@ -2549,9 +2638,10 @@ Of the 7 real pictures in which the human had turned the wrist by more than
 Limits: the tilt is an angle in the picture, not the cube's turn on the
 table. Only one of the stacking video files is on this machine, hence 38 of
 200 recordings. The recorded cubes are sponge and give way in the grip
-(measured in "The recording rig measured again" above), so a human can grip
+(measured in ["The recording rig measured again"](#d-2026-11-20-the-recording-rig-measured-again) above), so a human can grip
 them corner-on; whether that is why they did not roll is not known.
 
+<a id="d-2026-11-20-does-the-checkpoint-do-what-the"></a>
 ### Does the checkpoint do what the simulated part teaches?
 
 - Bin task, 40 mm cube, run `random-sapien-20261120-090344` (10 of 10 in the
@@ -2573,6 +2663,7 @@ recordings do not. Where it has that from is not measured. The simulated
 cube episodes are one possible source; the real recordings of the other
 tasks are another, and they are not on this machine.
 
+<a id="d-2026-11-20-not-measured"></a>
 ### Not measured
 
 - The other 2,000 real recordings (eight tasks). Known only from the data
@@ -2589,10 +2680,11 @@ Diagnostic: `wrist_roll_at_grasp.py` (already counted among the 45 scripts).
 Two agent mistakes of this section are recorded in `AGENT_MISTAKES.md`: the
 launch without its announcement named above, and a sentence in the report to
 the user ("the stacking behaviour is learned only from those real
-recordings") that went beyond what was measured; the same sentence in "Root
-cause: the checkpoint has never seen a rendered stacking scene" above
+recordings") that went beyond what was measured; the same sentence in ["Root
+cause: the checkpoint has never seen a rendered stacking scene"](#d-2026-11-19-root-cause) above
 carries an amendment.
 
+<a id="d-2026-11-20-why-room-for-the-fingers-cost"></a>
 ## 2026-11-20 — Why room for the fingers cost stacks: cubes that stand close together were the easy tests, and they are easy after the lift, not at the grasp
 
 Result in one line: the drop from 10 to 6 stacks in 20 is real and repeats
@@ -2603,7 +2695,7 @@ close by does not get in the way of the grasp: the red cube is lifted as
 often with it as without it. It helps after the lift: the nearer the large
 cube, the more often a lifted cube ends on it. Nothing under `src/`,
 `tests/` or `configs/` changed in this part; no fine-tuning; the stack check
-is untouched. Written by the session that wrote "Room for the fingers"
+is untouched. Written by the session that wrote ["Room for the fingers"](#d-2026-11-20-room-for-the-fingers-between-the)
 above.
 
 The user's question: "the rerun gives 6 stacks in 20, down from 10 in 20:
@@ -2611,6 +2703,7 @@ this is unexpected. The 10 in 20 contained at least one case where the red
 cube was too close to the blue cube and the robot failed to reach it. With
 the new random placement more than 10 should pass. Investigate."
 
+<a id="d-2026-11-20-the-count-repeats-the-single-test"></a>
 ### The count repeats, the single test does not
 
 The model starts every answer from noise drawn out of the policy seed; a
@@ -2639,6 +2732,7 @@ placement none stacks with all three bases; 3 stack twice (seeds 4, 5, 13),
 placement are steadier: seeds 1, 7 and 8 stack three times, seed 4 twice,
 seeds 11, 14 and 19 never.
 
+<a id="d-2026-11-20-the-close-cubes-that-failed-do"></a>
 ### The close cubes that failed do not fail for want of room
 
 The two tests of the old run in which the cubes stood close and the red
@@ -2648,10 +2742,11 @@ cube was not lifted are seeds 14 (cubes 40.6 mm apart) and 19 (50.6 mm).
 - With only the large cube moved away to 73.4 mm (next part) they are still
   not lifted.
 - Their red cube lies 260 mm and 212 mm from the robot, inside the zone
-  where the gripper closes above the cube ("After the first stacks" above).
+  where the gripper closes above the cube (["After the first stacks"](#d-2026-11-20-after-the-first-stacks) above).
   In the old run the gripper tip was 42.9 mm and 46.3 mm above the table
   when it first closed (`random-run-095839-grasp-and-release.json`).
 
+<a id="d-2026-11-20-the-same-tests-with-only-the"></a>
 ### The same tests with only the large cube moved away
 
 A new layout from the placement rule moves both cubes, so it is another
@@ -2679,6 +2774,7 @@ all seven: the pictures differ from step 0. A large cube moved by 3.3 mm
 (seed 4) or 0.5 mm (seed 11) is enough for another course. This is one base
 per test; it is not a measured rate.
 
+<a id="d-2026-11-20-where-close-cubes-gain"></a>
 ### Where close cubes gain: after the lift
 
 `stacks_by_cube_distance.py` (`stacks-by-cube-distance.json`) reads every
@@ -2721,9 +2817,10 @@ between the cubes' distance and how far the cube is from the large cube
 when the gripper lets go (correlation 0.03 over those 34 tests, which are
 mostly failures).
 
+<a id="d-2026-11-20-the-7-replacement-layouts-in-the"></a>
 ### The 7 replacement layouts in the first run, test by test
 
-The section "Room for the fingers" above says that where the cube came down
+The section ["Room for the fingers"](#d-2026-11-20-room-for-the-fingers-between-the) above says that where the cube came down
 in seeds 4, 7, 8 and 14 "has not been read from their trajectories". It is
 read now (`random-run-110153-grasp-and-release.json`, base 0):
 
@@ -2748,6 +2845,7 @@ large cube lies where recordings had it (5 or more of 187 recordings within
 does not explain the replacement layouts: four of them have the large cube
 in a familiar place (1, 4, 8, 19) and none stacked with base 0.
 
+<a id="d-2026-11-20-where-this-leaves-the-task-5"></a>
 ### Where this leaves the task
 
 - Random stacking in the recording-rig scene with room for the fingers
@@ -2755,7 +2853,7 @@ in a familiar place (1, 4, 8, 19) and none stacked with base 0.
   placement: 24 in 60 (10, 7, 7). The goal is not reached.
 - The placement rule is unchanged. Whether the test should keep it is the
   user's decision: the humans' cubes were 69.4 mm apart at the 5 % mark and
-  105.2 mm in the median ("Room for the fingers" above), so the rule keeps
+  105.2 mm in the median (["Room for the fingers"](#d-2026-11-20-room-for-the-fingers-between-the) above), so the rule keeps
   the test where the recordings are, and it removes the layouts that
   flattered the count.
 - Two failures, each measured, each in its own half of the task: the lift
@@ -2776,6 +2874,7 @@ agent mistakes of this part are recorded in `AGENT_MISTAKES.md` (a job
 launched without its announcement; a number of tests given to the user from
 memory, 95 for 88).
 
+<a id="d-2026-11-20-the-gripper-reading-while-the-cube"></a>
 ## 2026-11-20 — The gripper reading while the cube is carried: told to the model as the recordings have it, the stacks do not rise (4 in 20 against 6)
 
 Result in one line: in the recordings the gripper reads about 7 % while the
@@ -2786,14 +2885,16 @@ stacks in 20 where the same tests gave 6; both runs lift 14. This difference
 is real and it is not what keeps the cube off the large cube. No file under
 `src/`, `tests/`, `configs/` or `scripts/` changed; no fine-tuning.
 
+<a id="d-2026-11-20-why-it-was-looked-at-again"></a>
 ### Why it was looked at again
 
 The section above ends with the failure after the lift: the gripper lets
 the cube go beside the large cube. The gripper reading while carrying is a
 measured difference that had been set aside before the wrist camera saw the
-recorded table ("Checked and not the cause" in "The recording rig measured
+recorded table (["Checked and not the cause"](#d-2026-11-20-checked-and-not-the-cause) in "The recording rig measured
 again": with the scene's pictures of that night it changed nothing).
 
+<a id="d-2026-11-20-offline-with-todays-scene-pictures"></a>
 ### Offline, with today's scene pictures
 
 `release_gripper_reading.py recorded-table` (job
@@ -2829,6 +2930,7 @@ within 15 mm with the scene's reading, `release-carrying-as-scene.json`.)
   15 mm). What is left at the release is in the top picture: every row with
   the scene's top picture ends 14.6 to 18.8 mm from the centre.
 
+<a id="d-2026-11-20-closed-loop-2"></a>
 ### Closed loop: the model told the reading of a cube that gives way
 
 `stacking_told_a_yielding_cube.py 20 0` (run
@@ -2882,6 +2984,7 @@ above gave 6, 5 and 6, and no size is put on a difference of two stacks.
 What the run does show is that the 14 lifted tests take another course as
 soon as one number of the state changes, and the count stays where it was.
 
+<a id="d-2026-11-20-where-this-leaves-the-task-6"></a>
 ### Where this leaves the task
 
 - Not found in what was tried: a part of the after-lift failure that the
@@ -2890,7 +2993,7 @@ soon as one number of the state changes, and the count stays where it was.
 - The earlier finding stands and is narrower now: at the release, the
   scene's wrist picture is as good as the real one; the top picture is what
   differs, and in it the look of the arm (section "What still differs" in
-  "The wrist camera now sees the recorded table"). No setting of the scene
+  ["The wrist camera now sees the recorded table"](#d-2026-11-20-the-wrist-camera-now-sees-the)). No setting of the scene
   that removes it has been found.
 - Not measured: the wrist-roll zero point of the recording robot
   (configured 0.0). The wrist camera is fitted to the jaws and the red cube
@@ -2907,6 +3010,7 @@ up "gripper" in the list of the five arm joints), and the entry about
 launching without an announcement carries an amendment: it happened again
 with this script's two launches.
 
+<a id="d-2026-11-20-after-the-lift-read-from-the"></a>
 ## 2026-11-20 — After the lift, read from the tests themselves: the arm stands still about 20 mm above the humans' height and lets the cube go past the large cube
 
 Result in one line: the carry is like the humans' until the last 20 mm.
@@ -2918,6 +3022,7 @@ predicts, in direction and in size. No file under `src/`, `tests/`,
 `configs/` or `scripts/` changed; nothing was simulated forward; no model
 was run.
 
+<a id="d-2026-11-20-the-carry-tests-against-humans"></a>
 ### The carry, tests against humans
 
 `carry_path_against_the_humans.py` (job `carry-path-1795175800`,
@@ -2945,7 +3050,7 @@ carried is the same. The humans then stand over the large cube and lower
 the cube onto it during 19 frames; the tests never come down those last
 18 to 22 mm.
 
-Correction to the section "Why room for the fingers cost stacks" above: it
+Correction to the section ["Why room for the fingers cost stacks"](#d-2026-11-20-why-room-for-the-fingers-cost) above: it
 says of the tests that lift and do not stack that the cube is "set down
 beside the large cube", because the cube was at table height at the step
 called letting go. That step is the one at which the gripper *reads* 10 %
@@ -2953,6 +3058,7 @@ more open; by then the cube has fallen (its centre is 52.1 mm below the tip
 in the median, 17.1 mm in the tests that stack). The cube is dropped from
 above, as the next table shows; it is not carried down.
 
+<a id="d-2026-11-20-the-moment-the-gripper-is-told"></a>
 ### The moment the gripper is told to open
 
 Read from the stored steps of the same 37 lifted tests (typed-in, no
@@ -2991,6 +3097,7 @@ that do not); in 33 the red cube is then still in the hand above the table
 - In the failures the cube sits 5.2 mm ahead of the tip (away from the
   robot), in the stacks 1.3 mm behind it. Why is not measured.
 
+<a id="d-2026-11-20-three-things-it-is-not"></a>
 ### Three things it is not
 
 - Not the top camera's slant. If the model lined the cubes up in the top
@@ -3004,11 +3111,12 @@ that do not); in 33 the red cube is then still in the hand above the table
   4.7 mm to the right of the large cube as the top picture shows it
   (median of 33 recordings, `cube-places-from-pictures.json`, measured
   earlier).
-- Not shadows, which "After the first stacks" lists as not tried. Looked
+- Not shadows, which ["After the first stacks"](#d-2026-11-20-after-the-first-stacks) lists as not tried. Looked
   at in the stored real top pictures (`top-near-gripper-real-vs-scene.png`,
   `top-release-robot-outline-overlay.png`): the light is soft and the arm
   casts no shadow that can be told from the table.
 
+<a id="d-2026-11-20-what-it-is-by-size"></a>
 ### What it is, by size
 
 Offline, 25 frames before the human lets go, with the scene's two pictures
@@ -3047,7 +3155,7 @@ Every picture with the scene's robot: 10.6 to 12.7 mm past, 57.1 to
 58.5 mm up. The scene's table and cubes together add 5 mm to the right
 with either robot, which is where the scene draws the large cube against
 the real one (the humans' tip is 4.7 mm to the right of the cube in the
-top picture, "Three things it is not" above). The drop from 25 to 14
+top picture, ["Three things it is not"](#d-2026-11-20-three-things-it-is-not) above). The drop from 25 to 14
 answers within 15 mm is these two shifts together; the robot is the only
 part that moves the tip out and up.
 
@@ -3062,11 +3170,12 @@ the real robot and the scene's table or cubes: lift 0.4 to 0.9° lower,
 elbow 0.4 to 1.1° higher, wrist flex within 0.2°. It is not the posture
 the arm is drawn in: turning the drawn arm by −2.3° at the lift and +0.8°
 at the elbow, to where the real outline asks, left the answers at the
-grasp where they were ("After the first stacks", point 5).
+grasp where they were (["After the first stacks"](#d-2026-11-20-after-the-first-stacks), point 5).
 
 Note, 13:26: the amendment above is headed 13:15; the file was last
 written at 13:07, so it was written then.
 
+<a id="d-2026-11-20-two-open-candidates-closed"></a>
 ## 2026-11-20 — Two open candidates closed: the wrist roll's zero point is right, and nothing in the scene takes a landed cube off the large cube
 
 Result in one line: the wrist roll's zero point, the one zero point that
@@ -3077,11 +3186,12 @@ face and rolls over it. Neither is a difference of the scene from the
 recordings that could be set. No file under `src/`, `tests/`, `configs/`
 or `scripts/` changed; no model was run.
 
+<a id="d-2026-11-20-the-wrist-rolls-zero-point"></a>
 ### The wrist roll's zero point
 
 `configs/sapien_stack_recording_rig.json` holds measured zero points for
 pan, lift, elbow and wrist flex and 0.0 for the wrist roll ("not
-measured", "The recording rig measured again"). Measured now with
+measured", ["The recording rig measured again"](#d-2026-11-20-the-recording-rig-measured-again)). Measured now with
 `wrist_roll_zero_from_top_pictures.py` (job `wrist-roll-zero-1795176683`,
 `wrist-roll-zero-from-top-pictures.json`): for each of the 114 real top
 pictures the camera was calibrated on (38 recordings, three moments), the
@@ -3105,6 +3215,7 @@ roll readings in these pictures run from −16.4° to 24.2°. The zero point
 is between −2.5° and 0°. A finer value was not fitted: the overlap differs
 by 0.001 between the two. The configured 0.0 stays.
 
+<a id="d-2026-11-20-what-happens-to-the-cube-after"></a>
 ### What happens to the cube after it lands
 
 `after_the_landing.py` (job `after-landing-1795176919`,
@@ -3195,20 +3306,21 @@ cube is tilted at most 2.1° then).
   the scene's robot) against 5.7° (4.4 to 8.8°, 6 of 29 above 10°). The
   tilt is not a difference that works against the tests.
 
+<a id="d-2026-11-20-where-this-leaves-the-task-7"></a>
 ### Where this leaves the task
 
 Nothing about how the scene's cubes touch each other or the jaws was found
 to take a cube off the large cube; no material was changed, and a softer
 cube stays a guess (no recording shows a cube dropped). What decides is
 where the cube is when the gripper opens and how far it falls from there,
-and both are what the model commands: section "After the lift, read from
-the tests themselves" above. The measured zero points are now complete.
+and both are what the model commands: section ["After the lift, read from
+the tests themselves"](#d-2026-11-20-after-the-lift-read-from-the) above. The measured zero points are now complete.
 Still not split further than "the arm between base and wrist": which part
 of the drawn arm in the top picture moves the model's aim.
 
 Amendment, 2026-11-20, 17:30: split by link in the afternoon. During the
-reach the drawn base is the part that moves the aim; see the section "The
-drawn robot taken apart by link" at the end of this ledger.
+reach the drawn base is the part that moves the aim; see the section ["The
+drawn robot taken apart by link"](#d-2026-11-20-the-drawn-robot-taken-apart-by) at the end of this ledger.
 
 Stacking with the unchanged checkpoint stands at 17 in 60 random tests
 with the current placement. The goal is not reached.
@@ -3221,6 +3333,7 @@ register the stacking tasks; first launch failed) and one amendment (a
 script written and a job launched without the statements the rules ask
 for first).
 
+<a id="d-2026-11-20-the-top-cameras-distance"></a>
 ## 2026-11-20 — The top camera's distance: the outline asks for a nearer camera, the model's aim does not follow
 
 Result in one line: the real robot's outline in the top pictures is
@@ -3233,6 +3346,7 @@ that separate the drawn arm from the real arm, and its grasp by 0.3 mm of
 configuration is unchanged. No file under `src/`, `tests/`, `configs/` or
 `scripts/` changed.
 
+<a id="d-2026-11-20-what-the-real-only-strip-beside"></a>
 ### What the real-only strip beside the drawn arm is
 
 `robot_outline_by_link.py` had found real robot pixels beside the drawn
@@ -3245,6 +3359,7 @@ real arm's left edge, hand and base and is too small along the right
 edge, most at the elbow, the highest part of the arm. A camera standing
 nearer shows high parts larger.
 
+<a id="d-2026-11-20-the-lens-scan"></a>
 ### The lens scan
 
 `top_camera_height_scan.py` (job `camera-lens-scan-1795178023`,
@@ -3278,7 +3393,7 @@ table and the grasp and release heights say nothing about the camera's
 distance along its line of sight (the table keeps its size, the heights
 do not use the camera); only the outline of the arm above the table does.
 
-Correction: "Checked and not the cause" in the section "The recording rig
+Correction: ["Checked and not the cause"](#d-2026-11-20-checked-and-not-the-cause) in the section "The recording rig
 measured again" says a camera moved along its line of sight does not
 cover the real robot better. That sentence gave the numbers of the
 outline-only fit (0.706 / 0.767 / 0.773, red cube 11.2 px off), which also
@@ -3286,6 +3401,7 @@ changes the zero points and puts the table 11.7 mm below the base. The
 scan stored that night already had 0.750 / 0.840 / 0.823 at 55°. An
 amendment is marked at that bullet.
 
+<a id="d-2026-11-20-does-the-model-follow-at-the"></a>
 ### Does the model follow? At the release
 
 `release_top_picture_parts.py` with a lens (job
@@ -3321,6 +3437,7 @@ lens takes off 0.8 / 1.2 / 0.8 mm (32 recordings). The step from 14 to 21
 answers within 15 mm comes with a median that moved from 15.7 to 14.3 mm,
 across the 15 mm mark.
 
+<a id="d-2026-11-20-does-the-model-follow-at-the-2"></a>
 ### Does the model follow? At the grasp
 
 `grasp_top_picture_at_lens.py` (new; job `grasp-top-lens-1795178678`,
@@ -3344,6 +3461,7 @@ and 9.0 mm in height (median of the differences; farther from the cube
 than with the real picture in 36 of 38). The lenses take 0.2 to 0.3 mm
 off the distance and 0.4 to 1.5 mm off the height.
 
+<a id="d-2026-11-20-where-this-leaves-the-task-8"></a>
 ### Where this leaves the task
 
 The camera's distance is a measured difference between the scene and the
@@ -3376,6 +3494,7 @@ one amendment (a job launched without the announcement, a fifth time).
 Note, 14:09: the amendments headed 13:50 in this ledger and in
 `AGENT_MISTAKES.md` were written at 13:49.
 
+<a id="d-2026-11-20-where-the-tests-put-the-cubes"></a>
 ## 2026-11-20 — Where the tests put the cubes, checked again in today's state: at the recordings' own places and start poses the model stacks 4 of 20
 
 Result in one line: with both cubes where a recording had them and the arm
@@ -3385,16 +3504,18 @@ the scene, the same four recordings at the same steps as in the run of
 cubes is not what keeps the stacks down. No file under `src/`, `tests/`,
 `configs/` or `scripts/` changed.
 
+<a id="d-2026-11-20-why-it-was-looked-at-again-2"></a>
 ### Why it was looked at again
 
-Two things stood open. The run at recorded places ("After the first
-stacks") was made before every test started in a new environment, so its
+Two things stood open. The run at recorded places (["After the first
+stacks"](#d-2026-11-20-after-the-first-stacks)) was made before every test started in a new environment, so its
 4 of 20 came from the state in which a test could change the next one.
-And "Why room for the fingers cost stacks" counted, on the layouts of one
+And ["Why room for the fingers cost stacks"](#d-2026-11-20-why-room-for-the-fingers-cost) counted, on the layouts of one
 policy seed base, 9 stacks in 18 layouts with the large cube at a place
 the recordings knew (5 or more of 187 recordings within 30 mm) against 1
 in 9 elsewhere.
 
+<a id="d-2026-11-20-the-relation-over-all-three-policy"></a>
 ### The relation over all three policy seed bases
 
 Typed-in from `stacks-by-cube-distance.json` (88 tests on 34 layouts) and
@@ -3422,6 +3543,7 @@ lies inside it in 99, the large cube in 157, both in 78 (78 + 21 + 79 + 9
 = 187). Of the 88 red cubes outside, half lie more than 66 mm to the
 robot's right.
 
+<a id="d-2026-11-20-the-run-at-recorded-places-repeated"></a>
 ### The run at recorded places, repeated
 
 `stacking_at_recorded_places.py 20 paired 650` (job
@@ -3447,6 +3569,7 @@ By the red cube's distance from the robot, 13:55: nearer than 265 mm 10
 tests, 2 lifted, 0 stacked; farther 10 tests, 8 lifted, 4 stacked. The
 same split as in the random tests (13 lifts in 36 against 42 in 52).
 
+<a id="d-2026-11-20-what-it-says"></a>
 ### What it says
 
 - In each of these 20 recordings a human stacked the cubes from this start
@@ -3461,7 +3584,7 @@ same split as in the random tests (13 lifts in 36 against 42 in 52).
   places 6, 5 and 6 of 20, the earlier placement 10, 7 and 7.
 - The near red cubes are the larger half of it: no stack in 10 with the
   red cube nearer than 265 mm, at places where humans stacked. That is the
-  overshoot of the reach measured in "The reach itself, measured".
+  overshoot of the reach measured in ["The reach itself, measured"](#d-2026-11-20-the-reach-itself-measured).
 
 Stacking with the unchanged checkpoint stands at 17 in 60 random tests
 with the current placement. The goal is not reached.
@@ -3469,6 +3592,7 @@ with the current placement. The goal is not reached.
 No new diagnostic (57 `.py` files in `vla_testing/diagnostics/`); no agent
 mistake was confirmed in this part.
 
+<a id="d-2026-11-20-asking-the-model-every-25-steps"></a>
 ## 2026-11-20 — Asking the model every 25 steps: 7, 8 and 6 stacks of 20, and the dropped cubes become cubes held in the air at the same wrong place
 
 Result in one line: asked every 25 steps instead of the checkpoint's 50,
@@ -3480,15 +3604,17 @@ above the large cube for 43 to 365 steps. New pictures every 25 steps do
 not bring the cube over the large cube. No file under `src/`, `tests/`,
 `configs/` or `scripts/` changed.
 
+<a id="d-2026-11-20-why-it-was-looked-at"></a>
 ### Why it was looked at
 
 Two mechanisms on file put the decisive move late in an answer of 50
 targets, where it is played from pictures more than a second old: the
 closing on near red cubes ("How a near failure happens") and the opening
-above the large cube ("After the lift, read from the tests themselves").
+above the large cube (["After the lift, read from the tests themselves"](#d-2026-11-20-after-the-lift-read-from-the)).
 Only one other setting had been tried, 10 steps (0 of 20, "Tested and
 refuted", point 1).
 
+<a id="d-2026-11-20-where-in-an-answer-the-arm"></a>
 ### Where in an answer the arm acts, asked every 50
 
 Typed-in from the stored targets of the three runs of the current state
@@ -3507,6 +3633,7 @@ narrowest since the lift.
 - The first opening after the lift lies at target 25 or later in 30 of the
   36 tests that have one (13 of 16 stacks, 17 of 20 others).
 
+<a id="d-2026-11-20-the-runs"></a>
 ### The runs
 
 `random_stacking_asked_every.py <tests> <asked every> <policy seed base>`
@@ -3545,6 +3672,7 @@ ways: layout 6 goes from 0 lifts in 3 to 3 stacks in 3, layout 3 from 3
 lifts and 1 stack to no lift. The stacks come at steps 227 to 648 when
 asked every 50 and 250 to 649 when asked every 25.
 
+<a id="d-2026-11-20-what-the-arm-does-when-asked"></a>
 ### What the arm does when asked every 25
 
 Typed-in from the stored targets of the three runs at 25 (60 tests):
@@ -3603,6 +3731,7 @@ Offline, for the scene's two pictures 25 frames before the human lets go
 scene wrist", 33 recordings): tip 10.0 mm past, 7.1 mm to the right,
 70.4 mm above the table, which is 20.4 mm above resting height.
 
+<a id="d-2026-11-20-what-it-says-2"></a>
 ### What it says
 
 - New pictures do not correct the place. Asked every 50, the cube is let
@@ -3634,6 +3763,7 @@ of this part was launched, and its script written, without the
 announcement and the pre-code statement the rules ask for first, a sixth
 time.
 
+<a id="d-2026-11-20-the-cable-on-the-recording-robots"></a>
 ## 2026-11-20 — The cable on the recording robot's arm: taken off the real picture and put on the drawn robots, the reach moves by 0 to 2 mm of 10
 
 Result in one line: the pink servo cable that runs along the recording
@@ -3643,9 +3773,10 @@ goes by. Per recording, the reach past a near red cube changes by −0.1 to
 the scene's. No file under `src/`, `tests/`, `configs/` or `scripts/`
 changed.
 
+<a id="d-2026-11-20-why-it-was-looked-at-2"></a>
 ### Why it was looked at
 
-"Two open candidates closed" left one point: which part of the drawn arm
+["Two open candidates closed"](#d-2026-11-20-two-open-candidates-closed) left one point: which part of the drawn arm
 in the top picture moves the aim. In the stored real top pictures the arm
 is black all over and carries a pink and white cable over the hand, the
 forearm and the base (`top-release-robot-looks.png`). The earlier picture
@@ -3654,6 +3785,7 @@ also where the cable crosses the arm, so there it shows a light streak in
 place of a pink one (`early-reach-105-top-dark-0.png`); the cable was
 never taken off the arm, and never put on a drawn robot.
 
+<a id="d-2026-11-20-the-pictures"></a>
 ### The pictures
 
 `top_picture_parts.py render <moment> early-reach-<moment>-top-cable cable`
@@ -3672,6 +3804,7 @@ Check: the real picture's answers are the stored ones (largest difference
 0.00 mm), and "cables on the table painted over" gives 12.0 and 10.8 mm
 as before.
 
+<a id="d-2026-11-20-what-the-model-answers"></a>
 ### What the model answers
 
 Near red cubes (13 recordings), the last of the 50 targets. "Past, per
@@ -3713,6 +3846,7 @@ near cube (median of 13; 105 / 55 frames): real robot 2.3 / 0.4 mm; one
 black outline 0.3 / 1.9 mm; dark drawn robot −0.1 / 0.0 mm; scene's robot
 1.0 / 1.2 mm.
 
+<a id="d-2026-11-20-what-it-says-3"></a>
 ### What it says
 
 - The cable is not it. In eight comparisons it is worth −0.1 to 2.3 mm
@@ -3738,7 +3872,7 @@ black outline 0.3 / 1.9 mm; dark drawn robot −0.1 / 0.0 mm; scene's robot
   base carries 5.8 of the 9.8 mm at 105 frames and 4.7 of the 5.0 mm at
   55 frames (near cubes, per recording). It does not carry the early
   closing, and not drawing it leaves the stacks at 17 in 60. See the
-  section "The drawn robot taken apart by link" at the end of this
+  section ["The drawn robot taken apart by link"](#d-2026-11-20-the-drawn-robot-taken-apart-by) at the end of this
   ledger.
 
 Stacking with the unchanged checkpoint stands at 17 in 60 random tests
@@ -3750,6 +3884,7 @@ words that choose which pictures are stored. One agent mistake is
 recorded in `AGENT_MISTAKES.md`: the first launch (`arm-cable-1795183659`)
 failed after 5 s on an error in that edit.
 
+<a id="d-2026-11-20-the-table-in-the-wrist-picture"></a>
 ## 2026-11-20 — The table in the wrist picture during the reach: not the recording robot's leftover, but the shadows of cubes and hand that the scene's table lacks
 
 Result in one line: a new difference between the recordings and the scene
@@ -3762,6 +3897,7 @@ picture (+0.1 mm of height per recording against +12.5 mm with the
 scene's table). No file under `src/`, `tests/`, `configs/` or `scripts/`
 changed; nothing was tried in the product yet.
 
+<a id="d-2026-11-20-why-it-was-looked-at-3"></a>
 ### Why it was looked at
 
 "The reach taken apart" left this: with only the table of the real wrist
@@ -3771,8 +3907,9 @@ the closing) and follows the cube's distance less (0.54 against 0.71).
 The stored wrist pictures with the scene's table show a dark blob beside
 the jaw: the recording robot's base in the table picture, lying flat on
 the table. That leftover had been painted over and tested at the grasp
-and the release only ("Tested and refuted", point 2).
+and the release only (["Tested and refuted"](#d-2026-11-20-tested-and-refuted-each-in-a), point 2).
 
+<a id="d-2026-11-20-the-leftover-at-the-reach"></a>
 ### The leftover at the reach: seen, and not what the reach goes by
 
 `table_leftovers_at_the_reach.py` (new), job
@@ -3806,6 +3943,7 @@ and the answers to them are the stored numbers.
 The leftover is closed for the reach as well: not found to matter in what
 was tried.
 
+<a id="d-2026-11-20-what-differs-between-the-two-tables"></a>
 ### What differs between the two tables: the strip around cubes and hand
 
 The real wrist picture minus the same picture with the scene's table,
@@ -3873,6 +4011,7 @@ within their 50 targets, near + far of 13 + 25):
   same size"; their difference is not the paired difference (entry in
   `AGENT_MISTAKES.md`).
 
+<a id="d-2026-11-20-the-shadows-in-the-recordings-measured"></a>
 ### The shadows in the recordings, measured
 
 Real picture divided by the empty table (1.00 = no darkening), median
@@ -3897,6 +4036,7 @@ cube is 41 pixels across), and 2 to 8 % brighter on the opposite side. In
 the wrist picture the same side is 39 % darker at the large cube and 26 %
 at the red cube, and still 13 % and 6 % darker 46 to 70 pixels away.
 
+<a id="d-2026-11-20-the-scene-has-no-shadows-and"></a>
 ### The scene has no shadows and cannot switch them on as it draws now
 
 - The pinned upstream scene sets up its two lamps without shadows
@@ -3913,6 +4053,7 @@ at the red cube, and still 13 % and 6 % darker 46 to 70 pixels away.
   would have to be computed and painted onto the table, or the cameras
   would have to draw differently.
 
+<a id="d-2026-11-20-what-this-does-and-does-not"></a>
 ### What this does and does not show
 
 - Shown: the difference exists in the training pictures (table above),
@@ -3939,6 +4080,7 @@ broken import since 09:24 and were repaired
 `AGENT_MISTAKES.md`: that broken import, and a seventh start of a turn
 without announcing what would be written and run.
 
+<a id="d-2026-11-20-addition-15-58"></a>
 ### Addition, 15:58: the same test at the grasp and at the release — the shadows act early in the reach only
 
 This answers two of the three points left under "not shown" above.
@@ -4033,6 +4175,7 @@ skips that one comparison. A third item is recorded in
 `AGENT_MISTAKES.md`: a difference of two medians given as the table's
 effect.
 
+<a id="d-2026-11-20-the-drawn-robot-taken-apart-by"></a>
 ## 2026-11-20 — The drawn robot taken apart by link: the drawn base moves the model's reach, but not drawing it leaves the stacks at 17 in 60
 
 Result in one line: nothing under `src/`, `tests/`, `configs/` or
@@ -4046,6 +4189,7 @@ test it is not what holds the stacking back: with the base not drawn the
 model stacks 6, 6 and 5 of 20, 17 in 60, against the product's 6, 5 and
 6. No product change was made. No fine-tuning. Everything uncommitted.
 
+<a id="d-2026-11-20-the-top-picture-by-robot-part"></a>
 ### The top picture by robot part
 
 `top_picture_parts.py` now also exchanges single parts of the robot
@@ -4109,6 +4253,7 @@ What the table says:
   carries it: each part alone from the scene 6 to 8, the drawn robot with
   any one part taken from the real picture 10 to 13.
 
+<a id="d-2026-11-20-with-the-scenes-own-pictures-at"></a>
 ### With the scene's own pictures, at four moments
 
 `scene_without_drawn_base.py` (new) takes the scene's top and wrist
@@ -4154,6 +4299,7 @@ lower (29), 3.5 mm nearer its centre (28); with the scene's wrist picture
 scene's wrist picture the opening stays 16 mm above the real pictures'
 (66.7 against 50.4 mm).
 
+<a id="d-2026-11-20-in-the-random-stacking-test"></a>
 ### In the random stacking test: 17 in 60 with the base drawn, 17 in 60 without
 
 Tried as a diagnostic, without a product change:
@@ -4208,6 +4354,7 @@ order of the table above: far closings 10, 7, 8, 9, 8, 7; of these rose
 10, 10, 8, 8, 10, 10 and stacked 4, 4, 5, 5, 4, 5. 20 + 56 = 76 = 37 +
 39 and 7 + 27 = 34 = 17 + 17.)
 
+<a id="d-2026-11-20-what-it-says-4"></a>
 ### What it says
 
 - The drawn base on top of the photographed base is a difference from
@@ -4238,6 +4385,7 @@ plus the launcher `base_not_drawn_python`): `scene_without_drawn_base.py`,
 recorded in `AGENT_MISTAKES.md`: an eighth start of a turn without saying
 first what would be run.
 
+<a id="d-2026-11-20-addition-17-36"></a>
 ### Addition, 17:36: the 10 stacks in 20 of 09:58 repeat with today's code; that state was never committed
 
 The user's question: "earlier run were 10 out of 20. was that state
@@ -4269,7 +4417,7 @@ behavior got worse and you cannot get back to 10 out of 20."
   displaced without grasp, seeds 14 and 19 no lift, as at 09:58.
 - So today's code with the earlier placement gives 6 + 4 = 10 stacks on
   these 20 tests, and 10, 7 and 7 on the three policy seed bases (24 in
-  60, table in "Why room for the fingers cost stacks"), against 6, 5 and
+  60, table in ["Why room for the fingers cost stacks"](#d-2026-11-20-why-room-for-the-fingers-cost)), against 6, 5 and
   6 (17 in 60) with room for the fingers. Nothing else that was changed
   since 09:58 lowered the count.
 
@@ -4277,9 +4425,10 @@ No product file was changed for this. The placement rule stays as the
 user asked for it until the user decides otherwise.
 
 Amendment, 2026-11-20, 18:15: the user decided at 17:52 ("check in the 10
-out of 20 state"). See the last section of this ledger, "Placement back
-to the earlier rule on the user's word".
+out of 20 state"). See the last section of this ledger, ["Placement back
+to the earlier rule on the user's word"](#d-2026-11-20-placement-back-to-the-earlier-rule).
 
+<a id="d-2026-11-20-several-objects-in-one-scene"></a>
 ## 2026-11-20 — Several objects in one scene: what the checkpoint was trained on, what was measured here, and what is published about it
 
 Result in one line: the checkpoint was never trained to choose one of
@@ -4292,13 +4441,14 @@ the trained stacking pair. No file under `src/`, `tests/`, `configs/` or
 "Models evaluated" in `README.md` was started from this section.
 
 Written by the agent session that measured the training data (section
-"What the training set teaches about the wrist roll" above), on the
+["What the training set teaches about the wrist roll"](#d-2026-11-20-what-the-training-set-teaches-about) above), on the
 user's four questions of this afternoon: which sentences the checkpoint
 was trained with and why it is called "10-task"; whether it was trained
 with several objects in a scene so that a user can choose; whether it
 will generalize to such a scene; and whether the pull of a second object
 is expected.
 
+<a id="d-2026-11-20-the-ten-sentences"></a>
 ### The ten sentences
 
 "10-task" is nine real tasks plus three simulated tasks, of which two
@@ -4328,11 +4478,12 @@ evaluation for the three simulated tasks only, 50 runs each: cube 94 %
 (47), small cube 90 % (45), can 96 % (48). The card states that the real
 side was not measured.
 
+<a id="d-2026-11-20-what-a-training-scene-contains"></a>
 ### What a training scene contains
 
 | Part of the training set | Objects on the table | Does the sentence choose between them? |
 |---|---|---|
-| Simulated, 1,498 episodes, 3 sentences | One object and a bin; that object is always the one to pick up; no rendered episode has two pickup objects ("The pull towards the blue cube exists on rendered pictures only" above) | No, there is nothing to choose |
+| Simulated, 1,498 episodes, 3 sentences | One object and a bin; that object is always the one to pick up; no rendered episode has two pickup objects (["The pull towards the blue cube exists on rendered pictures only"](#d-2026-11-19-the-pull-towards-the-blue-cube) above) | No, there is nothing to choose |
 | Real "Stack the smaller cube on the larger one", 200 recordings | The red 20 mm cube and the pale-blue 40 mm cube (`analysis/real-start-pictures-top.png`, start pictures of the recordings on this machine) | No, the roles are fixed: red onto blue |
 | Real "Stack the cube on the can", 200 recordings | Not looked at; by its sentence a cube and a can | No, one sentence with fixed roles |
 | Real bin tasks, seven object types, 1,800 recordings | One start picture looked at (battery task, first top frame): one battery, a black bin, a black block at the right edge, the arm. The data set card describes a target object and a container | Not verified beyond that one picture |
@@ -4349,27 +4500,28 @@ that are not on this machine was written
 automatic review of the agent's commands rejected its launch as going
 beyond the user's question, and the user has not asked for it since.
 
+<a id="d-2026-11-20-what-was-measured-here-no-new"></a>
 ### What was measured here (no new measurement; the sections above)
 
 - A second cube beside the red one turns the arm 0.30 to 0.44 of the way
   towards it in rendered scenes, with the bin sentence and with the
   stacking sentence; with the red cube alone the arm follows the red cube
   (0.88). Seeds 3, 4, 5, 6 and 9 never lifted the red cube in nine
-  two-cube runs ("The second cube pulls the gripper off the cube it
-  should pick up", "A green large cube pulls the gripper almost as
-  much").
+  two-cube runs (["The second cube pulls the gripper off the cube it
+  should pick up"](#d-2026-11-19-the-second-cube-pulls-the-gripper), ["A green large cube pulls the gripper almost as
+  much"](#d-2026-11-19-a-green-large-cube-pulls-the)).
 - The second object does not have to be a trained one: a green cube,
   which no training episode shows, pulls 0.30 of the way.
 - The sentence does not select the behaviour: on real stacking pictures
   the arm error is 5.1° with the stacking sentence and 5.4° with the bin
-  sentence ("Root cause: the checkpoint has never seen a rendered
-  stacking scene").
+  sentence (["Root cause: the checkpoint has never seen a rendered
+  stacking scene"](#d-2026-11-19-root-cause)).
 - Sometimes the wrong object is taken: seeds 3 and 9 lifted the blue cube
-  ("Repeated placement mistake corrected centrally"); 2 of 20 tests of
+  (["Repeated placement mistake corrected centrally"](#d-2026-11-19-repeated-placement-mistake-corrected-centrally)); 2 of 20 tests of
   run 110153 are labelled "wrong cube selected".
 - On real pictures of the trained two-cube scene the model steers at the
-  red cube, 16 of 16 answers ("The pull towards the blue cube exists on
-  rendered pictures only"). That is a scene it saw 200 times with fixed
+  red cube, 16 of 16 answers (["The pull towards the blue cube exists on
+  rendered pictures only"](#d-2026-11-19-the-pull-towards-the-blue-cube)). That is a scene it saw 200 times with fixed
   roles; it is not a choice made from the sentence.
 
 Not measured: two different trained objects with a bin in one scene (for
@@ -4378,6 +4530,7 @@ scene with several objects on a real robot outside the two stacking
 tasks; which feature of the second object makes the pull (size, nearness
 or presence).
 
+<a id="d-2026-11-20-what-is-published"></a>
 ### What is published
 
 Searched on the web shortly before 18:00. Every number below was read in the fetched
@@ -4399,6 +4552,7 @@ and a sentence and gives robot commands.
 | "Fine-Tuning VLAs with Self-Demonstrated Generative Control", arXiv 2608.19490 | π0.5 | Fine-tuning on one task makes the model rely on the picture and lose the text conditioning. Recording both sentences in scenes that hold both objects raises instruction following from 45 % to 75 %; the same demonstrations with one object per scene do worse |
 | SmolVLA paper, arXiv 2506.01844 | SmolVLA | Tests only tasks the model was fine-tuned on. Its one test outside the training distribution is the same single object at new places: 90 % falls to 50 %. Lists better instruction following as future work |
 
+<a id="d-2026-11-20-why-it-happens-in-the-words"></a>
 ### Why it happens, in the words of these papers, and how it fits what was measured here
 
 1. The model is trained to copy the demonstrated motion for a picture and
@@ -4428,6 +4582,7 @@ seeds. That the arm goes part of the way to each is this ledger's own
 measurement; calling it a consequence of points 2 and 3 is a reading, not
 a cited result.
 
+<a id="d-2026-11-20-what-follows-for-the-workshop"></a>
 ### What follows for the workshop
 
 - A user chooses the object by putting that one object on the table and
@@ -4444,6 +4599,7 @@ Agent mistakes of this part are recorded in `AGENT_MISTAKES.md` as an
 amendment (the one-picture probe run without its announcement, and the
 unrun script written before the pre-code statement).
 
+<a id="d-2026-11-20-placement-back-to-the-earlier-rule"></a>
 ## 2026-11-20 — Placement back to the earlier rule on the user's word: 10 stacks in 20 again, and that state committed
 
 Result in one line: the product places two cubes at least 40 mm apart
@@ -4456,6 +4612,7 @@ instruction, 17:52: "check in the 10 out of 20 state". The working tree
 at that moment was not that state: it held the finger-room rule (cubes at
 least 73.3 mm apart), which gave 6 stacks in 20.
 
+<a id="d-2026-11-20-what-was-changed"></a>
 ### What was changed
 
 | File | Change |
@@ -4473,6 +4630,7 @@ the reachable workspace itself. A search of `src`, `tests`, `scripts`,
 `Makefile` and `README.md` for `room_for_the_fingers`, `FINGER_REACH` and
 "room for the fingers" returns nothing.
 
+<a id="d-2026-11-20-proof"></a>
 ### Proof
 
 1. Layouts. The scene `stack2-recording-rig`, built and reset as the
@@ -4503,10 +4661,11 @@ Seed 17 is the one difference and is no stack in either run: with 900
 steps it ended as "final stack unstable", with 650 as "dropped cube", as
 already found at 17:36.
 
+<a id="d-2026-11-20-what-this-state-is-and-is"></a>
 ### What this state is and is not
 
 - With this placement the three policy seed bases gave 10, 7 and 7
-  stacks (24 in 60; table in "Why room for the fingers cost stacks"
+  stacks (24 in 60; table in ["Why room for the fingers cost stacks"](#d-2026-11-20-why-room-for-the-fingers-cost)
   above); only the first of the three was run again with the product
   after the restore. With the finger-room rule they gave 6, 5 and 6 (17
   in 60).
@@ -4515,8 +4674,9 @@ already found at 17:36.
   in the sections above (gripper closing past a near red cube, the cube
   let go beside the large cube).
 - The finger-room rule is not lost: `finger_room_rule.py` holds it, and
-  the section "The placement rule" above holds its measurement.
+  the section ["The placement rule"](#d-2026-11-20-the-placement-rule) above holds its measurement.
 
+<a id="d-2026-11-20-what-the-commit-holds"></a>
 ### What the commit holds
 
 The workshop's product source, tests, configuration, scripts, `Makefile`,
@@ -4526,7 +4686,7 @@ The workshop's product source, tests, configuration, scripts, `Makefile`,
 Not in it: the other run folders (61 GB without the videos), the videos,
 `AGENT_MISTAKES.md` at the repository root, and the diagnostic
 `answers_on_own_training_pictures.py`, which was written at 17:40 and has
-never been run. The ledger section "Several objects in one scene" and
+never been run. The ledger section ["Several objects in one scene"](#d-2026-11-20-several-objects-in-one-scene) and
 the README table are the other session's work and are in the commit
 because they are in the same files. Nothing was pushed.
 
@@ -4536,6 +4696,7 @@ amendments of 18:15.
 Amendment, 19:10: both commits (`e9f453c`, `ddd2319`) were pushed to
 `origin/so101-smolvla` at 18:59:26 on the user's word ("1. push").
 
+<a id="d-2026-11-20-the-checkpoint-on-its-own-training"></a>
 ## 2026-11-20 — The checkpoint on its own training pictures: the grasp of the validated bin task within 2.3 mm, of stacking within 6.4 mm, and 11.3 mm on the twin's pictures
 
 Result in one line: asked at the grasp on pictures it was trained on,
@@ -4548,6 +4709,7 @@ Written by the agent session that works on the stacking twin, on the
 user's question of 18:58 what one would fine-tune on, and the instruction
 to run this measurement before answering it.
 
+<a id="d-2026-11-20-why-this-measurement"></a>
 ### Why this measurement
 
 The model card reports an evaluation only for the three simulated bin
@@ -4557,6 +4719,7 @@ failures of the stacking twin come from the twin or from a checkpoint
 that does stacking less exactly to begin with. This compares the two on
 equal terms: the model's own training pictures, no simulation, one rule.
 
+<a id="d-2026-11-20-method-vlatesting-diagnostics-answersonowntrainingpictures-py"></a>
 ### Method (`vla_testing/diagnostics/answers_on_own_training_pictures.py`)
 
 - Simulated side: 38 of the 500 episodes of the 20 mm cube task of
@@ -4578,6 +4741,7 @@ equal terms: the model's own training pictures, no simulation, one rule.
   episodes the tip stands 11.9 to 12.2 mm above the table (the 20 mm cube
   is 10 mm high at its middle).
 
+<a id="d-2026-11-20-at-the-grasp-asked-25-frames"></a>
 ### At the grasp (asked 25 frames before the demonstrator closes)
 
 Tip where the model's answer closes, minus tip where the demonstrator's
@@ -4606,6 +4770,7 @@ file, the scene as it was at 15:51 today):
 | Scene top + scene wrist | 36 | 11.3 mm | 6.0, 15.3, 21.4 | 14 of 36 | +5.9, +2.0, +12.3 mm |
 | Scene top + scene wrist, both with recorded cube colours | 34 | 11.7 mm | 7.1, 14.5, 20.6 | 12 of 34 | +7.5, +2.5, +9.0 mm |
 
+<a id="d-2026-11-20-earlier-in-the-reach-last-of"></a>
 ### Earlier in the reach (last of the 50 targets against the demonstrator's 50th command)
 
 | Asked | Simulated bin task: median on the table, within 10 mm | Real stacking: median on the table, within 10 mm |
@@ -4622,6 +4787,7 @@ the last target is after the grasp (3.1 mm simulated, 47.4 mm stacking):
 that is the carry, which the humans do in many ways, and it is not used
 here.
 
+<a id="d-2026-11-20-what-it-says-5"></a>
 ### What it says
 
 - The checkpoint knows the stacking grasp less exactly than the task its
@@ -4638,19 +4804,21 @@ here.
   closings within the cube's half edge (31 to 14 of 36), and the
   checkpoint starts from a looser stacking grasp than its bin grasp.
 
+<a id="d-2026-11-20-what-one-could-fine-tune-on"></a>
 ### What one could fine-tune on (nothing was fine-tuned; none is authorised)
 
 | Data | Exists? | What it would and would not do |
 |---|---|---|
 | The 200 real stacking recordings | Yes, and they are already in the checkpoint's training set | Could tighten the 6.4 mm on real pictures. The twin shows rendered pictures, which this data does not contain |
 | Stacking episodes rendered in the twin by a scripted demonstrator, as the checkpoint's authors made the 1,498 bin episodes | No. Their generator (`source/0_dataset_gen` of the simulated data set) knows three scenes, `cube40`, `cube20`, `cylinder40`; the word "stack" does not occur in it, and the upstream simulator registers only the three bin tasks | This is the recipe that made the bin tasks work in SAPIEN (10 of 10 and 8 of 10 here). A stacking demonstrator would have to be written first |
-| The real recordings replayed in the twin, keeping the humans' commands and storing the twin's pictures | Not made. The replay exists (`replay_recordings.py`): in the corrected twin the red cube is lifted in 32 of 35 replayed recordings and ends on the large cube in 23 of 35 ("Test without the model" above) | Would give rendered pictures with human actions without a new demonstrator; about a third of the replays do not end in a stack and would have to be left out |
+| The real recordings replayed in the twin, keeping the humans' commands and storing the twin's pictures | Not made. The replay exists (`replay_recordings.py`): in the corrected twin the red cube is lifted in 32 of 35 replayed recordings and ends on the large cube in 23 of 35 (["Test without the model"](#d-2026-11-20-test-without-the-model) above) | Would give rendered pictures with human actions without a new demonstrator; about a third of the replays do not end in a stack and would have to be left out |
 
 A model fine-tuned on either kind of rendered data would no longer be
 the unchanged checkpoint, and it would be fitted to this twin; it says
 nothing about the real robot. Not measured: whether any of the three
 would raise the count of stacks.
 
+<a id="d-2026-11-20-seen-on-the-way-not-followed"></a>
 ### Seen on the way, not followed up
 
 The upstream environment prints that it ignores the arguments
@@ -4660,6 +4828,7 @@ The upstream environment prints that it ignores the arguments
 bin tasks nevertheless place their objects in the central reachable
 workspace was not checked in this part.
 
+<a id="d-2026-11-20-addition-19-22"></a>
 ### Addition, 19:22: four directions looked at again from stored files; none gives something to change
 
 No job was run, no model was asked, nothing was simulated, no product
@@ -4671,8 +4840,8 @@ checkpoint's own settings as they are). Everything below is read from
 stored result files in this step.
 
 1. The drawn arm in the top picture. It was already taken apart
-   ("The reach itself, measured", "The cable on the recording robot's
-   arm", "The drawn robot taken apart by link"): outline, hand, cable,
+   (["The reach itself, measured"](#d-2026-11-20-the-reach-itself-measured), "The cable on the recording robot's
+   arm", ["The drawn robot taken apart by link"](#d-2026-11-20-the-drawn-robot-taken-apart-by)): outline, hand, cable,
    every link, the base. Stored medians for near red cubes, last target
    past the cube, 105 / 55 frames before the closing, real table, real
    cubes, real wrist picture (`early-reach-<frames>-top-parts.json`):
@@ -4695,7 +4864,7 @@ stored result files in this step.
 
    The recorded colours do not bring the reach closer to the cube.
 3. How the pictures are made. Sharpness and video compression were
-   measured in "The wrist camera now sees the recorded table" ("Checked
+   measured in ["The wrist camera now sees the recorded table"](#d-2026-11-20-the-wrist-camera-now-sees-the) ("Checked
    first and not the cause"), the lens in "The top camera's distance".
    Nothing new was found to measure there.
 4. The twin without the model. The 35 replays of the humans' own
@@ -4718,7 +4887,7 @@ stored result files in this step.
    (`replay_recordings.py:80-81`), so a missed red cube or a pushed
    large cube can come from that reading as well as from the scene; and
    the scene was kept from one recording to the next (`:54`, `:82`),
-   which changes single courses ("Why the same seed ran differently").
+   which changes single courses (["Why the same seed ran differently"](#d-2026-11-20-why-the-same-seed-ran-differently)).
    In the 23 stacks the red cube rises 54.5 to 109.1 mm at most; the two
    cubes that rise 268.7 and 277.6 mm are thrown, at or after the
    release. Why was not measured.
@@ -4740,8 +4909,8 @@ stored result files in this step.
 
    The failing tests let the cube go 20 mm or more beside the centre and
    24 mm or more above the large cube, and nothing pushes it up after
-   that: this is the picture of "After the lift, read from the tests
-   themselves", now for the committed state. The one upward step of
+   that: this is the picture of ["After the lift, read from the tests
+   themselves"](#d-2026-11-20-after-the-lift-read-from-the), now for the committed state. The one upward step of
    9.7 mm is seed 3 while its gripper opens (rise 51.7 mm at step 240,
    57.9 mm at step 242, 42.6 mm at step 244); it stacks at step 284.
    Seed 11, labelled "cube displaced without grasp", carries the cube up
@@ -4759,19 +4928,20 @@ picture at the release, the missing shadows early in the reach), and so
 is the checkpoint's own share (6.4 mm on real pictures against 2.3 mm
 for its bin task). The product stands at 10 stacks in 20 and 24 in 60.
 The goal is not reached. What would change that is a decision of the
-user: accept this rate, or choose data to fine-tune on (the table "What
-one could fine-tune on" above).
+user: accept this rate, or choose data to fine-tune on (the table ["What
+one could fine-tune on"](#d-2026-11-20-what-one-could-fine-tune-on) above).
 
 One agent mistake of this part is recorded in `AGENT_MISTAKES.md` (the
 turn began with four looking steps without a sentence before them, an
 amendment, the tenth time).
 
+<a id="d-2026-11-20-addition-21-05"></a>
 ### Addition, 21:05: the real arm's joints stop short of their commands, the scene's do not; giving the scene that behaviour does not raise the stacks
 
 One more comparison with the training data that needs no model: the
 humans' own recorded commands, played in the scene. No product file
 changed in this part. Jobs, logs and times are in `TESTING_LEDGER.md`,
-"Addition, 21:05".
+["Addition, 21:05"](TESTING_LEDGER.md#t-2026-11-20-addition-21-05).
 
 **1. The humans' commands in the scene, each recording in a new scene**
 (`vla_testing/diagnostics/replay_recordings_fresh_scene.py`, result
@@ -4935,6 +5105,7 @@ tried with a failing command); the new model-side diagnostic stopped
 after its first test on a check of its own that was stricter than the
 precision of the stored numbers (an amendment).
 
+<a id="d-2026-11-20-addition-21-30"></a>
 ### Addition, 21:30: the humans' commands with both cubes where the first top picture shows them: still 23 stacks of 33
 
 The replay above puts the cubes where the gripper tip is at the grasp
@@ -4978,6 +5149,7 @@ started this measurement on the automatic goal reminder, with an edit of
 the diagnostic and a 12-minute job, without saying up front that work
 resumed and what it would edit and run. The user objected at 21:26.
 
+<a id="d-2026-11-20-addition-22-05"></a>
 ### Addition, 22:05: stacking parked on the user's word; the uncommitted files sorted, the dead ends deleted
 
 The user parked the stacking work at 21:33 and moved to fine-tuning
@@ -5006,8 +5178,8 @@ was in git):
 
 | What | Size | Why |
 |---|---:|---|
-| `vla_testing/smooth-train-500/` (the checkpoints of the trial of 18 November) and six loose result files of the same day (`smoothness-baseline-heldout.json`, `smoothness-dry-forward-20261118-1952.json`, `denoise-trace-episode490-frame80.json`, `flow-time-probe-episode490-frame80.json`, `sample-mean-episode490-frame80.json`, `training-frame-noise-20261118-1935.json`) | 11,899 MiB | The temporal-loss trial failed its own gate ("Temporal-loss trial failed before simulation": the reversals stayed near 50 % in every checkpoint). A search of `src/`, `scripts/`, `configs/` and `tests/` finds no training code of the trial. The numbers stay in that section |
-| `vla_testing/diagnostics/stacking_with_servo_stop_short.py` and its two run folders `random-stacking-servo-stop-short-sapien-20261120-204636` (20 tests) and `…-204302` (one test, the launch that failed) | 2,787 MiB | No gain in its one run: 7 stacks in 20 against 10. The script put the stop-short between the model and the scene ("on the policy side" in "Addition, 21:05"), not into the scene's drives, so it is not part of the twin |
+| `vla_testing/smooth-train-500/` (the checkpoints of the trial of 18 November) and six loose result files of the same day (`smoothness-baseline-heldout.json`, `smoothness-dry-forward-20261118-1952.json`, `denoise-trace-episode490-frame80.json`, `flow-time-probe-episode490-frame80.json`, `sample-mean-episode490-frame80.json`, `training-frame-noise-20261118-1935.json`) | 11,899 MiB | The temporal-loss trial failed its own gate (["Temporal-loss trial failed before simulation"](#d-2026-11-18-temporal-loss-trial-failed-before-simulation): the reversals stayed near 50 % in every checkpoint). A search of `src/`, `scripts/`, `configs/` and `tests/` finds no training code of the trial. The numbers stay in that section |
+| `vla_testing/diagnostics/stacking_with_servo_stop_short.py` and its two run folders `random-stacking-servo-stop-short-sapien-20261120-204636` (20 tests) and `…-204302` (one test, the launch that failed) | 2,787 MiB | No gain in its one run: 7 stacks in 20 against 10. The script put the stop-short between the model and the scene ("on the policy side" in ["Addition, 21:05"](#d-2026-11-20-addition-21-05)), not into the scene's drives, so it is not part of the twin |
 | Leftovers of 17 and 18 November that no ledger, README or comparison file names: seven `cube-0.*` folders, `scene/`, `vla_testing/summary.json`, `random-20261118-133847/`, `random-baseline-harry-final20/`, `random-sapien-pilot-20261118-1928/`, `render-ab-20261118-1924/`, `training-dataset-replay-20261118/` | 328 MiB | Not cited anywhere. Judged by searching for their names; the folders were not opened one by one before the removal |
 | 523 files `policy-observations.npz` (the pictures the model was shown, per test) in all run folders except `random-stacking-recording-rig-sapien-20261120-180023` | 49,555 MiB | The numbers taken from them are in the ledgers; a 20-test run can be made again in about 12 minutes (713 s for the run of 18:00) |
 
@@ -5017,7 +5189,7 @@ videos; 20 picture files remain, those of the committed run of 18:00.
 
 What this means for the text above:
 
-- "Addition, 21:05", part 3, names
+- ["Addition, 21:05"](#d-2026-11-20-addition-21-05), part 3, names
   `stacking_with_servo_stop_short.py` and the folder
   `random-stacking-servo-stop-short-sapien-20261120-204636`. Neither
   exists any more. The numbers written there (7 stacks in 20, the
@@ -5050,6 +5222,7 @@ root `.codex/` and `.slai-upstream/` folders and
 
 No agent mistake was confirmed in this part.
 
+<a id="d-2026-11-21-gemma-4-beside-smolvla"></a>
 ## 2026-11-21 — Gemma 4 beside SmolVLA: it does not read a cube stack from raw pictures (0 of 12), and with two server slots its picture requests cost no voice command
 
 Result in one line: two measurements for the planned system (voice,
@@ -5064,12 +5237,13 @@ pictures, 0.7 to 3.7 s after the command instead of 0.6 to 2.3 s. No
 file under `src/`, `tests/`, `configs/` or `scripts/` changed. SmolVLA
 was not run. Written at 15:05 by the agent session that writes the spec.
 
+<a id="d-2026-11-21-why"></a>
 ### Why
 
 The user's decisions of 2026-11-21 (`SPEC.md`, section 2): the arm is
 moved by SmolVLA only; one language model, Gemma 4 E4B as on branch
 `gemma4-e4b-it_voice_intent`; segmentation by SAM 3. The literature
-behind it is in `RESEARCH.md` (Main conclusion and Finding 8: something
+behind it is in `RESEARCH.md` (Main conclusion and [Finding 8](RESEARCH.md#r-finding-8): something
 other than the policy decides which object is meant, and the other
 objects are painted over in the policy's pictures). Open before any of
 it is built: can this language model read the scene, and can its one
@@ -5082,6 +5256,7 @@ voice workshop's own server (`third_party/llama.cpp`, commit
 `1d231e1`), in the environment its entry point sets
 (`run_pipeline.sh:56-63`: `.venv`, `scripts/ryzen_ai_env.sh`).
 
+<a id="d-2026-11-21-reading-a-stack-and-planning-its"></a>
 ### Reading a stack and planning its rebuild from two raw pictures
 
 12 rendered picture pairs (a stack with the marker, then the same cubes
@@ -5102,8 +5277,9 @@ program on the same pairs (its file could not be written in that
 session). Not tested here: Gemma on single, simple questions, or on
 pictures in which outlines are drawn or one object is cut out; that is
 the next measurement, ordered by the user at 15:03. Details and limits:
-`RESEARCH.md`, section "Unfinished".
+`RESEARCH.md`, section ["Unfinished"](RESEARCH.md#r-unfinished).
 
+<a id="d-2026-11-21-the-voice-loop-while-the-same"></a>
 ### The voice loop while the same server answers picture requests
 
 Where the voice loop can lose a command, read on the branch: one worker
@@ -5199,6 +5375,7 @@ answered from its prompt cache and evaluated 5 prompt tokens instead of
 of the track. D2 and E2 send 48 distinct pairs (none twice) and replace
 them. Their counts were the same (10 of 12).
 
+<a id="d-2026-11-21-decisions-and-what-follows"></a>
 ### Decisions and what follows
 
 - The user, 15:03: the two-slot setting is accepted (`parallel: 2`,
@@ -5248,6 +5425,7 @@ corrected, and one thing about how the section came to be is added.
   work that lasts the whole track is not measured. Its row (10 of 12,
   delays 2.6 / 4.8 / 11.2 s) stands as the result of that run.
 
+<a id="d-2026-11-21-task-3-without-gemma-reading-pictures"></a>
 ## 2026-11-21 — Task 3 without Gemma reading pictures: a plain program reads and plans the stack from outlines (12 of 12); Gemma takes "learn the stack" and "rebuild the stack" typed in 19 of 20 and spoken in 17 of 20 sentences
 
 Result in one line: after the 0 of 12 above, the picture work of task 3
@@ -5262,6 +5440,7 @@ changed; SmolVLA and SAM 3 were not run. Written after 16:01 by the
 agent session that writes the spec. Every number below was printed from
 the result files and logs in the same turn.
 
+<a id="d-2026-11-21-the-users-decisions-that-shaped-it"></a>
 ### The user's decisions that shaped it
 
 - 15:13: 0 of 12 is not workable; Gemma gets a smaller task, and the
@@ -5275,6 +5454,7 @@ the result files and logs in the same turn.
 - 16:01: voice control follows branch `gemma4-e4b-it_voice_intent`
   closely as the working reference; it is very stable there.
 
+<a id="d-2026-11-21-a-plain-program-reads-the-stack"></a>
 ### A plain program reads the stack and plans the rebuild from outlines
 
 Stand-in for SAM 3: the simulator's own outline of each cube, handed
@@ -5306,6 +5486,7 @@ the result shows colour, size, order and matching, not finding the
 cubes. Whether SAM 3's outlines are as good as the simulator's is not
 measured; SAM 3 has not run on this machine.
 
+<a id="d-2026-11-21-gemma-on-one-small-question-the"></a>
 ### Gemma on one small question (the marker, now parked)
 
 Ordered at 15:03 and chosen by the user in a question form: which end
@@ -5328,6 +5509,7 @@ On the whole picture every error is a cuboid-up picture answered
 marker is parked; what stays is that a cut-out helps this model, and
 that a larger picture does less than a cut-out.
 
+<a id="d-2026-11-21-the-two-new-commands-typed-and"></a>
 ### The two new commands, typed and spoken
 
 A copy of the branch's client (`gemma-branch-stack`, commit `1d231e1`)
@@ -5359,6 +5541,7 @@ for which Gemma gave the expected command. Job
   per sentence; the microphone loop with its overlapping windows was not
   in this test, and no person's voice.
 
+<a id="d-2026-11-21-what-the-user-is-shown-read"></a>
 ### What the user is shown, read on the branch (commit `1d231e1`)
 
 Gemma's one answer carries the command and the words it understood
@@ -5375,6 +5558,7 @@ window of which Gemma made no command is dropped before the dispatcher
 and shows nothing (`vla_pipeline/audio/gemma_listen.py:62-64`,
 `voice.py:122-125`).
 
+<a id="d-2026-11-21-what-follows"></a>
 ### What follows
 
 - `SPEC.md` carries all of this: task 3 by two commands (sections 1, 2
@@ -5399,6 +5583,7 @@ extended; results `scores-program-dev.json`, `scores-program-set.json`,
 No new agent mistake was confirmed in this part. The amendment above
 answers the open point of the journal's amendment of after 15:09.
 
+<a id="d-2026-11-21-voice-control-for-task-1"></a>
 ## 2026-11-21 — Voice control for task 1: Gemma gives `pick_place(object, place)`; the Gemma client is copied into this workshop; a notebook to try it by voice, with its own test (typed 30 of 30, synthetic voice 26 of 30)
 
 Result in one line: Gemma 4 E4B turns "pick up the small red cube and
@@ -5412,6 +5597,7 @@ Written after 19:01 by the agent session that writes the spec. Every
 number below was printed from the run logs, the notebook or git in the
 same turn.
 
+<a id="d-2026-11-21-the-users-decisions-that-shaped-it-2"></a>
 ### The user's decisions that shaped it
 
 Read in `SPEC.md` (its "Changed" paragraphs and section 2):
@@ -5443,6 +5629,7 @@ On the notebook and the commits:
   committed; `AGENT_MISTAKES.md` is a commit of its own; local commits
   only, no push.
 
+<a id="d-2026-11-21-pickplace-object-place-in-two-forms"></a>
 ### `pick_place(object, place)` in two forms
 
 Job `tool-call-test-1795274571` (16:22:51 to 16:24:01, exit 0), script
@@ -5465,6 +5652,7 @@ stack", "who built this stack", "the red cube is in the box"). The user
 chose way 1: it keeps the branch's request, reading of the answer and
 grammar.
 
+<a id="d-2026-11-21-the-client-in-this-workshop"></a>
 ### The client in this workshop
 
 `workshops/so101-smolvla/voice/`, two commits:
@@ -5487,6 +5675,7 @@ files and the speech-detection model (`voice/notebook_tools.py:38-40`,
 slot and context of 2,048; the two slots and 4,096 the user accepted are
 passed when the notebook starts the server.
 
+<a id="d-2026-11-21-the-notebook"></a>
 ### The notebook
 
 `notebooks/voice_control_test.ipynb`. For a sentence it shows `you:`,
@@ -5536,6 +5725,7 @@ With the user's own voice: the user's run of the one-clip section showed
 17:58:59, quoted in that journal entry), and the user reported "notebook
 works well". No count was taken with a person's voice.
 
+<a id="d-2026-11-21-the-notebooks-automated-test"></a>
 ### The notebook's automated test
 
 `tests/test_voice_notebook.py`, two tests. The first runs the notebook
@@ -5560,6 +5750,7 @@ these 2. The four spoken sentences that are wrong in the stored run:
 four were wrong in the other two runs was not printed. The spoken count
 is printed and not required, on the user's decision.
 
+<a id="d-2026-11-21-found-on-the-way"></a>
 ### Found on the way: a long command in the live session can lose its place
 
 In the stored outputs of job `notebook-kernel-1795276154` (Jupyter's
@@ -5580,6 +5771,7 @@ person's voice. The loop and the filter are the branch's, unchanged.
 One complete clip is not affected. In `SPEC.md`: section 10 and
 decision 11, the user's.
 
+<a id="d-2026-11-21-where-this-leaves-the-work"></a>
 ### Where this leaves the work
 
 - Done of `SPEC.md`'s measurement M8: the commands for task 1 and the
@@ -5636,6 +5828,7 @@ how the section came to be is added.
   excerpt that had no line numbers; corrected in the same turn), and the
   one for how this section was written (after 19:08).
 
+<a id="d-2026-11-21-note-owed-from-the-evening"></a>
 ## 2026-11-21 — Note owed from the evening: the table of the notebook's section 5 grows row by row
 
 Written on 2026-11-22 after 13:16 with the section below. On the user's
@@ -5644,10 +5837,11 @@ request of 19:06 the table of section 5 of
 again after every sentence, so the user sees it grow. The first notebook
 test requires one redraw per sentence, rows 1 to 30. Commit `56d0949`.
 What was changed, the three jobs and what was not verified (the table
-growing on a screen) are in `TESTING_LEDGER.md`, "Addition, after 19:20:
-the table of the notebook's section 5 grows row by row"; that section
+growing on a screen) are in `TESTING_LEDGER.md`, ["Addition, after 19:20:
+the table of the notebook's section 5 grows row by row"](TESTING_LEDGER.md#t-2026-11-21-addition-after-19); that section
 says this ledger had no entry for the change.
 
+<a id="d-2026-11-22-three-cubes-into-one-bin"></a>
 ## 2026-11-22 — Three cubes into one bin: SmolVLA on unedited pictures 0 of 10 layouts, with the other two cubes painted over 7 of 10; the test's video shows three feeds; SAM 3 outlines are connected and not yet run with SmolVLA
 
 Result in one line: a new test scatters a red, a green and a blue 40 mm
@@ -5669,6 +5863,7 @@ and counts are in `TESTING_LEDGER.md`, section "2026-11-22 — Three cubes
 into one bin"; every number below was printed from the run reports and
 logs in this turn or is cited with its file.
 
+<a id="d-2026-11-22-what-the-user-asked-for-and"></a>
 ### What the user asked for and decided
 
 - 02:08: a new test in which three cubes of different colours are
@@ -5689,6 +5884,7 @@ logs in this turn or is cited with its file.
 - 12:42: build A, run the full suite, write the ledger entries, no
   commit.
 
+<a id="d-2026-11-22-the-test"></a>
 ### The test
 
 - Task `pick-place-three-cubes`, scene `SO101PickPlaceThreeCubes-v1`
@@ -5721,6 +5917,7 @@ logs in this turn or is cited with its file.
   before any model run. Measurements and the journal entry:
   `AGENT_MISTAKES.md:2066-2120`.
 
+<a id="d-2026-11-22-the-three-runs-simulator-outlines-10"></a>
 ### The three runs (simulator outlines, 10 layouts, layout and policy seeds 0 to 9, the same layouts and orders in each)
 
 | Pictures given to SmolVLA | All three cubes in the bin | Commands whose cube was in the bin when the command ended | Command 1 / 2 / 3 of a layout, of 10 each |
@@ -5734,9 +5931,9 @@ logs in this turn or is cited with its file.
 
 - The double check the user asked for: with three cubes in view the
   checkpoint places the named cube in 1 of 30 commands. This agrees with
-  the two-cube measurements of 19 and 20 November ("The second cube
-  pulls the gripper off the cube it should pick up", "Several objects in
-  one scene" above).
+  the two-cube measurements of 19 and 20 November (["The second cube
+  pulls the gripper off the cube it should pick up"](#d-2026-11-19-the-second-cube-pulls-the-gripper), ["Several objects in
+  one scene"](#d-2026-11-20-several-objects-in-one-scene) above).
 - Painting the other cubes over is what makes the task work in this
   scene: 26 of 30 commands.
 - A cube that already lies in the bin has to be painted over as well.
@@ -5753,6 +5950,7 @@ logs in this turn or is cited with its file.
 - Limits: 10 layouts, one policy seed each, one run per mode. These runs
   have no three-feed video; it was built after them.
 
+<a id="d-2026-11-22-the-notebook-test-changed-on-the"></a>
 ### The notebook test, changed on the way
 
 The first test of `tests/test_voice_notebook.py` demanded that the two
@@ -5763,6 +5961,7 @@ Gemma port, which the user's own notebook session holds; it was run in
 a copy with another port (2 passed, with the user's working notebook
 and with the committed one). `AGENT_MISTAKES.md:2171-2212`.
 
+<a id="d-2026-11-22-sam-3-on-the-stored-pictures"></a>
 ### SAM 3 on the stored pictures of the unedited run, before anything was built
 
 - On this machine's graphics processor SAM 3 fails in its first
@@ -5785,6 +5984,7 @@ and with the committed one). `AGENT_MISTAKES.md:2171-2212`.
 - Feeding a picture every 10 steps instead is not better (wrist: 22 of
   24, 9.55 s).
 
+<a id="d-2026-11-22-the-video-of-three-feeds-the"></a>
 ### The video of three feeds (the user's request of 12:03)
 
 `src/so101_smolvla/feeds_video.py`: one row per camera, three pictures
@@ -5799,6 +5999,7 @@ and a new answer is computed only when the action queue is empty
 (`:288`). A layout folder gets `feeds.mp4`, a run folder
 `overall-feeds.mp4`.
 
+<a id="d-2026-11-22-sam-3s-outlines-in-place-of"></a>
 ### SAM 3's outlines in place of the simulator's (option A)
 
 Built:
@@ -5865,6 +6066,7 @@ simulator, one of them a whole batch through
 for SmolVLA that holds the arm. Whole suite without the two notebook
 tests: 178 passed, 1 expected failure.
 
+<a id="d-2026-11-22-what-a-run-with-smolvla-and"></a>
 ### What a run with SmolVLA and SAM 3 outlines will cost
 
 Not run. From the measured times: the `others-painted` run took
@@ -5874,6 +6076,7 @@ the stored pictures SAM 3 adds about 24 × (6.40 + 7.87) s = 342 s per
 layout. That gives about 4,130 s, 69 minutes, for 10 layouts. An
 estimate from two measurements, not a measurement.
 
+<a id="d-2026-11-22-where-this-leaves-the-work"></a>
 ### Where this leaves the work
 
 - Open, next: the three-cube run with `--pictures others-painted
@@ -5930,6 +6133,7 @@ what was decided and what it means, and repeats no table. Links:
 [the connection and the check on stored pictures](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-connected),
 [the run and the comparison](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-run).
 
+<a id="d-2026-11-22-what-the-user-asked-for-and-2"></a>
 ### What the user asked for and decided
 
 - The plan `~/.cursor/plans/sam3_tracker_rocm_in_venv_4e7b91c3.plan.md`
@@ -5946,6 +6150,7 @@ what was decided and what it means, and repeats no table. Links:
   separate internal repository; by the user's instruction no link to it
   enters this public repository, and it was not read for this ledger.
 
+<a id="d-2026-11-22-what-was-built-and-found-details"></a>
 ### What was built and found (details by link above)
 
 - The reference's model build failed at its last step in MIOpen, the
@@ -5971,6 +6176,7 @@ what was decided and what it means, and repeats no table. Links:
   directions, SAM 3 15 s of a 100 s layout instead of 376 s of 493 s.
   The remaining 85 s per layout are SmolVLA, the simulator and the video.
 
+<a id="d-2026-11-22-what-it-means"></a>
 ### What it means
 
 - Decision 2 of `SPEC.md` (the reference as the SAM 3 implementation)
@@ -5978,10 +6184,10 @@ what was decided and what it means, and repeats no table. Links:
   container" (section 5.2, its table of parts) and its measurement M4 as
   open. Both need an amendment; not written in this turn.
 - SAM 3 is no longer what limits the test. Asking SmolVLA for a plan
-  more often than every 50 steps (`RESEARCH.md`, Finding 9) costs 0.6 s
+  more often than every 50 steps (`RESEARCH.md`, [Finding 9](RESEARCH.md#r-finding-9)) costs 0.6 s
   of SAM 3 per plan now instead of 16 s; the test of fewer actions per
-  plan, listed as open in `TESTING_LEDGER.md` ("How often SmolVLA is
-  asked for a new plan"), is practical.
+  plan, listed as open in `TESTING_LEDGER.md` (["How often SmolVLA is
+  asked for a new plan"](TESTING_LEDGER.md#t-2026-11-22-how-often-smolvla-is-asked-for)), is practical.
 - The plan's step 3, one SAM 3 call per cube instead of one per plan,
   loses most of its reason: 48 calls per layout cost 15 s. It stays the
   user's decision (D4).
@@ -5990,6 +6196,7 @@ what was decided and what it means, and repeats no table. Links:
   outlines are in the testing ledger; whether the cube was in view is
   not checked.
 
+<a id="d-2026-11-22-where-this-leaves-the-work-2"></a>
 ### Where this leaves the work
 
 - Uncommitted: the five files of the fast SAM 3 environment, the worker,
@@ -6009,3 +6216,18 @@ brace group with `exit`, so a job wrote no exit file). The two failures
 of the real-model tests above were a worker fault and a test written
 against the old route's behaviour; both are described in the testing
 ledger and were fixed before the tests passed.
+
+<a id="d-2026-11-22-cross-links"></a>
+### Addition, after 17:45: anchors and links, a format pass over the documents
+
+On the user's decision of this evening every level-two and level-three
+heading of `TESTING_LEDGER.md`, `DEVELOPMENT_LEDGER.md`, `RESEARCH.md`
+and `SPEC.md` carries a short id in an HTML anchor line above it
+(prefixes `t-`, `d-`, `r-`, `s-`), and quoted section titles in the five
+documents (the `README.md` too) that name exactly one heading are now
+links to it. No sentence, number or table was changed; a quoted title
+reads as before and is clickable. From here on: a number from a log or a
+result file is written in the testing ledger only, the development
+ledger and the research file link to it, the spec links to both. The
+script ran once and is not kept; the check that every link resolves to
+an anchor found none unresolved.

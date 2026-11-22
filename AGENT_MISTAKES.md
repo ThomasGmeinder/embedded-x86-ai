@@ -2847,3 +2847,28 @@ No new entry, because they are the same mistakes. Status: corrected.
   lines says, a new launch line is tried once with `false` before it
   carries a real job.
 - **Status:** corrected
+
+## 2026-11-22 — The link pass turned nine research headings into links to themselves
+
+- **Agent/tool:** Claude Code (Claude Fable 5.1)
+- **Task:** Add anchors to the headings of the five documents of
+  `workshops/so101-smolvla` and turn quoted section titles and "Finding
+  N" references into links (the user's decision on cross-linking).
+- **Mistake:** The pattern for "Finding N" references was applied to
+  every line of `RESEARCH.md`, the heading lines included, so the nine
+  headings "## Finding N: …" became "## [Finding N](#r-finding-N): …",
+  links to their own anchor, which would also have changed their titles
+  for every later match.
+- **Evidence:** The check that followed the pass, a search for heading
+  lines that contain a link, listed `RESEARCH.md:93`, `:126`, `:193`,
+  `:259`, `:301`, `:397`, `:437`, `:474` and `:549`.
+- **Cause:** The heading lines were excluded from the quoted-title pass
+  but not from the "Finding N" pass.
+- **Correction:** The link syntax was removed from those nine heading
+  lines before the second pass; the heading map of the second pass was
+  rebuilt from the files, and the final check finds no heading with a
+  link and no unresolved link.
+- **Prevention:** A text pass that rewrites references excludes heading
+  lines in every one of its rules, and the check for headings that
+  contain a link runs before anything is committed.
+- **Status:** corrected
