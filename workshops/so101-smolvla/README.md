@@ -77,11 +77,12 @@ The first layout of the run of 2026-11-22, 17:12, with the fast SAM 3
 (`vla_testing/random-three-cubes-sapien-others-painted-sam3-fast-20261122-171213`,
 seed 0, the cubes commanded as colours in the order blue, red, green, all
 three placed). The moving picture is the run's video at 1280 pixels wide and
-10 frames per second; a click on it opens the full video,
-`media/three-cubes-sam3-fast/seed-00000-feeds.mp4`, which GitHub offers as a
-download.
+10 frames per second; on GitHub a click on it pauses and resumes it. The
+video itself, 1920 pixels wide at 30 frames per second, is
+[media/three-cubes-sam3-fast/seed-00000-feeds.mp4](media/three-cubes-sam3-fast/seed-00000-feeds.mp4);
+GitHub shows no player for a video file in a repository, only a download.
 
-[![The three-cube run, seed 0: both cameras, SAM 3's outlines and the pictures given to SmolVLA](media/three-cubes-sam3-fast/seed-00000-feeds.gif)](media/three-cubes-sam3-fast/seed-00000-feeds.mp4)
+![The three-cube run, seed 0: both cameras, SAM 3's outlines and the pictures given to SmolVLA](media/three-cubes-sam3-fast/seed-00000-feeds.gif)
 
 Each row is one camera, top and wrist, with three pictures: the scene as the
 camera takes it at every step; the outlines SAM 3 gave when SmolVLA last
@@ -108,11 +109,16 @@ not pick up the red cube") became a pick of the red cube. That is a known
 weak point of the spoken form (`SPEC.md`, section 10), held by a test that
 stays red until it is fixed.
 
-To run it (the SAPIEN twin, the SAM 3 environment and the voice workshop
-`workshops/vvla-pipeline` set up; the Gemma server is started on port 8083
-and stopped by the run):
+To run it (the SAPIEN twin and the SAM 3 environment set up; with
+`--sentences`, also the voice workshop `workshops/vvla-pipeline`, whose
+Python environment, `llama-server` and model files are used in place, and
+the Gemma server is started on port 8083 and stopped by the run):
 
 ```bash
+# the cubes commanded as colours, no Gemma: the run of the video above
+./scripts/run_sapien_rollout.sh --task pick-place-three-cubes --pictures others-painted \
+  --outlines sam3 --count 10
+# the cubes named by the test's own sentences through Gemma 4
 ./scripts/run_sapien_rollout.sh --task pick-place-three-cubes --pictures others-painted \
   --outlines sam3 --sentences built-in --count 10
 # your own sentences: a JSON list of layouts, each a list of sentences
