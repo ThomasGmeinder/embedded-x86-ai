@@ -5635,3 +5635,279 @@ how the section came to be is added.
   `intents.py` given to the user and written into `SPEC.md` from an
   excerpt that had no line numbers; corrected in the same turn), and the
   one for how this section was written (after 19:08).
+
+## 2026-11-21 — Note owed from the evening: the table of the notebook's section 5 grows row by row
+
+Written on 2026-11-22 after 13:16 with the section below. On the user's
+request of 19:06 the table of section 5 of
+`notebooks/voice_control_test.ipynb` is shown once, empty, and drawn
+again after every sentence, so the user sees it grow. The first notebook
+test requires one redraw per sentence, rows 1 to 30. Commit `56d0949`.
+What was changed, the three jobs and what was not verified (the table
+growing on a screen) are in `TESTING_LEDGER.md`, "Addition, after 19:20:
+the table of the notebook's section 5 grows row by row"; that section
+says this ledger had no entry for the change.
+
+## 2026-11-22 — Three cubes into one bin: SmolVLA on unedited pictures 0 of 10 layouts, with the other two cubes painted over 7 of 10; the test's video shows three feeds; SAM 3 outlines are connected and not yet run with SmolVLA
+
+Result in one line: a new test scatters a red, a green and a blue 40 mm
+cube and a larger bin in the reachable area and gives one command per
+cube. With the pictures as the cameras take them the unchanged
+checkpoint brings all three cubes into the bin in 0 of 10 layouts (1 of
+30 commands); with the two cubes a command does not name painted over
+in SmolVLA's pictures, by the simulator's outlines, in 7 of 10 (26 of
+30 commands). The test's video now shows, per camera, the scene, the
+outlines and the picture SmolVLA was given. SAM 3 (Segment Anything
+Model 3) can supply the outlines in place of the simulator (`--outlines
+sam3`); that is built and tested with the real SAM 3 and the real
+simulator, and no run with SmolVLA moving the arm by SAM 3's outlines
+has been made. Nothing of this day is committed.
+
+Written after 13:16 (clock printed in the step before). This ledger was
+read in full (5,637 lines) in the same turn. Jobs, clock times, commands
+and counts are in `TESTING_LEDGER.md`, section "2026-11-22 — Three cubes
+into one bin"; every number below was printed from the run reports and
+logs in this turn or is cited with its file.
+
+### What the user asked for and decided
+
+- 02:08: a new test in which three cubes of different colours are
+  scattered in the reachable area and picked up in a sequence the user
+  controls; every cube goes into the box, so the box must hold three
+  cubes.
+- By question forms after that: 40 mm cubes and a bigger bin; a double
+  check of the earlier finding that several cubes confuse the model,
+  which is why the other cubes are to be cut out; the simulator's
+  outlines first, SAM 3's after.
+- SAM 3: measure it with tracking in this workshop's `.venv` on the
+  stored pictures first and report before building; then "A": tracked
+  SAM 3 at the plan starts only, its outlines shown in the video and
+  used for the painting, outlines that are not red, green or blue inside
+  dropped.
+- 12:03: before the multi-cube runs, the video must show two more feeds:
+  the output of SAM 3 and the processed picture given to the model.
+- 12:42: build A, run the full suite, write the ledger entries, no
+  commit.
+
+### The test
+
+- Task `pick-place-three-cubes`, scene `SO101PickPlaceThreeCubes-v1`
+  (`src/so101_smolvla/sapien_bin_env.py:59`): cubes red, green, blue
+  (`bin_layouts.py:15`); the bin is the simulator's trained bin, 1.5
+  times as long and as wide and as deep as it was (`bin_layouts.py:18`).
+- One command per cube, in the form the voice client gives:
+  `pick_place(object: green cube, place: box)`
+  (`three_cube_rollout.py:3`). The order comes from `--order` or from a
+  draw by the layout's seed. A command runs 400 steps
+  (`three_cube_rollout.py:35`). SmolVLA is given its trained sentence
+  "Pick up a cube and place in the bin" for every command; which cube is
+  meant reaches it only through its pictures.
+- `--pictures` (`three_cube_rollout.py:37-48`): `unedited`;
+  `others-painted` (the two cubes the command does not name are painted
+  over, on the table and in the bin); `table-others-painted` (painted
+  over on the table only).
+- The painting (`picture_editor.py`): an outline is widened by 3 pixels
+  (`:20`), over table and bin only, never over the robot or an object
+  that stays (`:23`), and replaced by the top camera's picture of the
+  scene without the cubes: as it is in the top picture, and as the wrist
+  camera sees it lying on the table in the wrist picture
+  (`edit_pictures`, `:93`).
+- Where bin and cubes may stand. The first layouts put the bin or a cube
+  under the resting gripper on some seeds (arm held for five steps: the
+  bin moved 43.76 mm on seed 1). `draw_bin_layout` now keeps the bin's
+  footprint and every cube off the table points under the low parts of
+  the resting arm and tries 1,000 bin positions (`bin_layouts.py:22`,
+  `:69`); on seeds 0 to 29 nothing moves in five held steps. Found
+  before any model run. Measurements and the journal entry:
+  `AGENT_MISTAKES.md:2066-2120`.
+
+### The three runs (simulator outlines, 10 layouts, layout and policy seeds 0 to 9, the same layouts and orders in each)
+
+| Pictures given to SmolVLA | All three cubes in the bin | Commands whose cube was in the bin when the command ended | Command 1 / 2 / 3 of a layout, of 10 each |
+|---|---:|---:|---|
+| Unedited | 0 of 10 layouts | 1 of 30 | 1 / 0 / 0 |
+| Other two cubes painted over, on the table and in the bin | 7 of 10 | 26 of 30 | 9 / 9 / 8 |
+| Painted over on the table only | 1 of 10 | 16 of 30 | 9 / 5 / 2 |
+
+(`REPORT.md` of
+`vla_testing/random-three-cubes-sapien-{unedited,others-painted,table-others-painted}-20261122-030409`.)
+
+- The double check the user asked for: with three cubes in view the
+  checkpoint places the named cube in 1 of 30 commands. This agrees with
+  the two-cube measurements of 19 and 20 November ("The second cube
+  pulls the gripper off the cube it should pick up", "Several objects in
+  one scene" above).
+- Painting the other cubes over is what makes the task work in this
+  scene: 26 of 30 commands.
+- A cube that already lies in the bin has to be painted over as well.
+  The first command of a layout sees the same pictures in both painted
+  modes and gives the same result (9 of 10, and the same steps in the
+  rows of both reports). From the second command on the modes differ
+  only in whether a cube in the bin is shown: 9 and 8 of 10 with it
+  painted over, 5 and 2 of 10 with it left as it is.
+- The three layouts that fail with both cubes painted over: seed 1 (the
+  blue cube, third command, not placed), seed 3 (each command ended with
+  its cube in the bin, at the end the green one is not in it), seed 7
+  (no cube placed in any of the three picture modes). Why was not looked
+  at.
+- Limits: 10 layouts, one policy seed each, one run per mode. These runs
+  have no three-feed video; it was built after them.
+
+### The notebook test, changed on the way
+
+The first test of `tests/test_voice_notebook.py` demanded that the two
+microphone cells are stored empty; it failed once the user had run the
+notebook. It now compares each left-out cell with the same cell of the
+notebook file. It still refuses to run while a server answers on the
+Gemma port, which the user's own notebook session holds; it was run in
+a copy with another port (2 passed, with the user's working notebook
+and with the committed one). `AGENT_MISTAKES.md:2171-2212`.
+
+### SAM 3 on the stored pictures of the unedited run, before anything was built
+
+- On this machine's graphics processor SAM 3 fails in its first
+  convolution as installed ("miopenStatusUnknownError") and works with
+  the environment variable `MIOPEN_FIND_MODE=FAST`.
+- Asking for a colour does not work: "red cube", "green cube" and "blue
+  cube" find an object scored above 0.5 in between 2 and 23 of 24
+  pictures, depending on colour and camera. So SAM 3 is asked for
+  "cube" only, and the colour is named by a program from the pixels
+  inside each outline.
+- Each picture by itself is not enough: every visible cube is outlined
+  in 11 of 24 plan pictures of the top camera and 10 of 24 of the wrist
+  camera.
+- With tracking, fed the 24 plan pictures of a layout in order: 24 of
+  24 for both cameras, and each cube keeps one object number. The
+  price: a median of 6.40 s per top picture and 7.87 s per wrist
+  picture (2.88 and 2.60 s for the first), and outlines on things that
+  are no cube in 5 of 24 top pictures and 16 of 24 wrist pictures (the
+  16 all dark grey: bin, base, jaws). Peak memory held by torch 6.83 GiB.
+- Feeding a picture every 10 steps instead is not better (wrist: 22 of
+  24, 9.55 s).
+
+### The video of three feeds (the user's request of 12:03)
+
+`src/so101_smolvla/feeds_video.py`: one row per camera, three pictures
+per row: the camera's picture at every step; the outlines the picture
+editor was given when SmolVLA last planned, drawn over the picture they
+were found in, each tinted by what the editor does with it ("target",
+"painted over", "left as it is", "not used"); and the picture SmolVLA
+was given then. The last two hold until the next plan, because SmolVLA
+looks at a picture only when it plans: its queues hold actions only
+(`.venv/lib/python3.12/site-packages/lerobot/policies/smolvla/modeling_smolvla.py:174`)
+and a new answer is computed only when the action queue is empty
+(`:288`). A layout folder gets `feeds.mp4`, a run folder
+`overall-feeds.mp4`.
+
+### SAM 3's outlines in place of the simulator's (option A)
+
+Built:
+
+- `src/so101_smolvla/sam3_worker.py`: a process of its own that loads
+  `facebook/sam3` (`:26`), is asked for "cube" (`:29`) and keeps one
+  tracking session per camera per layout.
+- `src/so101_smolvla/sam3_outlines.py`: the client (`Sam3Outlines`,
+  `:141`), which starts the worker with `MIOPEN_FIND_MODE=FAST` and
+  without network access to the model hub (`:35`), and the naming of an
+  outline by the colour inside it (`cube_colours`, `:41`: by hue; an
+  outline is a cube of a colour when at least half of its pixels have
+  it, `:38`).
+- `three_cube_rollout.py`: with `--outlines sam3` SAM 3 is asked at
+  every step at which SmolVLA plans (`:200-205`); its cube outlines
+  replace the simulator's in what the unchanged picture editor is
+  given; between plans the unedited observation is handed on (`:231`).
+  The result of a layout records the outline source, SAM 3's model and
+  settings, and per plan the seconds and the outlines found. The option
+  is `--outlines simulator|sam3` (`sapien_rollout.py:711`), simulator by
+  default; the run folder's name gets `-sam3`.
+
+Three choices made inside option A, told to the user before the code
+was written:
+
+1. SAM 3 runs in a process of its own, so the setting it needs does not
+   reach SmolVLA's process.
+2. An outline that is no cube by its colour is not hidden: the video
+   shows it in grey as "no cube colour: not used", and the editor is
+   not given it.
+3. SAM 3 knows cubes only. The editor's 3-pixel rim around a painted
+   cube can therefore take pixels of the arm where the arm touches that
+   cube. In the checks below 0 arm pixels changed.
+
+Measured with the real SAM 3 on the real scene (layout seeds 7 and 3,
+arm at rest or held; logs `sam3-client-check-1795348595` and
+`sam3-real-1795348764`):
+
+- The worker is ready after 4.8 s and 5.4 s.
+- Where SAM 3 outlines a cube, its outline overlaps the simulator's by
+  0.968 to 0.995.
+- Its outlines on no cube lie on the bin: 98,092 of 98,113 pixels,
+  9,395 of 9,397, 25,674 of 25,689.
+- Painted by SAM 3's outlines (command for the green cube, seed 7): of
+  the red cube's colour 0 of 4,014 pixels are left in the wrist picture
+  and 0 of 1,207 in the top picture, of the blue cube's 0 of 25,820 in
+  the wrist picture; the green cube keeps all (5,396 and 1,376).
+- **A cube SAM 3 does not outline is not painted over.** On seed 7 the
+  top camera shows 696 pixels of the blue cube; SAM 3 outlines it in
+  none of the six plans of the batch test, and it stays in the picture
+  SmolVLA is given.
+- SAM 3 takes longer from plan to plan within a layout: 5.27, 3.20,
+  3.46, 3.84, 4.09, 4.52 s for the top picture and 2.51, 3.91, 4.66,
+  5.23, 5.93, 6.73 s for the wrist picture over six plans.
+- Failures are loud: asked before a layout was started ("no layout was
+  started"), a picture of another size (refused), a killed worker ("SAM
+  3 worker exited with status -9", then "SAM 3 worker is closed").
+
+Tests: 4 new unit tests of the colour naming, new cases in the tests of
+the run, the video and the command line with a stand-in for the
+worker's replies, and 2 tests with the real SAM 3 and the real
+simulator, one of them a whole batch through
+`sapien_rollout.main([... "--outlines", "sam3" ...])` with a stand-in
+for SmolVLA that holds the arm. Whole suite without the two notebook
+tests: 178 passed, 1 expected failure.
+
+### What a run with SmolVLA and SAM 3 outlines will cost
+
+Not run. From the measured times: the `others-painted` run took
+03:14:22 to 03:26:07 for 10 layouts, 705 s. A layout has 24 plans (3
+commands of 400 steps, a plan every 50). With the tracking medians of
+the stored pictures SAM 3 adds about 24 × (6.40 + 7.87) s = 342 s per
+layout. That gives about 4,130 s, 69 minutes, for 10 layouts. An
+estimate from two measurements, not a measurement.
+
+### Where this leaves the work
+
+- Open, next: the three-cube run with `--pictures others-painted
+  --outlines sam3` on the same 10 layouts, to be compared with the 7 of
+  10 of the simulator's outlines. What a missed cube (as on seed 7)
+  costs will show there.
+- Not built: anything that acts when SAM 3 misses a cube; a way to keep
+  SAM 3's time per plan from growing within a layout.
+- `SPEC.md` is behind. Its amendment to decisions 2 and 3
+  (`SPEC.md:755-783`, uncommitted) holds the picture-by-picture SAM 3
+  measurement and still lists SAM 3 with tracking as not measured
+  (`:781-783`). The tracking result, the results of the three runs, the
+  three-feed video and `--outlines sam3` are not in it.
+- No test with a person's voice was made on this day. The utilization
+  meters (plan `ryzen_ai_utilization_meters_3f9c21ab.plan.md`) are the
+  user's own item; nothing of it was built.
+- Everything of this day is uncommitted: 7 new source files
+  (`bin_layouts.py`, `feeds_video.py`, `picture_editor.py`,
+  `sam3_outlines.py`, `sam3_worker.py`, `sapien_bin_env.py`,
+  `three_cube_rollout.py`), 9 new files under `tests/`, and changes to
+  tracked files, among them `sapien_rollout.py`, `sapien_config.py`,
+  `sapien_env_worker.py`, `reachable_workspace.py`,
+  `tests/test_voice_notebook.py`, `SPEC.md` and both ledgers (`git
+  status` at 13:14).
+
+Agent mistakes of this day are recorded in `AGENT_MISTAKES.md`: three
+new entries (the 40 mm cube called red from the base task and not the
+scene that is run, `:2022`; the three-cube scene set bin and cubes
+under the resting gripper, `:2066`; the notebook test demanded stored
+empty cells, `:2171`) and eleven amendments, the last written after
+13:02 (four files edited after a summary of the conversation without
+being read in full again; all four were then read in full, the edits
+stand). The three entries carry "Status: corrected" (`:2056`, `:2120`,
+`:2212`). A search of today's lines of the journal for "Status:" finds
+no entry marked unresolved; the amendment of after 11:34 says
+"corrected once the spec amendment is in", and that amendment is at
+`SPEC.md:755`.

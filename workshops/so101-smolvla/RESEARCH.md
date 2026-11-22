@@ -506,6 +506,78 @@ Reading these:
   evaluated"); with the other objects painted over it has not been
   measured.
 
+  Amendment, 2026-11-22: measured since, in simulation only, with the
+  workshop's unchanged SmolVLA checkpoint on a three-cube bin test
+  (three 40 mm cubes, one command per cube, layout seeds 0 to 9 in every
+  run; `TESTING_LEDGER.md`, sections "2026-11-22 — Three cubes into one
+  bin" and "… by SAM 3's outlines"). All three cubes in the bin at the
+  end:
+
+  | Pictures given to SmolVLA | Layouts | Commands whose cube was in the bin |
+  |---|---:|---:|
+  | as the cameras take them | 0 of 10 | 1 of 30 |
+  | the two other cubes painted over with table, by the simulator's outlines | 7 of 10 | 26 of 30 |
+  | the same, by SAM 3's outlines (phrase "cube", tracked) | 9 of 10 | 29 of 30 |
+  | painted over on the table only, a cube already in the bin left visible | 1 of 10 | 16 of 30 |
+
+  Ten layouts do not show that 9 differs from 7. They do show the step
+  from 0 to 7 and 9 layouts, and that most of it is lost when a cube
+  already in the bin stays visible. Not run on the real arm.
+
+## Finding 9: playing all 50 predicted actions before the next look is the shipped default, not the best published method; a prediction at every step is not smoother by itself
+
+Added on 2026-11-22 after 14:13, on the user's question whether "50
+actions, then new pictures" is the current method and whether it makes
+the arm jitter in MuJoCo. Numbers were read that day in the saved full
+texts of the two papers; the two rows marked "excerpt" were read only
+in a search excerpt of the page.
+
+Two terms: a **chunk** is the list of future actions one prediction
+gives (50 for SmolVLA). **Actions played** is how many of them the robot
+carries out before new pictures are taken (`n_action_steps` in LeRobot).
+
+| Source | What it says | Numbers |
+|---|---|---|
+| SmolVLA paper, [arXiv 2506.01844](https://arxiv.org/abs/2506.01844), Table 13 | Average success on the simulated LIBERO benchmark, by actions played before new pictures | 1: 80.3 %. 10: 82.8 %. 30: 70.8 %. 50: 51.8 % |
+| Same, Table 12 | The same benchmark, by chunk size | 1: 50.0 %. 10: 84.0 %. 30: 78.5 %. 50: 80.3 %. 100: 74.5 % |
+| Same, sections 3.3 and 4.6, Figure 5 | Playing the whole chunk ("sync") "reflects a standard evaluation setting in robotics" and "inherently hinders the responsiveness". The paper's alternative ("async") asks for the next chunk once the queue falls below 70 % and joins the overlap | Real robot, three tasks, sync against async: success 78.3 against 73.3 % on average (pick-place 75 / 80, stacking 90 / 90, sorting 70 / 50); 13.75 against 9.70 s per pick-place; 9 against 19 cubes in a fixed time |
+| Real-Time Chunking (RTC), [arXiv 2506.07339](https://arxiv.org/abs/2506.07339), section 2 | Actions played is "often … shorter than the prediction horizon, but still much greater than 1 (e.g., s≈H/2)". "A long execution horizon reduces a policy's responsiveness to new information, while a short one increases the likelihood of mode-jumping, jerky behavior resulting from discontinuities between chunks" | – |
+| Same, sections 4.2 and 6, appendix A.5 | RTC computes the next chunk while the current one plays and holds its beginning to the actions already under way; "applicable to any diffusion- or flow-based VLA out of the box with no re-training". Tested on a real two-arm robot with π0.5 | Chunk 50, at least 25 played. Averaging overlapping predictions (temporal ensembling, from the ACT policy): both variants "do not run at all due to causing such high oscillations that the robot's protective stop is triggered". Stated cost of RTC: "adds significant computational overhead". Success counts are in charts and were not read |
+| [LeRobot documentation of RTC](https://huggingface.co/docs/lerobot/rtc) (excerpt) | Works with SmolVLA without retraining | `execution_horizon`: "Typical values: 8-12 steps" |
+| [A blog's list of defaults](https://www.ay-robots.com/blog/en/action-chunking-explained) (excerpt; the primary sources were not checked) | – | Diffusion Policy predicts 16 and plays 8. GR00T N1.7 predicts 40 and plays 8 in NVIDIA's example. LeRobot's SmolVLA and π0.5 predict 50 and play 50 |
+
+Reading these:
+
+- "All 50, then look again" is what the workshop's checkpoint ships
+  with (`MOTION.md:3`) and what its authors call standard. In their own
+  table it is the worst of four settings (51.8 % against 82.8 % at 10).
+  That table is LIBERO in simulation, not an SO-101.
+- A prediction at every step is not smoother by itself. Each chunk is
+  drawn from fresh random numbers, so two predictions can disagree, and
+  the arm jumps where one takes over from the other. The settings these
+  sources recommend play 8 to 25 actions; playing 1 scores 80.3 % in
+  Table 13, below the 82.8 % at 10.
+- The published way to look more often without those jumps is RTC. The
+  LeRobot 0.7.0 installed in this workshop's `.venv` contains it for
+  SmolVLA (`lerobot/policies/rtc/`; `rtc_config` at
+  `configuration_smolvla.py:105`). It runs through
+  `predict_action_chunk`, not through `select_action`
+  (`modeling_smolvla.py:270-272`), which is the call the workshop's
+  runner uses (`src/so101_smolvla/sapien_rollout.py:98`). Not tried
+  here.
+- The jitter in MuJoCo is not caused by the 50. This workshop measured
+  it inside each chunk: 167 and 181 direction reversals in 500 targets
+  with only 9 chunk boundaries (`DEVELOPMENT_LEDGER.md:13`); 33.3 to
+  58.7 % reversals inside single predictions on an exact training
+  picture (`:181-185`); part of it traced to a LeRobot training fault in
+  the padded action dimensions (`:218-228`); hidden in SAPIEN by its
+  more damped controller (`:245-249`).
+- Asking this checkpoint more often has not helped so far, on the
+  stacking test in SAPIEN: every 10 steps 0 stacks of 20
+  (`DEVELOPMENT_LEDGER.md:1529-1536`); every 25 steps 21 of 60 against
+  17 of 60, with overlapping ranges (`:3474-3477`). Jitter was not
+  counted in those runs.
+
 ## What follows for this workshop
 
 - The plan to fine-tune SmolVLA so that it chooses one of four objects by
@@ -536,6 +608,24 @@ Reading these:
   put to the user in the spec's section 11.
 - Task 3 does not need a policy with memory. The memory belongs in the
   program or agent that calls the pick and place steps.
+- Added 2026-11-22 (Finding 9): the checkpoint's 50 actions per
+  prediction stay until a test says otherwise. Every extra prediction
+  also costs one SAM 3 call per camera, so fewer actions per prediction
+  are only practical with the fast SAM 3. The test that would decide is
+  listed as open in `TESTING_LEDGER.md`, section "2026-11-22 — How often
+  SmolVLA is asked for a new plan"; whether to run it is the user's
+  decision.
+- Added 2026-11-22: way 2 in the form of Finding 8 has now been tried in
+  simulation (amendment under Finding 8), so "Not tried in this workshop
+  yet" in the amendment of 2026-11-21 12:27 above no longer holds for
+  the simulation. What stands in the way of using it is SAM 3's time:
+  through plain PyTorch a call took 6.93 s (top camera) and 9.18 s
+  (wrist camera) in the median, 3,901 s of SAM 3 in a run that lasted
+  from 13:25:52 to 14:49:56. The fast reference the user named,
+  `sam3-tracker-rocm`, publishes 89.77 to 90.15 ms per frame for one
+  object at 504 pixels (its `README.md`). It is being set up without
+  Docker in a Python environment of its own; it has not yet run on this
+  machine's graphics processor.
 
 ## Not verified, not measured
 
@@ -545,6 +635,14 @@ Reading these:
 - Whether SAM 3 runs on this machine's AMD graphics under ROCm.
 - How the workshop's SmolVLA checkpoint behaves on pictures in which
   every object but one is blanked out.
+
+  Amendment, 2026-11-22, to the four bullets above: answered in part,
+  in simulation. SAM 3 runs on this machine's AMD graphics under ROCm
+  through plain PyTorch, at seconds per picture, and the checkpoint was
+  run on pictures with the other cubes painted over (amendment under
+  Finding 8; counts and times in `TESTING_LEDGER.md`, sections of
+  2026-11-22). Still not measured: anything on the real SO-101; SAM 3 on
+  balls and cylinders; the fast SAM 3 reference on this machine.
 - The number of simulation trials per task in RMBench.
 - Success counts of two of the SO-101 example projects (so101-gap and
   the Gemini Robotics-ER 2 post).
@@ -556,6 +654,10 @@ Reading these:
 - Whether the SO-101 port of PyRUA-Lean can be had from its author.
 - Any independent figure for Sereact's pick success or intervention
   rate.
+- For Finding 9: whether fewer actions per prediction, or RTC, reduces
+  the jitter or raises the success of this workshop's checkpoint; RTC's
+  success counts; the defaults in the blog's list against their primary
+  sources.
 - Read earlier in the same session and not read again for this file, so
   left out: results on memory held by an agent
   ([arXiv 2609.11308](https://arxiv.org/abs/2609.11308),

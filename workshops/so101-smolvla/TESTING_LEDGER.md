@@ -1929,3 +1929,304 @@ Not verified by me: the table growing on a screen. No browser or editor
 was opened; the tests show that the kernel sends the redraws. The
 development ledger has no entry for this change: it was not read again
 in full in this part of the session, so it was not edited.
+
+## 2026-11-22 — Three cubes into one bin: the test, its video of three feeds, and SAM 3 outlines
+
+Written after 13:10, the end of the last suite run below, and checked
+against the logs and corrected in four places up to 13:16 (clock printed
+with the last check). This ledger was read in full (1,931 lines) in the
+same turn before this section was written. Same job runner as on 21 November
+(`~/.cache/stack-memory-agent-test/job.sh`: one detached tmux session
+per job, live log, exit file with the command's own status, completion
+event). Logs, exit files and job scripts are in
+`~/.cache/stack-memory-agent-test/logs/` under the job's name. Clock
+times are the `started-` and `ended-` lines of each log, commands are
+read from each job's script, counts from each log or report, all printed
+in this turn. Commands run from `workshops/so101-smolvla` unless said.
+Nothing of this day is committed.
+
+What the test is: task `pick-place-three-cubes` (scene
+`SO101PickPlaceThreeCubes-v1`): three 40 mm cubes (red, green, pale
+blue) and a bin, one command per cube, 400 steps per command, SmolVLA
+given its trained sentence "Pick up a cube and place in the bin". The
+option `--pictures` says what SmolVLA is shown; the option `--outlines`
+(new today) says whether the picture editor paints by the simulator's
+outlines or by SAM 3's (SAM 3 = Segment Anything Model 3).
+
+### The scene's start, measured before any model run
+
+Typed-in scripts under `/tmp`, through the real simulator worker, no
+model:
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `three-cubes-measure-1795311810` | 02:43:30 to 02:43:54, exit 0 | `env PYTHONPATH=src .venv/bin/python -u /tmp/three-cubes-measure.py` | the edited wrist picture shows the table where the red and the green cube were (share within 12 levels of the table 1.0000 and 1.0000); 50,616 pixels removed, 0 changed outside, blue cube, robot and bin unchanged |
+| `three-cubes-measure2-1795311887` | 02:44:47 to 02:44:59, exit 0 | `… /tmp/three-cubes-measure2.py` | the bin's place and outline over 20 held steps; cube heights 20.0 mm |
+| `three-cubes-measure3-1795311971` | 02:46:11 to 02:46:41, exit 0 | `… /tmp/three-cubes-measure3.py` | arm held for five steps: the bin is pushed on 2 of seeds 0 to 9 (seed 1: 43.76 mm), as recorded in `AGENT_MISTAKES.md:2085-2087` |
+| `three-cubes-arm-low-1795312154` | 02:49:14 to 02:49:26, exit 0 | `env PYTHONPATH=src:/tmp/Xbotics-SO101-Sim .venv-sapien/bin/python -u /tmp/three-cubes-arm-low.py` | low points of the arm inside the bin's footprint on seeds 1, 2, 3 and 8 (`AGENT_MISTAKES.md:2088-2090`) |
+| `three-cubes-hold2-1795312327`, `-1795312375` | 02:52:07 to 02:52:52 and 02:52:55 to 02:53:40, both exit 1 | `… /tmp/three-cubes-measure3.py` | with the bin kept clear only. The first ends with `RuntimeError: no bin position of 100 is free and leaves room for the cubes`. The second: on seed 6 the blue cube is thrown 58.13 mm, and seed 11 has no layout with 100 bin positions tried (`AGENT_MISTAKES.md:2090-2092`) |
+| `three-cubes-hold3-1795312604` | 02:56:44 to 02:57:11, exit 0 | the same | with bin and cubes kept clear of the resting arm: bin and cubes move 0.00 mm in five held steps on seeds 0 to 29 (`AGENT_MISTAKES.md:2099-2100`) |
+| `three-cubes-pixels2-1795312631` | 02:57:11 to 02:57:35, exit 0 | `… /tmp/three-cubes-measure.py` | as the first row with the new layouts: shares 1.0000 and 1.0000, 9,410 pixels removed, 0 changed outside; top picture: red 1,207, green 1,376, blue 696 pixels |
+
+### The three model runs of 03:04
+
+Job `three-cube-runs-1795313049`, 03:04:09 to 03:37:53, exit 0, command
+`bash ~/.cache/stack-memory-agent-test/three-cube-runs.sh`: for each
+picture mode, `scripts/run_sapien_rollout.sh --task pick-place-three-cubes
+--pictures <mode> --count 10 --output vla_testing/random-three-cubes-sapien-<mode>-20261122-030409`
+(environment seeds 0 to 9, policy seeds 0 to 9 by the runner's
+defaults; the order of the cubes drawn per layout from its seed;
+simulator outlines). Readiness run before it:
+`three-cubes-readiness-1795312976`, 03:02:56 to 03:03:29, exit 0, one
+layout with 100 steps per command to `/tmp/three-cubes-readiness-0303`
+("succeeded 0 of 1").
+
+Counts from each run's `REPORT.md`:
+
+| Pictures given to SmolVLA | Clock | All three cubes in the bin | Cubes in the bin at the end | Commands whose cube was in the bin when the command ended | Command 1 / 2 / 3 of a layout | Red / green / blue cube |
+|---|---|---:|---:|---:|---|---|
+| `unedited`: as the cameras take them | 03:04:09 to 03:14:22 | 0 of 10 layouts | 1 of 30 | 1 of 30 | 1 / 0 / 0 of 10 | 0 / 0 / 1 of 10 |
+| `others-painted`: the two cubes the command does not name painted over, on the table and in the bin | 03:14:22 to 03:26:07 | 7 of 10 | 25 of 30 | 26 of 30 | 9 / 9 / 8 of 10 | 9 / 9 / 8 of 10 |
+| `table-others-painted`: painted over on the table only, a cube in the bin left as it is | 03:26:07 to 03:37:53 | 1 of 10 | 16 of 30 | 16 of 30 | 9 / 5 / 2 of 10 | 6 / 3 / 7 of 10 |
+
+These three runs were made before the video of three feeds existed:
+each layout folder holds `top.mp4`, `wrist.mp4` and `rollout.mp4` and no
+`feeds.mp4`, each run folder `overall-top.mp4` and `overall-wrist.mp4`
+(listed for `seed-00000` of each run in the turn this section was
+written in).
+
+### SAM 3 on the stored pictures of the unedited run (no simulator, no SmolVLA)
+
+Scripts in `~/.cache/stack-memory-agent-test/`, run with `.venv/bin/python
+-u` and `HF_HUB_OFFLINE=1` on the pictures of
+`vla_testing/random-three-cubes-sapien-unedited-20261122-030409`; model
+`facebook/sam3` through `transformers`, on the graphics processor.
+
+| Job | Clock, exit | Script | Result |
+|---|---|---|---|
+| `sam3-probe-1795343216` | 11:26:56 to 11:27:06, exit 1 | `sam3_probe.py … 1008 504` | **Setup failure, no result:** the first model call fails in the graphics processor's convolution library, `RuntimeError: miopenStatusUnknownError` |
+| `sam3-conv-setting-1795343291` | 11:28:11 to 11:28:45, exit 0 | `sam3_conv_setting.py`, three settings | as it is: "FAILED after 0 calls: miopenStatusUnknownError"; with `MIOPEN_FIND_MODE=FAST` the call works (3.25, 2.01, 1.97 s; 3 objects, scores 0.93, 0.95, 0.94); with the library switched off for convolutions it works too (2.71, 2.33, 2.27 s; same objects and scores) |
+| `sam3-probe-1795343347` | 11:29:07 to 11:29:39, exit 1 | `sam3_probe.py … 1008 504` with `MIOPEN_FIND_MODE=FAST` | **Failed, no result:** the 504-pixel input size is refused by the model (`The size of tensor a (1296) must match the size of tensor b (5184)`) |
+| `sam3-phrases-1795343482` | 11:31:22 to 11:34:00, exit 0 | `sam3_phrases.py` (six phrases, each picture by itself, 24 plan pictures per camera) | pictures with at least one object scored above 0.5, in the log's first block of 24 and in its second: "cube" 19 and 12, "block" 24 and 19, "square" 22 and 21, "red cube" 4 and 2, "green cube" 9 and 23, "blue cube" 21 and 2. Vision part: median 1.85 s per picture over 48 pictures; one phrase on stored features: median 0.209 s |
+| `sam3-track-check-1795344287`, `-1795344429`, `-1795344582` | 11:44:47 to 11:46:06, 11:47:09 to 11:49:42, 11:49:42 to 11:52:09, each exit 0 | `sam3_tracking.py` cut short as a check of the script: `--limit 3 detect-plans track-plans track-video-10`, then twice `--limit 11 track-video-10` | last block of each log: every visible cube outlined in 3 of 3 pictures; peak memory held by torch 4.02, 4.21 and 4.21 GiB |
+| `sam3-tracking-1795344747` | 11:52:27 to 12:32:21, exit 0 | `sam3_tracking.py … detect-plans track-plans track-video-10` (phrase "cube"; judged at the 24 plan pictures of one layout per camera) | see the table below; peak memory held by torch 6.83 GiB; `~/.cache/stack-memory-agent-test/sam3-tracking/result.json` |
+
+`sam3-tracking-1795344747`, from its log. "Every visible
+cube outlined" counts pictures out of the 24 with a visible cube. A
+mostly hidden cube that is outlined is listed under "an outline on no
+cube": in the tracked top pictures of plans 6, 13 and 16 that outline is
+object number 2 with 78, 73 and 76 pixels, mostly green, where the green
+cube shows 69, 58 and 68 pixels of its colour and the script counts it
+as not visible (`sam3-tracking/result.json`, `per_picture`):
+
+| How SAM 3 is fed | Camera | Every visible cube outlined | Pictures with an outline on something that is no cube | Seconds per picture (median, first, largest) |
+|---|---|---:|---:|---|
+| each of the 24 plan pictures by itself | top | 11 of 24 | 1 of 24 | 2.24, 3.22, 3.22 |
+| the same | wrist | 10 of 24 | 1 of 24 | 2.30, 2.25, 2.42 |
+| tracking, fed the 24 plan pictures | top | 24 of 24 | 5 of 24 (3 mostly green, 1 dark grey, 1 table) | 6.40, 2.88, 6.56 |
+| the same | wrist | 24 of 24 | 16 of 24 (all dark grey: bin, base, jaws) | 7.87, 2.60, 8.04 |
+| tracking, fed a picture every 10 steps | top | 24 of 24 | 5 of 24 | 6.81, 2.44, 7.43 |
+| the same | wrist | 22 of 24 (blue cube not outlined at steps 250 and 350) | 24 of 24 | 9.55, 2.69, 11.53 |
+
+### Tests
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `three-cubes-unit-1795312565` | 02:56:05 to 02:56:13, exit 1 | `env PYTHONPATH=src .venv/bin/python -m pytest tests/test_bin_layouts.py tests/test_reachable_workspace.py tests/test_picture_editor.py tests/test_three_cube_rollout.py tests/test_sapien_protocol.py -v --tb=short` | 1 failed, 54 passed in 8.05 s. The failure was a condition of a new test that no layout can meet; the function was right to refuse (`AGENT_MISTAKES.md:2147-2160`). The test was corrected |
+| `so101-suite-without-notebook-1795312768` | 02:59:28 to 03:02:33, exit 0 | `env PYTHONPATH=src .venv/bin/python -m pytest tests -v --tb=short -rP --ignore=tests/test_voice_notebook.py` | 153 passed, 1 expected failure in 183.62 s |
+| `voice-notebook-copy-1795342686` | 11:18:06, exit 1 | in a copy under `/tmp`: `<workshop>/.venv/bin/python -m pytest tests/test_voice_notebook.py -v --tb=short -rP` | **Setup failure, no result:** 2 errors in 0.05 s; `/tmp` does not allow running the copied launcher (`AGENT_MISTAKES.md:2214-2229`) |
+| `voice-notebook-copy-1795342717` | 11:18:37 to 11:19:37, exit 1 | the same, copy under `~/.cache/stack-memory-agent-test/notebook-tests-copy-20261122-111750` | 1 failed, 1 passed in 59.97 s: the test demanded that the two microphone cells are stored empty; the user's notebook has run them (`AGENT_MISTAKES.md:2171-2212`) |
+| `voice-notebook-copy-1795342867` | 11:21:07 to 11:22:08, exit 0 | the same, after the test was changed to compare each left-out cell with the notebook file; the user's working notebook | 2 passed in 60.35 s |
+| `voice-notebook-copy-1795342942` | 11:22:22 to 11:23:48, exit 0 | the same with the committed notebook | 2 passed in 85.87 s |
+| `feeds-unit-1795346361` | 12:19:21 to 12:19:35, exit 0 | `… -m pytest tests/test_clips.py tests/test_feeds_video.py tests/test_three_cube_rollout.py tests/test_vla_test.py::test_accumulate_joins_every_clip -v --tb=short -rP` | 27 passed in 12.42 s (the video of three feeds) |
+| `three-cubes-feeds-1795347531` | 12:38:51 to 12:40:24, exit 0 | `… -m pytest tests/test_sapien_three_cubes_integration.py -v --tb=short -rP` | 7 passed in 91.75 s (real simulator; the video written by a real batch) |
+| `sam3-unit-1795348574` | 12:56:14 to 12:56:21, exit 0 | `… -m pytest tests/test_sam3_outlines.py tests/test_feeds_video.py tests/test_three_cube_rollout.py tests/test_sapien_protocol.py -v --tb=short -rP` | 50 passed in 6.63 s (SAM 3 outlines: naming by colour, the run with a stand-in for the worker's replies, the option `--outlines`) |
+| `sam3-client-check-1795348595` | 12:56:35 to 12:57:10, exit 0 | `env PYTHONPATH=src .venv/bin/python -u ~/.cache/stack-memory-agent-test/sam3_client_check.py` (not a test: the new client's first run with the real SAM 3 and the real scene; its numbers are the thresholds of the two tests below) | worker ready after 4.8 s; overlap of SAM 3's outline with the simulator's for every outlined cube 0.968 to 0.995; painted wrist picture: 0 of 4,014 red and 0 of 25,820 blue pixels left, green 5,396 of 5,396 kept; on layout seed 7 the top camera's blue cube (696 pixels) is not outlined and stays; a killed worker is reported as "SAM 3 worker exited with status -9" |
+| `sam3-real-1795348764` | 12:59:24 to 13:02:43, exit 0 | `… -m pytest tests/test_sam3_three_cubes_integration.py tests/test_sapien_three_cubes_integration.py -v --tb=short -rP` | 9 passed in 197.61 s: the 2 new tests with the real SAM 3 (the client on the real scene; a whole batch with `--outlines sam3` through `sapien_rollout.main`, with a stand-in for SmolVLA that holds the arm) and the 7 real-simulator tests |
+| `so101-suite-without-notebook-1795349051` | 13:04:11 to 13:10:20, exit 0 | `env PYTHONPATH=src .venv/bin/python -m pytest tests -v --tb=short -rP --ignore=tests/test_voice_notebook.py` | 178 passed, 1 expected failure (`test_real_sapien_bin_task_does_not_place_the_cube_into_the_resting_hand`), no test skipped, in 368.33 s |
+
+Why the suite runs without `tests/test_voice_notebook.py`: its two tests
+require that nothing answers on the Gemma port
+(`tests/test_voice_notebook.py:68`), and the user's own notebook session
+holds that port (`llama-server`, pid 3037368, on 127.0.0.1:8082 at
+13:14). Run in place they would stop at that requirement, which is a
+setup failure and not a result. They passed in the copy at 11:21 and
+11:22 (rows above); `tests/test_voice_notebook.py`,
+`tests/notebook_display_updates.py`, `tests/test_notebooks_launcher.py`
+and `notebooks/run_notebooks.sh` are byte for byte the same as in the
+copy (compared at 13:15), the copy's notebook is the committed one, and
+the working notebook was last changed at 01:58:56. The file was left
+out for this reason only; it is not a standing exclusion.
+
+From the log of `sam3-real-1795348764`, the batch test with SAM 3
+outlines (layout seed 7, arm held, 6 plans): SAM 3 took 5.27, 3.20,
+3.46, 3.84, 4.09, 4.52 s for the top picture and 2.51, 3.91, 4.66,
+5.23, 5.93, 6.73 s for the wrist picture, plan by plan; each cube keeps
+its number over the six plans; in the clip the red cube's outline has
+the tint of a painted-over cube and the bin's outline (98,113 pixels in
+the wrist picture) the grey of "not used", each at most 5 levels of 255
+from the expected colour.
+
+Not run: a model run with `--outlines sam3` (SmolVLA moving the arm by
+SAM 3's outlines). The three model runs above used the simulator's
+outlines. No test with a person's voice.
+
+What the numbers mean is in `DEVELOPMENT_LEDGER.md`, section "2026-11-22
+— Three cubes into one bin".
+
+## 2026-11-22 — How often SmolVLA is asked for a new plan: what is tested and what is open; no new run
+
+Written after 14:16:44 (clock printed in the step before). No model run
+and no test run was made for this section. It puts stored results under
+one question the user raised at 14:07: would the arm move more smoothly
+if SmolVLA predicted more often than every 50 steps? This ledger was
+read in full (2,075 lines) in the same turn. The published side is in
+`RESEARCH.md`, Finding 9.
+
+"Actions played" is how many of the 50 predicted actions are carried
+out before new pictures are taken (`n_action_steps` in LeRobot). Every
+product run in this ledger plays 50.
+
+| Actions played | Test | Result | Source |
+|---:|---|---|---|
+| 50 | random stacking, three runs of 20 | 6, 5 and 6 stacks (17 of 60) | this ledger, lines 1328-1329 |
+| 25 | the same layouts and policy seeds | 7, 8 and 6 stacks (21 of 60); the two ranges meet at 6, so no gain is shown | lines 1323-1324 |
+| 10 | stacking at 20 recorded places | 0 stacks of 20, no lift on 18; at 50 the same 20 places gave 4 stacks | lines 660-661 |
+| 1 | an early pickup in MuJoCo, each first target held for 4 ticks | the hand yawed past the cube; no count was taken | `MOTION.md:5` |
+
+Jitter, counted as direction reversals, all with 50 actions played:
+
+- MuJoCo, seed 0: shoulder-lift targets reverse on 49.7 % of
+  opportunities, elbow targets on 43.8 % (lines 66-67).
+- SAPIEN, seed 0: targets 40.1 % and 33.2 %, achieved joints 5.6 % and
+  3.4 % (lines 72-73).
+- Inside single predictions on an exact training picture: 33.3 to 58.7 %
+  of the lift steps; the recorded demonstration has 0 %
+  (`DEVELOPMENT_LEDGER.md:181-185`).
+
+So the jitter is inside each prediction and not where one prediction
+takes over from the last. The 50 is not shown to be its cause.
+
+Open, each to be run only on the user's word:
+
+1. Direction reversals by actions played. The runs at 25 and at 10
+   counted stacks only. Their `trajectory.npz` files are still stored
+   (20 per run, with `target` and `achieved`, listed at 14:16), so this
+   can be counted without a model run.
+2. The three-cube bin test at 25 and at 10 actions played. It has only
+   been run at 50.
+3. Real-Time Chunking (RTC; `RESEARCH.md`, Finding 9). The installed
+   LeRobot 0.7.0 has it for SmolVLA, through `predict_action_chunk` and
+   not through `select_action` (`modeling_smolvla.py:270-272` in
+   `.venv`). The runner calls `select_action`
+   (`src/so101_smolvla/sapien_rollout.py:98`), so this is a change to
+   the runner and not a setting.
+
+Cost with SAM 3 outlines: SAM 3 is asked once per plan for both cameras
+(`src/so101_smolvla/three_cube_rollout.py:200-205`), and a command has
+400 steps, so 8, 16 or 40 plans at 50, 25 or 10 actions played. At
+today's medians of 6.40 s (top) and 7.87 s (wrist) per call (lines
+2026-2027) that is 114, 228 or 571 s of SAM 3 per command. These three
+figures are multiplied, not measured. Fewer actions per plan are only
+practical with the fast SAM 3.
+
+## 2026-11-22 — Three cubes into one bin by SAM 3's outlines: 9 of 10 layouts, 29 of 30 commands; and the environment for the fast SAM 3
+
+Appended at about 14:54 from my notes of the turn before, before this
+ledger had been read again and before its figures had been printed again
+(recorded in `AGENT_MISTAKES.md`). Checked afterwards, up to 14:55:54
+(clock printed with the last check): this ledger read in full (2,221
+lines), and every clock time, exit status, command and count below
+printed again from each job's script, log and exit file, from both runs'
+`REPORT.md` and from the ten `result.json`. No count or time needed
+changing. Four places were corrected: this paragraph; what the two runs
+were compared in; the import check (run again, its earlier duration had
+no output behind it); and the power profile (read again). Same job
+runner, log folder and conventions as the section "Three cubes into one
+bin" above. Nothing is committed.
+
+This is the run that section lists as "Not run: a model run with
+`--outlines sam3`". SAM 3 here is the plain PyTorch route
+(`facebook/sam3` through `transformers` 5.22.2, tracked, phrase "cube").
+The user keeps it as the baseline for accuracy only; the fast reference
+is not connected yet.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `three-cubes-sam3-ready-1795350255` | 13:24:15 to 13:25:27, exit 0 | `scripts/run_sapien_rollout.sh --task pick-place-three-cubes --pictures others-painted --outlines sam3 --count 1 --steps 50 --output ~/.cache/stack-memory-agent-test/three-cubes-sam3-readiness-132415` | Readiness run, not a result: one layout, 50 steps per command, "succeeded 0 of 1". Launched without the announcement the rules ask for (`AGENT_MISTAKES.md`, amendment "written after 13:30") |
+| `three-cubes-sam3-1795350352` | 13:25:52 to 14:49:56, exit 0 | `scripts/run_sapien_rollout.sh --task pick-place-three-cubes --pictures others-painted --outlines sam3 --count 10` | `vla_testing/random-three-cubes-sapien-others-painted-sam3-20261122-132554`: "succeeded 9 of 10"; `COMPLETE.json`, `REPORT.md`, `summary.json`, `overall-feeds.mp4` (the three feeds per camera), `overall-top.mp4`, `overall-wrist.mp4`, ten layout folders |
+
+Against the run of 03:14 with the simulator's outlines. Equal in 10 of
+10 layouts, compared from both runs' `result.json`: start layout, order
+of the cubes, policy seed, environment seed, checkpoint revision,
+picture mode and steps per command:
+
+| Outlines the picture editor paints by | All three cubes in the bin | Cubes in the bin at the end | Commands whose cube was in the bin when the command ended | Command 1 / 2 / 3 | Red / green / blue |
+|---|---:|---:|---:|---|---|
+| the simulator's (03:14) | 7 of 10 layouts | 25 of 30 | 26 of 30 | 9 / 9 / 8 of 10 | 9 / 9 / 8 of 10 |
+| SAM 3's (13:25) | 9 of 10 | 29 of 30 | 29 of 30 | 10 / 10 / 9 of 10 | 9 / 10 / 10 of 10 |
+
+Layouts whose outcome differs; the other seven pass in both runs:
+
+- Layout 1: the third cube (blue) is not placed with the simulator's
+  outlines and is in the bin with SAM 3's. There the simulator's rule
+  for a placed cube never held during the command (the report's "in -").
+- Layout 3 fails in both. Simulator's outlines: every cube is in the bin
+  when its command ends, and green is out again at the end. SAM 3's: the
+  third cube (red) is not placed.
+- Layout 7: none of the three with the simulator's outlines, all three
+  with SAM 3's.
+
+Ten layouts do not show that 9 differs from 7. What the run shows is
+that SAM 3's outlines gave no fewer placed cubes than the simulator's on
+these layouts. The code also changed between the two runs (the video of
+three feeds, the option `--outlines`), and the 03:14 run was not
+repeated.
+
+SAM 3 in this run, from `plans[i]["sam3"]` of the ten `result.json`
+(240 plans, one call per camera per plan):
+
+- Seconds per call: top camera median 6.93 (2.41 to 17.32), wrist camera
+  median 9.18 (2.45 to 24.01). All calls together 3,901 s; per layout
+  332 to 494 s. From 14:34 on other jobs of mine ran beside the run (the
+  table below), so layouts 8 and 9 are not clean as speed figures.
+- Top camera, a cube the command does not name that has no outline: 41
+  of 480 (plan, cube) pairs, 17 of them in layout 3. In 7 of the 41 the
+  cube had not had its command yet, so it should still have been on the
+  table. Wrist camera: 128 of 480, 40 of them before the cube's command.
+- The cube the command names has no outline in 24 of 240 plans (top) and
+  36 of 240 (wrist).
+- At least one outline that matches no cube colour: 50 of 240 plans
+  (top), 206 of 240 (wrist). Two outlines for one cube colour: 1 and 35.
+- Not checked: whether a cube without an outline could be seen in that
+  picture at all (arm and bin hide cubes). So these are counts of
+  missing outlines, not yet of SAM 3's misses.
+
+### The environment for the fast SAM 3 (`sam3-tracker-rocm` v0.4.0-rc1 without Docker)
+
+New, uncommitted: `configs/sam3_reference.json`,
+`scripts/setup_sam3_env.sh`, `scripts/sam3_reference_settings.sh`,
+`scripts/run_sam3_reference.sh`, `tests/test_sam3_reference_env.py`.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `sam3-ref-clone-1795354252` | 14:30:52 to 14:31:18, exit 0 | from `~/GitHub`: `git clone https://github.com/harrysungit/sam3-tracker-rocm.git ~/GitHub/sam3-tracker-rocm-v0.4.0-rc1`, then `checkout --detach 8005dc6ab0f52d5291e423e2519018b4aa4fd01c` | at that commit, no local change; `model/sam3/model.safetensors` linked afterwards to the file in the Hugging Face cache (3,439,938,512 bytes) |
+| `sam3-env-1795354411` | 14:33:31 to 14:33:33, exit 1 | `scripts/setup_sam3_env.sh` | **Setup failure, no result:** uv finds no `amd-torchvision-device-gfx1151==0.29.0a0+rocm10.1.0`; it takes a pre-release only for a package named directly (`AGENT_MISTAKES.md`, amendment "written after 14:38") |
+| `sam3-env-1795354467` | 14:34:27 to 14:38:10, exit 0 | the same, with that package named | `.venv-sam3`: torch 2.14.0+rocm10.1.0, both Torch device packages, migraphx 2.18.0+rocm10.1.0, onnxruntime 1.29.0, onnxruntime-ep-migraphx 1.0.0+rocm10.1.0, numpy 1.26.4, transformers 5.8.1, opencv-python 4.11.0.86; the four MIGraphX and ONNX Runtime wheels "checksum ok" |
+| `sam3-env-test-1795354995` | 14:43:15 to 14:43:23, exit 0 | `env PYTHONPATH=src .venv/bin/python -m pytest tests/test_sam3_reference_env.py -v --tb=short -rP` | 4 passed in 7.25 s: a printed setting; a launched command gets the reference's environment and the reference's own version check reports no error; a missing checkout and a checkout at another commit are refused by name |
+
+Typed-in at 14:55:54 through `scripts/run_sam3_reference.sh -c …`, no
+model loaded (3.5 s, exit 0): in `.venv-sam3`, `torch`, `migraphx`,
+`onnxruntime`, `onnxruntime_ep_migraphx`, `cv2`, `transformers` and
+`onnx` import; torch 2.14.0+rocm10.1.0, HIP 7.16.26385.
+
+Read on the machine at 14:55:28: platform profile `balanced` (choices
+low-power, balanced, performance), on mains power. The launcher passes
+that on as `SAM3_EC_POWER_MODE=balanced` (log of
+`sam3-env-test-1795354995`); the reference's performance build asks for
+performance mode (`export/build_text_prompt_mig.py`, `verify_ec_power_mode`).
+
+Not run: anything of the reference on the graphics processor (its smoke
+test, the model build, a picture). The full suite has not run since the
+five files were added. `DEVELOPMENT_LEDGER.md` has no entry for this
+part.

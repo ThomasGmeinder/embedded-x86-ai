@@ -751,6 +751,38 @@ M5, M6, M8.
    The linked release v0.4.0-rc1 needs them built again. The address in
    the user's link (`harrysungit`) differs from the checkout's remote
    (`harrysocool`); to be settled before anything is pulled.
+
+   **Amendment, 2026-11-22, after 11:36, to decisions 2 and 3.**
+   "with its model files built" in decision 3 is wrong. The checkout's
+   folder `onnx_files_504` holds one exported file,
+   `backbone_tracker/single_fp32.onnx`, and no compiled file; the
+   folder its launcher uses by default, `onnx_files_504_mgx217`
+   (the reference's `README.md:25`), does not exist. Either version
+   needs its container image and its model files built first. Docker
+   refuses this user on this machine (`/var/run/docker.sock` belongs to
+   `root:root`), so that route needs administrator rights.
+   The third way of decision 2 is now measured, on stored pictures of
+   the three-cube test (layout 0, pictures as the cameras took them,
+   640 by 480), with `Sam3Model` of `transformers` 5.22.2 in this
+   workshop's `.venv`, asked picture by picture without tracking (logs
+   `sam3-conv-setting-1795343291`, `sam3-probe-1795343347` and
+   `sam3-phrases-1795343482` in `~/.cache/stack-memory-agent-test/logs/`):
+   - It runs only with the setting `MIOPEN_FIND_MODE=FAST` (or with the
+     graphics library's convolutions switched off); as it is, the first
+     call fails with "No suitable algorithm was found". Only the
+     picture size 1008 works; 504 fails inside the package.
+   - Time: 1.85 s per picture for the vision part (middle of 48), and
+     0.21 s for each phrase asked on it (middle of 288).
+   - Phrase "cube", score limit 0.5, at least one object found: top
+     camera 19 of 24 pictures, wrist camera 12 of 24. The number of
+     objects found per top picture runs from 0 to 5 with three cubes on
+     the table. In the pictures looked at, the bin is outlined as a
+     "cube" in most top pictures at limit 0.3, and cubes in plain view
+     of the wrist camera are left out. How many cubes were visible in
+     each picture was not counted, so these are not miss rates.
+   - Not measured: SAM 3 with tracking (`Sam3VideoModel` of the same
+     package, or the reference's `SAM3Live`), which is what section 5.2
+     describes.
 4. **The pass counts of section 9.**
 5. **One call of the policy instead of two** (5.4), or the editor in
    front of both.
