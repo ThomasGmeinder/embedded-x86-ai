@@ -612,6 +612,46 @@ Reading these:
   17 of 60, with overlapping ranges (`:3474-3477`). Jitter was not
   counted in those runs.
 
+<a id="r-models-evaluated-what-works-and-what-does-not"></a>
+## Models evaluated in this workshop: what works and what does not
+
+Moved here from `README.md` on 2026-11-22 on the user's word; the text is
+as it stood there.
+
+Simulation only. Every result is from the published checkpoint as
+downloaded; nothing was fine-tuned here. The counts come from the run folders
+under `vla_testing/`. Test details are in `TESTING_LEDGER.md`, the reasons in
+`DEVELOPMENT_LEDGER.md`. State of 2026-11-20. The two twins (SAPIEN and
+MuJoCo) are described in `README.md`, section "SAPIEN policy backend".
+
+| Model | Use case and command sentence | Tested in | Result | Verdict |
+|---|---|---|---|---|
+| `Harrysunshine/so101-smolvla-sim-real-10task` | Put the 40 mm cube into the bin: `Pick up a cube and place in the bin` | SAPIEN twin, task `pick-place`, 10 random layouts | 10 of 10 (`random-sapien-20261120-090344`) | Works |
+| | Put the 20 mm cube into the bin: `Pick up a small cube and place in the bin` | SAPIEN twin, task `pick-place-cube20`, 10 random layouts | 8 of 10 (`random-sapien-cube20-20261119-113801`) | Works |
+| | Put the 40 mm cube into the bin, same sentence as the first row | MuJoCo twin, 10 random layouts | 4 of 10 in the bin, 7 of 10 picked up; the arm visibly jitters (`random-MuJoCo-20261118-221817`) | Unreliable |
+| | Stack the red 20 mm cube on the 40 mm cube: `Stack the smaller cube on the larger one` | SAPIEN twin, task `stack2-recording-rig` (the scene rebuilt from the real training recordings), three runs of 20 random layouts | 24 of 60 with the cube placement in the product, cube centres at least 40 mm apart (10, 7 and 7 of 20; the 10 repeated in `random-stacking-recording-rig-sapien-20261120-180023`). A placement that kept the cubes at least 73.3 mm apart, tried on 2026-11-20 and taken out again, gave 17 of 60 (6, 5 and 6) | Unreliable |
+| | Same stacking sentence | SAPIEN twin with the simulator's own camera views (tasks `stack2-training`, `stack2-sim-view`), 10 random layouts per run | 0 to 1 of 10 per run | Does not work |
+| | Choosing one of several objects by the sentence | SAPIEN scenes with two cubes, with the bin sentence and with the stacking sentence | A second cube pulls the gripper 30 to 44 % of the way towards itself, whichever sentence is given; on 5 of 10 layouts the red cube was never lifted in nine runs | Does not work |
+| | Three cubes chosen by colour (task `stack3-color`, for example `put green cube on red cube`) | – | Never run | Not tested. The training set has no scene in which the sentence chooses between objects |
+| | Can into the bin (trained in simulation, not set up here). Battery, eraser, golf, medicine bottle and plush toy into the bin, and cube onto can (trained on the real robot only) | – | No scene in this workshop | Not tested |
+| `lerobot/smolvla_base` (the base model, not fine-tuned) | Stack red on blue: `Pick up the red cube and put it on top of the blue cube.` | MuJoCo twin, one probe of 30 control steps on 2026-11-17 | No jaw contact with the cube and the cube not moved when the probe stopped (`scripted_testing/base_probe/result.json`); the file holds no result for the bin task | Did not work in this one probe |
+
+What follows for a demo:
+
+- Put one pickup object on the table and give its sentence exactly as in the
+  table. The stacking pair (red 20 mm cube and 40 mm cube) is the only
+  trained scene with two objects.
+- Choosing between objects by the sentence is a known limit of this class of
+  models, not a fault of the twin. The measurements and the published
+  sources are in `DEVELOPMENT_LEDGER.md`, section ["Several objects in one
+  scene"](DEVELOPMENT_LEDGER.md#d-2026-11-20-several-objects-in-one-scene).
+
+Compared from their model cards only and not run here:
+`Project-IRA/TPSoSe2026_SmolVLA_LeRobot_SO101_Finetuning_V6_Full`,
+`io-intelligence/smolvla_so101_stack_cups` and
+`dobri420/smolvla-so101-pick-cube`.
+
+
 <a id="r-what-follows-for-this-workshop"></a>
 ## What follows for this workshop
 

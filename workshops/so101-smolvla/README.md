@@ -3,76 +3,73 @@
 Two separate simulated SO-101 environments evaluate a SmolVLA checkpoint
 fine-tuned in the upstream SAPIEN training environment.
 
-## Models evaluated: what works and what does not
+## Models evaluated
 
-Simulation only. Every result is from the published checkpoint as
-downloaded; nothing was fine-tuned here. The counts come from the run folders
-under `vla_testing/`. Test details are in `TESTING_LEDGER.md`, the reasons in
-`DEVELOPMENT_LEDGER.md`. State of 2026-11-20. The two twins (SAPIEN and
-MuJoCo) are described under "SAPIEN policy backend" below.
-
-| Model | Use case and command sentence | Tested in | Result | Verdict |
-|---|---|---|---|---|
-| `Harrysunshine/so101-smolvla-sim-real-10task` | Put the 40 mm cube into the bin: `Pick up a cube and place in the bin` | SAPIEN twin, task `pick-place`, 10 random layouts | 10 of 10 (`random-sapien-20261120-090344`) | Works |
-| | Put the 20 mm cube into the bin: `Pick up a small cube and place in the bin` | SAPIEN twin, task `pick-place-cube20`, 10 random layouts | 8 of 10 (`random-sapien-cube20-20261119-113801`) | Works |
-| | Put the 40 mm cube into the bin, same sentence as the first row | MuJoCo twin, 10 random layouts | 4 of 10 in the bin, 7 of 10 picked up; the arm visibly jitters (`random-MuJoCo-20261118-221817`) | Unreliable |
-| | Stack the red 20 mm cube on the 40 mm cube: `Stack the smaller cube on the larger one` | SAPIEN twin, task `stack2-recording-rig` (the scene rebuilt from the real training recordings), three runs of 20 random layouts | 24 of 60 with the cube placement in the product, cube centres at least 40 mm apart (10, 7 and 7 of 20; the 10 repeated in `random-stacking-recording-rig-sapien-20261120-180023`). A placement that kept the cubes at least 73.3 mm apart, tried on 2026-11-20 and taken out again, gave 17 of 60 (6, 5 and 6) | Unreliable |
-| | Same stacking sentence | SAPIEN twin with the simulator's own camera views (tasks `stack2-training`, `stack2-sim-view`), 10 random layouts per run | 0 to 1 of 10 per run | Does not work |
-| | Choosing one of several objects by the sentence | SAPIEN scenes with two cubes, with the bin sentence and with the stacking sentence | A second cube pulls the gripper 30 to 44 % of the way towards itself, whichever sentence is given; on 5 of 10 layouts the red cube was never lifted in nine runs | Does not work |
-| | Three cubes chosen by colour (task `stack3-color`, for example `put green cube on red cube`) | – | Never run | Not tested. The training set has no scene in which the sentence chooses between objects |
-| | Can into the bin (trained in simulation, not set up here). Battery, eraser, golf, medicine bottle and plush toy into the bin, and cube onto can (trained on the real robot only) | – | No scene in this workshop | Not tested |
-| `lerobot/smolvla_base` (the base model, not fine-tuned) | Stack red on blue: `Pick up the red cube and put it on top of the blue cube.` | MuJoCo twin, one probe of 30 control steps on 2026-11-17 | No jaw contact with the cube and the cube not moved when the probe stopped (`scripted_testing/base_probe/result.json`); the file holds no result for the bin task | Did not work in this one probe |
-
-What follows for a demo:
-
-- Put one pickup object on the table and give its sentence exactly as in the
-  table. The stacking pair (red 20 mm cube and 40 mm cube) is the only
-  trained scene with two objects.
-- Choosing between objects by the sentence is a known limit of this class of
-  models, not a fault of the twin. The measurements and the published
-  sources are in `DEVELOPMENT_LEDGER.md`, section ["Several objects in one
-  scene"](DEVELOPMENT_LEDGER.md#d-2026-11-20-several-objects-in-one-scene).
-
-Compared from their model cards only and not run here:
-`Project-IRA/TPSoSe2026_SmolVLA_LeRobot_SO101_Finetuning_V6_Full`,
-`io-intelligence/smolvla_so101_stack_cups` and
-`dobri420/smolvla-so101-pick-cube`.
+What works and what does not, model by model, is in `RESEARCH.md`, section
+["Models evaluated in this workshop: what works and what does not"](RESEARCH.md#r-models-evaluated-what-works-and-what-does-not),
+with the literature it follows from. In short: the checkpoint puts one cube
+into the bin (10 of 10 in the SAPIEN twin), stacks its one trained pair
+unreliably (24 of 60), and cannot choose between objects by the sentence.
 
 ## Use case: pick the cube the user names and place it in the bin
 
 Three cubes, red, green and blue, lie on the table beside a bin. The user says
 or types which cube goes next, in their own words: "grab the green one and
-drop it in the box". The arm picks that cube and places it in the bin; then
-the next command. Nothing in the checkpoint was changed and nothing was
-fine-tuned: the checkpoint cannot choose between objects by the sentence
-(the table above, [`RESEARCH.md`](RESEARCH.md#r-finding-1)), so the choice is
-made before the pictures reach it, and it is shown only the cube that was
-named. Built and measured in the SAPIEN twin on 2026-11-22; the design is
-`SPEC.md`, sections 3, 4.7 and 6.
+drop it in the box". The arm picks that cube, places it in the bin and waits
+for the next command.
+
+**Why SAM 3 is needed.** The VLA (SmolVLA, the checkpoint as published) is
+confused by a picture with several objects to choose from: the sentence does
+not steer it, and a second cube pulls the gripper towards itself. It works
+when it sees a single object. Measured here with two and with three cubes
+(`RESEARCH.md`, ["Models evaluated in this workshop"](RESEARCH.md#r-models-evaluated-what-works-and-what-does-not);
+`DEVELOPMENT_LEDGER.md`, ["Several objects in one scene"](DEVELOPMENT_LEDGER.md#d-2026-11-20-several-objects-in-one-scene))
+and the same in the published work on this class of model
+(`RESEARCH.md`, [Finding 1](RESEARCH.md#r-finding-1)). The way out that the
+literature supports is to decide outside the VLA which object is meant and to
+paint every other object over with background before the pictures reach it
+([Main conclusion](RESEARCH.md#r-main-conclusion), [Finding 6](RESEARCH.md#r-finding-6),
+[Finding 8](RESEARCH.md#r-finding-8)). SAM 3 provides the outlines that make
+that painting possible: it finds every cube in both camera pictures, and the
+colour inside each outline says which cube it is. Nothing in the checkpoint
+was changed and nothing was fine-tuned. Built and measured in the SAPIEN twin
+on 2026-11-22; the design is `SPEC.md`, sections 3, 4.7 and 6.
 
 ```mermaid
-flowchart LR
-  User([User speaks or types the command])
-  Gemma[Gemma 4 E4B: the command as fields]
-  Choose[Program: the cube the fields name]
-  Cams[Top and wrist cameras]
-  Sam3[SAM 3: outlines of every cube]
-  Edit[Picture editor: the other two cubes painted over]
-  VLA[SmolVLA: joint targets from the edited pictures]
-  Arm([SO-101 arm: the named cube into the bin])
-  User --> Gemma --> Choose --> Edit
-  Cams --> Sam3 --> Edit
-  Edit --> VLA --> Arm
-  Arm -.-> User
+flowchart TD
+  subgraph S1 ["1. Command to fields: Gemma 4 E4B"]
+    U(["User, spoken or typed: 'put the green cube in the bin'"]) --> G["Gemma 4 E4B, llama-server"]
+    G --> F["fields: pick_place, object green cube, place bin"]
+  end
+  subgraph S2 ["2. Which cube: a program"]
+    F --> C["cube_commands.py: the green cube"]
+  end
+  T@{ icon: "mdi:camera", form: "rounded", label: "top camera", pos: "b" }
+  W@{ icon: "mdi:camera", form: "rounded", label: "wrist camera", pos: "b" }
+  subgraph S3 ["3. Outlines: SAM 3"]
+    M["SAM 3, sam3-tracker-rocm"] --> O["outlines of red, green and blue"]
+  end
+  T --> M
+  W --> M
+  subgraph S4 ["4. Editing: a program"]
+    C --> E["picture_editor.py"]
+    O --> E
+    E --> P["pictures with the green cube only"]
+  end
+  subgraph S5 ["5. Motion: SmolVLA"]
+    P --> V["SmolVLA, so101-smolvla-sim-real-10task"]
+    X["sentence: Pick up a cube and place in the bin"] --> V
+    V --> J["50 joint targets per plan"] --> A(["arm: green cube into the bin"])
+  end
 ```
 
-| Stage | What happens | Model or program |
-|---|---|---|
-| 1. Command | The user speaks (one 6 s clip) or types. Gemma 4 E4B, run by `llama-server` through the voice client in `voice/`, returns the command and its fields under a grammar: `pick_place`, the object words, the place words, and what it heard. | Gemma 4 E4B (language and audio) |
-| 2. Choice | A program reads the one colour in the object field; "red ball", "the cube", two colours, a question or another command are refused and nothing moves. The place is recorded, not used: a pick ends in the bin. | `src/so101_smolvla/cube_commands.py` |
-| 3. Outlines | Every time SmolVLA plans (every 50 control steps) both camera pictures go to SAM 3, asked for the phrase "cube"; the colour inside each outline says which cube it is. | SAM 3 (`sam3-tracker-rocm`, compiled with MIGraphX, in `.venv-sam3`) |
-| 4. Editing | The two cubes the command does not name are painted over with the table and bin as the top camera sees them empty, in the top and the wrist picture. | `src/so101_smolvla/picture_editor.py` |
-| 5. Motion | SmolVLA gets the edited pictures and its trained sentence and moves the arm; 400 steps per command. The simulator's own rule says when the cube is placed. | SmolVLA checkpoint, SAPIEN twin |
+| Stage | Input | What happens | Model or program |
+|---|---|---|---|
+| 1. Understand the command | The sentence, spoken (one 6 s clip) or typed | Gemma 4 answers under a grammar with the command and its fields: `pick_place`, the object words, the place words, and what it heard. | Gemma 4 E4B, run by `llama-server` through the voice client in `voice/` |
+| 2. Choose the cube | Gemma's fields | The one colour in the object field selects the cube. "The cube", "red ball", two colours, a question or another command are refused and nothing moves. The place is recorded but not used, because a pick always ends in the bin. | `src/so101_smolvla/cube_commands.py` |
+| 3. Outline the cubes | Both camera pictures, each time SmolVLA plans (every 50 steps) | SAM 3 outlines everything that matches the phrase "cube"; the colour inside an outline tells which cube it is. | SAM 3, `sam3-tracker-rocm` compiled with MIGraphX, in `.venv-sam3` |
+| 4. Hide the other cubes | The chosen cube and SAM 3's outlines | The two cubes the command does not name are painted over with the empty table and bin, in the top and the wrist picture. | `src/so101_smolvla/picture_editor.py` |
+| 5. Move the arm | The edited pictures and the trained sentence | SmolVLA predicts 50 joint targets per plan, 400 steps per command. The simulator's rule decides when the cube counts as placed. | SmolVLA `Harrysunshine/so101-smolvla-sim-real-10task`, SAPIEN twin |
 
 Measured on ten random layouts (three commands each, `TESTING_LEDGER.md`,
 [the fast SAM 3 run](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-run) and
