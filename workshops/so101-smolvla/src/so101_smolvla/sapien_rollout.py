@@ -677,7 +677,7 @@ def run_batch(
 
 def main(argv: list[str] | None = None) -> None:
     # The three-cube runner builds on this module, so it is loaded from here.
-    from so101_smolvla import three_cube_rollout
+    from so101_smolvla import cube_commands, three_cube_rollout
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--count", type=int, default=1)
@@ -716,26 +716,57 @@ def main(argv: list[str] | None = None) -> None:
             "asked for every picture SmolVLA plans on"
         ),
     )
+    parser.add_argument(
+        "--sentences",
+        help=(
+            f"the commands of the {THREE_CUBE_TASK} task as sentences through "
+            "Gemma 4 instead of colours: 'built-in' for the test's own ten "
+            "phrasings per colour, or a JSON file with a list of sentences per "
+            "layout (so101_smolvla.cube_commands)"
+        ),
+    )
+    parser.add_argument(
+        "--spoken",
+        action="store_true",
+        help="say the sentences in the synthetic voice instead of typing them",
+    )
     args = parser.parse_args(argv)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    if args.task != THREE_CUBE_TASK and (args.pictures or args.order or args.outlines):
+    if args.task != THREE_CUBE_TASK and (
+        args.pictures or args.order or args.outlines or args.sentences or args.spoken
+    ):
         parser.error(
-            f"--pictures, --order and --outlines belong to --task {THREE_CUBE_TASK}"
+            f"--pictures, --order, --outlines, --sentences and --spoken belong to "
+            f"--task {THREE_CUBE_TASK}"
         )
     if args.task == THREE_CUBE_TASK:
         if args.pictures is None:
             parser.error(f"--task {THREE_CUBE_TASK} needs --pictures")
+        if args.order and args.sentences:
+            parser.error("--order and --sentences: the commands are colours or sentences")
+        if args.spoken and not args.sentences:
+            parser.error("--spoken needs --sentences")
         try:
             order = (
                 None
                 if args.order is None
                 else three_cube_rollout.parse_order(args.order)
             )
+            if args.sentences is None:
+                sentences = None
+            elif args.sentences == "built-in":
+                sentences = cube_commands.layout_sentences(
+                    args.count, args.environment_seed_base
+                )
+            else:
+                sentences = cube_commands.read_sentences(Path(args.sentences))
         except ValueError as exc:
             parser.error(str(exc))
         outlines = args.outlines or "simulator"
         # A run with the simulator's outlines keeps the folder name it had.
         source = "" if outlines == "simulator" else f"-{outlines}"
+        if sentences is not None:
+            source += "-gemma-spoken" if args.spoken else "-gemma-typed"
         destination = args.output or (
             VLA_TESTING
             / f"{task_spec(args.task).output_label}-{args.pictures}{source}-{stamp}"
@@ -753,6 +784,8 @@ def main(argv: list[str] | None = None) -> None:
             policy_seed_base=args.policy_seed_base,
             order=order,
             outlines=outlines,
+            sentences=sentences,
+            spoken=args.spoken,
         )
     elif args.task in PICK_PLACE_TASKS:
         destination = args.output or (

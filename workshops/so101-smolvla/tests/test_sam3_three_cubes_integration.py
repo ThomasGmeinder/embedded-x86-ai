@@ -337,6 +337,7 @@ def test_real_three_cube_batch_with_sam3_outlines_through_the_command_line(
         "task_mode": THREE_CUBE_TASK,
         "pictures": "others-painted",
         "outlines": "sam3",
+        "commands": "user",
     }
     report = (destination / "REPORT.md").read_text(encoding="utf-8")
     assert "Outlines the picture editor paints by: SAM 3 outlines." in report

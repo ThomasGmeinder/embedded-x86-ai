@@ -1,6 +1,10 @@
 """Three cubes into one bin, one cube per command, in an order the user gives.
 
 Every command names one cube: ``pick_place(object: green cube, place: box)``.
+The commands come either as colours (the user's order, or a draw from the
+layout's seed) or as sentences a user types or says, which Gemma 4 turns into
+the voice client's fields (voice_commands) and cube_commands.choose_cube reads
+for the cube; a sentence that names no one cube is refused and moves nothing.
 SmolVLA is given its trained sentence and, depending on the picture mode, the
 pictures as they are or with the cubes the command does not name painted over.
 """
@@ -14,6 +18,7 @@ import numpy as np
 import torch
 
 from so101_smolvla.bin_layouts import BIN_CUBE_COLORS
+from so101_smolvla.cube_commands import call_text, choose_cube
 from so101_smolvla.feeds_video import Outline, PlanFeeds, feed_frames
 from so101_smolvla.grasp_geometry import GripMoment, GripSample
 from so101_smolvla.picture_editor import PAINT_MARGIN_PX, edit_pictures
@@ -28,6 +33,7 @@ from so101_smolvla.sapien_rollout import (
     _package_versions,
 )
 from so101_smolvla.track import CHECKPOINT, JOINT_NAMES, trajectory_metrics
+from so101_smolvla.voice_commands import VoiceCommands
 
 # Steps for one command: the episode length the simulator registers for its
 # bin scenes (so101_sim/envs.py:902). A command runs all of them, so the arm
@@ -54,10 +60,18 @@ OUTLINE_SOURCES = {
     "simulator": "simulator outlines",
     "sam3": "SAM 3 outlines",
 }
+# Where a layout's commands come from (``order_given_by`` of a result).
+COMMANDS_FROM = {
+    "draw": "seeded draw",
+    "order": "user",
+    "typed": "typed sentences through Gemma 4",
+    "spoken": "sentences in a synthetic voice through Gemma 4",
+}
 
 
 def pick_place_command(color: str) -> str:
-    return f"pick_place(object: {color} cube, place: box)"
+    """The command of a cube given as a colour, as Gemma writes a pick of it."""
+    return call_text("pick_place", f"{color} cube", "box")
 
 
 def draw_order(seed: int) -> tuple[str, ...]:
@@ -146,12 +160,24 @@ def run_three_cube_episode(
     pictures: str,
     order: tuple[str, ...] | None = None,
     sam3: Sam3Outlines | None = None,
+    sentences: list[dict] | None = None,
+    voice: VoiceCommands | None = None,
+    spoken: bool = False,
 ) -> dict:
     """One layout: a command per cube in one persistent scene.
 
     With ``sam3`` the picture editor paints by SAM 3's outlines of the
     pictures SmolVLA plans on; without it, by the scene's own outline maps.
+    With ``sentences`` (``{"say": sentence, "cube": the colour it should
+    name, or None}`` each) every command is one sentence, given to Gemma
+    through ``voice`` typed or, with ``spoken``, in the synthetic voice, right
+    before the pick; the cube is the one its fields name, and a sentence
+    whose fields name no one cube is refused and moves nothing.
     """
+    if sentences is not None and order is not None:
+        raise ValueError("a layout takes its commands as colours or as sentences, not both")
+    if sentences is not None and voice is None:
+        raise ValueError("sentences need the voice worker that asks Gemma")
     torch.manual_seed(policy_seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(policy_seed)
@@ -165,7 +191,18 @@ def run_three_cube_episode(
     start_state = observation.state.copy()
     initial_layout = dict(env.facts["initial_layout"])
     table_height = float(env.facts["table_height"])
-    sequence = draw_order(environment_seed) if order is None else order
+    if sentences is not None:
+        commands_from = COMMANDS_FROM["spoken" if spoken else "typed"]
+        requests = [dict(entry) for entry in sentences]
+    else:
+        commands_from = COMMANDS_FROM["draw" if order is None else "order"]
+        requests = [
+            {"say": None, "cube": color}
+            for color in (draw_order(environment_seed) if order is None else order)
+        ]
+    sequence: list[str | None] = []
+    # Per sentence, what Gemma made of it and what was chosen.
+    translations: list[dict] = []
     action_steps = int(policy.config.n_action_steps)
 
     targets, commanded, achieved, successes = [], [], [], []
@@ -176,7 +213,55 @@ def run_three_cube_episode(
     cube_positions = {color: [] for color in BIN_CUBE_COLORS}
     bin_positions = []
     picks = []
-    for pick_index, color in enumerate(sequence):
+    for pick_index, request in enumerate(requests):
+        if request["say"] is None:
+            color = request["cube"]
+            command_text = pick_place_command(color)
+            translation = None
+        else:
+            # The user speaks (or types) now, and the cube is read from what
+            # Gemma made of it.
+            fields = voice.ask(request["say"], spoken=spoken)
+            choice = choose_cube(fields.command, fields.object)
+            command_text = call_text(fields.command, fields.object, fields.place)
+            translation = {
+                "sentence": request["say"],
+                "expected_cube": request["cube"],
+                "gemma": fields.as_record(),
+                "cube": choice.cube,
+                "refusal": choice.refusal,
+                "as_expected": (
+                    None if request["cube"] is None else choice.cube == request["cube"]
+                ),
+            }
+            translations.append(translation)
+            color = choice.cube
+            print(
+                f"{destination.name} command {pick_index + 1}/{len(requests)}: "
+                f"{request['say']!r} -> {command_text} "
+                f"({fields.seconds:.2f} s) -> "
+                f"{'refused: ' + choice.refusal if color is None else color + ' cube'}",
+                flush=True,
+            )
+        sequence.append(color)
+        if color is None:
+            picks.append(
+                {
+                    "command": command_text,
+                    "cube": None,
+                    "refusal": translation["refusal"],
+                    "sentence": translation["sentence"],
+                    "expected_cube": translation["expected_cube"],
+                    "gemma": translation["gemma"],
+                    "success": False,
+                    "first_success_step": None,
+                    "in_bin_at_end": False,
+                    "picked_up": False,
+                    "held": False,
+                    "steps": 0,
+                }
+            )
+            continue
         facts = env.set_target(color)
         # Table and bin as the top camera sees them now, without cubes and arm.
         scene_without_cubes, _ = env.scene_without_cubes()
@@ -253,7 +338,7 @@ def run_three_cube_episode(
                     plans[camera].append(
                         PlanFeeds(
                             step=len(targets),
-                            command=pick_place_command(color),
+                            command=command_text,
                             taken=taken.copy(),
                             outlines=numbered,
                             legend=legend,
@@ -290,7 +375,7 @@ def run_three_cube_episode(
                 first_success = step
             if (step + 1) % 50 == 0:
                 print(
-                    f"{destination.name} command {pick_index + 1}/{len(sequence)} "
+                    f"{destination.name} command {pick_index + 1}/{len(requests)} "
                     f"({color}) {step + 1}/{steps_per_pick}; "
                     f"in bin={cube['in_bin']} success={outcome.success}",
                     flush=True,
@@ -298,8 +383,16 @@ def run_three_cube_episode(
         ended = env.facts["cubes"]
         picks.append(
             {
-                "command": pick_place_command(color),
+                "command": command_text,
                 "cube": color,
+                **(
+                    {}
+                    if translation is None
+                    else {
+                        key: translation[key]
+                        for key in ("refusal", "sentence", "expected_cube", "gemma")
+                    }
+                ),
                 # The simulator's rule held at some step: the cube inside the
                 # bin's footprint, let go, the robot still and off the bin.
                 "success": first_success is not None,
@@ -329,7 +422,7 @@ def run_three_cube_episode(
             }
         )
         print(
-            f"{destination.name} command {pick_index + 1}/{len(sequence)} "
+            f"{destination.name} command {pick_index + 1}/{len(requests)} "
             f"({color}) in bin at end={picks[-1]['in_bin_at_end']} "
             f"success step={first_success}",
             flush=True,
@@ -337,6 +430,10 @@ def run_three_cube_episode(
 
     final = env.facts
     in_bin = {color: bool(final["cubes"][color]["in_bin"]) for color in BIN_CUBE_COLORS}
+    if not targets:
+        raise RuntimeError(
+            f"{destination.name}: every command was refused, nothing to record"
+        )
     target_rows = np.stack(targets)
     achieved_rows = np.stack(achieved)
     result = {
@@ -352,8 +449,13 @@ def run_three_cube_episode(
         "environment_seed": environment_seed,
         "policy_seed": policy_seed,
         "steps_per_pick": steps_per_pick,
-        "order": list(sequence),
-        "order_given_by": "seeded draw" if order is None else "user",
+        "order": sequence,
+        "order_given_by": commands_from,
+        **(
+            {}
+            if sentences is None
+            else {"sentences": translations, "voice": voice.provenance}
+        ),
         "initial_layout": initial_layout,
         "bin": final["bin"],
         "outline_source": outline_source,
@@ -434,6 +536,7 @@ def write_three_cube_report(rows: list[dict], destination: Path) -> Path:
     layouts = len(rows)
     commands = [pick for row in rows for pick in row["picks"]]
     positions = max(len(row["picks"]) for row in rows)
+    translations = [entry for row in rows for entry in row.get("sentences", [])]
     lines = [
         f"# Three-cube bin test {destination.name}",
         "",
@@ -441,6 +544,18 @@ def write_three_cube_report(rows: list[dict], destination: Path) -> Path:
         f"Outlines the picture editor paints by: {rows[0]['outline_source']}.",
         f"Sentence given to SmolVLA: \"{rows[0]['task']}\".",
         f"Steps per command: {rows[0]['steps_per_pick']}.",
+        f"Commands from: {rows[0]['order_given_by']}.",
+    ]
+    if translations:
+        known = [entry for entry in translations if entry["expected_cube"] is not None]
+        lines.append(
+            f"Sentences through Gemma 4: {len(translations)}; "
+            f"{sum(bool(entry['as_expected']) for entry in known)} of {len(known)} "
+            f"with a known cube gave that cube; "
+            f"{sum(entry['cube'] is None for entry in translations)} refused "
+            f"(nothing moved)."
+        )
+    lines += [
         "",
         f"All three cubes in the bin at the end: "
         f"{sum(bool(row['success']) for row in rows)} of {layouts} layouts.",
@@ -479,7 +594,9 @@ def write_three_cube_report(rows: list[dict], destination: Path) -> Path:
     )
     for row in rows:
         entries = [
-            "{cube} {where} {step}".format(
+            "refused"
+            if pick["cube"] is None
+            else "{cube} {where} {step}".format(
                 cube=pick["cube"],
                 where="in" if pick["in_bin_at_end"] else "out",
                 step="-" if pick["first_success_step"] is None else pick["first_success_step"],
@@ -495,6 +612,24 @@ def write_three_cube_report(rows: list[dict], destination: Path) -> Path:
             f"{row['order_given_by']} | {entries[0]} | {entries[1]} | {entries[2]} | "
             f"{in_bin or 'none'} | {'pass' if row['success'] else 'fail'} |"
         )
+    if translations:
+        lines += [
+            "",
+            "Every sentence, what Gemma made of it and the cube that was chosen "
+            "(`refused: ...` where none was). Seconds are one request to Gemma.",
+            "",
+            "| Layout seed | Sentence | How | Gemma heard | Call | Cube | Should be | Seconds |",
+            "|---:|---|---|---|---|---|---|---:|",
+        ]
+        for row in rows:
+            for entry in row.get("sentences", []):
+                gemma = entry["gemma"]
+                lines.append(
+                    f"| {row['environment_seed']} | {entry['sentence']} | {gemma['how']} | "
+                    f"{gemma['heard']} | `{call_text(gemma['command'], gemma['object'], gemma['place'])}` | "
+                    f"{entry['cube'] if entry['cube'] else 'refused: ' + entry['refusal']} | "
+                    f"{entry['expected_cube'] or '-'} | {gemma['seconds']:.2f} |"
+                )
     path = destination / "REPORT.md"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
@@ -510,7 +645,12 @@ def run_three_cube_batch(
     policy_seed_base: int = 0,
     order: tuple[str, ...] | None = None,
     outlines: str = "simulator",
+    sentences: list[list[dict]] | None = None,
+    spoken: bool = False,
 ) -> list[dict]:
+    """``sentences``: per layout the sentences of its commands (cube_commands);
+    then Gemma runs in its worker for the batch, with its server's log in the
+    batch's folder."""
     if count < 1:
         raise ValueError(f"count must be positive, got {count}")
     if steps_per_pick < 1:
@@ -523,44 +663,62 @@ def run_three_cube_batch(
         raise ValueError(
             f"unknown outline source {outlines!r}; expected one of {list(OUTLINE_SOURCES)}"
         )
+    if sentences is not None and order is not None:
+        raise ValueError("a batch takes its commands as colours or as sentences, not both")
+    if sentences is not None and len(sentences) != count:
+        raise ValueError(
+            f"{len(sentences)} layouts of sentences for a batch of {count} layouts"
+        )
+    if spoken and sentences is None:
+        raise ValueError("spoken commands need sentences")
     if destination.exists():
         raise FileExistsError(f"refusing to overwrite batch {destination}")
     destination.mkdir(parents=True)
-    checkpoint, policy, pre, post = _load_policy()
-    env = create_policy_environment(
-        "sapien",
-        horizon=steps_per_pick * len(BIN_CUBE_COLORS),
-        task_mode=THREE_CUBE_TASK,
-    )
+    voice = None
     sam3 = None
     rows = []
     try:
-        if outlines == "sam3":
-            sam3 = Sam3Outlines()
-        for index in range(count):
-            seed = environment_seed_base + index
-            rows.append(
-                run_three_cube_episode(
-                    env,
-                    policy,
-                    pre,
-                    post,
-                    checkpoint,
-                    destination / f"seed-{seed:05d}",
-                    environment_seed=seed,
-                    policy_seed=policy_seed_base + index,
-                    steps_per_pick=steps_per_pick,
-                    pictures=pictures,
-                    order=order,
-                    sam3=sam3,
-                )
-            )
-    finally:
+        if sentences is not None:
+            voice = VoiceCommands(log_dir=destination)
+        checkpoint, policy, pre, post = _load_policy()
+        env = create_policy_environment(
+            "sapien",
+            horizon=steps_per_pick * len(BIN_CUBE_COLORS),
+            task_mode=THREE_CUBE_TASK,
+        )
         try:
-            if sam3 is not None:
-                sam3.close()
+            if outlines == "sam3":
+                sam3 = Sam3Outlines()
+            for index in range(count):
+                seed = environment_seed_base + index
+                rows.append(
+                    run_three_cube_episode(
+                        env,
+                        policy,
+                        pre,
+                        post,
+                        checkpoint,
+                        destination / f"seed-{seed:05d}",
+                        environment_seed=seed,
+                        policy_seed=policy_seed_base + index,
+                        steps_per_pick=steps_per_pick,
+                        pictures=pictures,
+                        order=order,
+                        sam3=sam3,
+                        sentences=None if sentences is None else sentences[index],
+                        voice=voice,
+                        spoken=spoken,
+                    )
+                )
         finally:
-            env.close()
+            try:
+                if sam3 is not None:
+                    sam3.close()
+            finally:
+                env.close()
+    finally:
+        if voice is not None:
+            voice.close()
     (destination / "summary.json").write_text(
         json.dumps(rows, indent=2) + "\n", encoding="utf-8"
     )
@@ -582,6 +740,7 @@ def run_three_cube_batch(
                 "task_mode": THREE_CUBE_TASK,
                 "pictures": pictures,
                 "outlines": outlines,
+                "commands": rows[0]["order_given_by"],
             },
             indent=2,
         )

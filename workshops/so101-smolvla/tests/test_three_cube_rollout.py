@@ -738,3 +738,132 @@ def test_a_batch_is_refused_before_anything_is_loaded_or_written(tmp_path):
     destination.mkdir()
     with pytest.raises(FileExistsError, match="refusing to overwrite"):
         run_three_cube_batch(1, destination=destination, pictures="unedited")
+
+
+class StandInVoice:
+    """Gemma's fields for a few sentences, without a server; asked sentences are kept."""
+
+    provenance = {"route": "stand-in"}
+    FIELDS = {
+        "put the green cube in the bin": ("pick_place", "green cube", "bin"),
+        "grab the blue one": ("pick_place", "blue one", ""),
+        "put the cube in the box": ("pick_place", "cube", "box"),
+        "pick up the red block": ("pick_place", "red block", ""),
+        "learn the stack": ("learn_stack", "", ""),
+    }
+
+    def __init__(self) -> None:
+        self.asked: list[tuple[str, bool]] = []
+
+    def ask(self, sentence: str, spoken: bool = False):
+        from so101_smolvla.voice_commands import CommandFields
+
+        self.asked.append((sentence, spoken))
+        command, obj, place = self.FIELDS[sentence]
+        return CommandFields(sentence, "synthetic voice" if spoken else "typed", command, obj, place,
+                             sentence.capitalize(), 0.5, 2.0 if spoken else None)
+
+
+def test_sentences_through_the_voice_name_the_cubes_and_a_refused_one_moves_nothing(
+    tmp_path, monkeypatch
+):
+    voice = StandInVoice()
+    sentences = [
+        {"say": "put the green cube in the bin", "cube": "green"},
+        {"say": "put the cube in the box", "cube": None},
+        {"say": "grab the blue one", "cube": "blue"},
+        {"say": "learn the stack", "cube": None},
+        {"say": "pick up the red block", "cube": "red"},
+    ]
+    result, shown, scene, policy = _run(
+        tmp_path, monkeypatch, "others-painted", sentences=sentences, voice=voice
+    )
+    # Every sentence was given to Gemma typed, right before its pick; the two
+    # that name no cube were refused and the scene was not asked for a target.
+    assert voice.asked == [(entry["say"], False) for entry in sentences]
+    assert scene.targets == ["green", "blue", "red"]
+    assert policy.resets == 3 and len(shown) == 9
+    assert result["order"] == ["green", None, "blue", None, "red"]
+    assert result["order_given_by"] == "typed sentences through Gemma 4"
+    assert result["voice"] == {"route": "stand-in"}
+    assert [entry["cube"] for entry in result["sentences"]] == ["green", None, "blue", None, "red"]
+    assert [entry["as_expected"] for entry in result["sentences"]] == [True, None, True, None, True]
+    assert result["sentences"][1]["refusal"] == "names no cube colour"
+    assert result["sentences"][3]["refusal"] == "not a pick command but 'learn_stack'"
+    assert result["sentences"][0]["gemma"] == {
+        "sentence": "put the green cube in the bin", "how": "typed", "command": "pick_place",
+        "object": "green cube", "place": "bin", "heard": "Put the green cube in the bin",
+        "seconds": 0.5, "spoken_s": None,
+    }
+    assert [pick["command"] for pick in result["picks"]] == [
+        "pick_place(object: green cube, place: bin)",
+        "pick_place(object: cube, place: box)",
+        "pick_place(object: blue one)",
+        "learn_stack()",
+        "pick_place(object: red block)",
+    ]
+    refused = result["picks"][1]
+    assert refused["cube"] is None and refused["refusal"] == "names no cube colour"
+    assert refused["in_bin_at_end"] is False and refused["steps"] == 0
+    assert refused["sentence"] == "put the cube in the box" and refused["expected_cube"] is None
+    moved = result["picks"][2]
+    assert moved["cube"] == "blue" and moved["in_bin_at_end"] is True
+    assert moved["sentence"] == "grab the blue one" and moved["expected_cube"] == "blue"
+    assert moved["refusal"] is None
+    assert result["success"] is True
+    # The video's captions carry Gemma's call, two plans per moved cube.
+    assert [plan["command"] for plan in result["plans"]] == [
+        "pick_place(object: green cube, place: bin)",
+        "pick_place(object: green cube, place: bin)",
+        "pick_place(object: blue one)",
+        "pick_place(object: blue one)",
+        "pick_place(object: red block)",
+        "pick_place(object: red block)",
+    ]
+
+    report = write_three_cube_report([result], tmp_path)
+    text = report.read_text(encoding="utf-8")
+    assert "Commands from: typed sentences through Gemma 4." in text
+    assert "Sentences through Gemma 4: 5; 3 of 3 with a known cube gave that cube; 2 refused (nothing moved)." in text
+    assert "| green in 1 | refused | blue in 1 |" in text
+    assert "| 4 | put the cube in the box | typed | Put the cube in the box | `pick_place(object: cube, place: box)` | refused: names no cube colour | - | 0.50 |" in text
+    assert "| 4 | grab the blue one | typed | Grab the blue one | `pick_place(object: blue one)` | blue | blue | 0.50 |" in text
+
+
+def test_spoken_sentences_are_said_to_the_voice_and_say_so_in_the_result(tmp_path, monkeypatch):
+    voice = StandInVoice()
+    result, _, scene, _ = _run(
+        tmp_path, monkeypatch, "unedited",
+        sentences=[{"say": "grab the blue one", "cube": "blue"}], voice=voice, spoken=True,
+    )
+    assert voice.asked == [("grab the blue one", True)]
+    assert scene.targets == ["blue"]
+    assert result["order_given_by"] == "sentences in a synthetic voice through Gemma 4"
+    assert result["sentences"][0]["gemma"]["how"] == "synthetic voice"
+    assert result["sentences"][0]["gemma"]["spoken_s"] == 2.0
+
+
+def test_sentences_need_the_voice_and_exclude_an_order_and_all_refused_is_a_fault(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="colours or as sentences, not both"):
+        _run(tmp_path, monkeypatch, "unedited", order=("red", "green", "blue"),
+             sentences=[{"say": "grab the blue one", "cube": "blue"}], voice=StandInVoice())
+    with pytest.raises(ValueError, match="need the voice worker"):
+        _run(tmp_path, monkeypatch, "unedited", sentences=[{"say": "grab the blue one", "cube": "blue"}])
+    with pytest.raises(RuntimeError, match="every command was refused"):
+        _run(tmp_path, monkeypatch, "unedited",
+             sentences=[{"say": "learn the stack", "cube": None}], voice=StandInVoice())
+    assert not (tmp_path / "seed-00004").exists()
+
+
+def test_the_batch_checks_sentences_against_its_count_and_order(tmp_path):
+    from so101_smolvla.three_cube_rollout import run_three_cube_batch
+
+    sentences = [[{"say": "grab the blue one", "cube": "blue"}]]
+    with pytest.raises(ValueError, match="colours or as sentences, not both"):
+        run_three_cube_batch(1, destination=tmp_path / "a", pictures="unedited",
+                             order=("red", "green", "blue"), sentences=sentences)
+    with pytest.raises(ValueError, match="1 layouts of sentences for a batch of 2"):
+        run_three_cube_batch(2, destination=tmp_path / "b", pictures="unedited", sentences=sentences)
+    with pytest.raises(ValueError, match="spoken commands need sentences"):
+        run_three_cube_batch(1, destination=tmp_path / "c", pictures="unedited", spoken=True)
+    assert not any((tmp_path / name).exists() for name in "abc")

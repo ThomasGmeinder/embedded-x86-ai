@@ -445,6 +445,7 @@ def test_real_three_cube_batch_runs_a_command_per_cube_and_writes_its_report(
         "task_mode": THREE_CUBE_TASK,
         "pictures": "others-painted",
         "outlines": "simulator",
+        "commands": "user",
     }
     report = (destination / "REPORT.md").read_text(encoding="utf-8")
     assert "Outlines the picture editor paints by: simulator outlines." in report
