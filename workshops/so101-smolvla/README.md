@@ -73,11 +73,16 @@ flowchart TD
 
 ### Automated testing
 
-Video of the first layout of the run of 2026-11-22, 17:12, with the fast
-SAM 3 (`vla_testing/random-three-cubes-sapien-others-painted-sam3-fast-20261122-171213`,
+The first layout of the run of 2026-11-22, 17:12, with the fast SAM 3
+(`vla_testing/random-three-cubes-sapien-others-painted-sam3-fast-20261122-171213`,
 seed 0, the cubes commanded as colours in the order blue, red, green, all
-three placed):
-[media/three-cubes-sam3-fast/seed-00000-feeds.mp4](media/three-cubes-sam3-fast/seed-00000-feeds.mp4).
+three placed). The moving picture is the run's video at 1280 pixels wide and
+10 frames per second; a click on it opens the full video,
+`media/three-cubes-sam3-fast/seed-00000-feeds.mp4`, which GitHub offers as a
+download.
+
+[![The three-cube run, seed 0: both cameras, SAM 3's outlines and the pictures given to SmolVLA](media/three-cubes-sam3-fast/seed-00000-feeds.gif)](media/three-cubes-sam3-fast/seed-00000-feeds.mp4)
+
 Each row is one camera, top and wrist, with three pictures: the scene as the
 camera takes it at every step; the outlines SAM 3 gave when SmolVLA last
 planned, tinted by what was done with each (target, painted over, not used);
@@ -149,7 +154,68 @@ uv pip install --python .venv/bin/python "lerobot[smolvla,training]"
 
 .venv/bin/python -m rocm_sdk test
 .venv/bin/python -c "import torch, torchvision; assert torch.version.hip; assert '+rocm' in torchvision.__version__; assert torch.cuda.is_available()"
+
+# The utilization and power table (section below) draws with Qt 6.
+uv pip install --python .venv/bin/python "PySide6-Essentials==6.12.0"
 ```
+
+## Utilization and power table
+
+A small always-on-top table, three rows and two columns, read twice a second
+from the kernel's own files on the machine it runs on:
+
+| Row | Utilization | Power |
+|---|---|---|
+| CPU | `/proc/stat`, the difference of two readings; busy is all time minus idle minus iowait (psutil's definition; `top` counts iowait as busy) | the firmware's `average_all_core_power`: the cores only, not the caches, memory controller or fabric |
+| iGPU | the graphics driver's `gpu_busy_percent`: the share of the interval in which the graphics engine was not idle (graphics and compute; the video engine is not in it) | the firmware's `average_gfx_power` |
+| NPU | the firmware's eight per-column busy values, one segment each; the number is their mean | the firmware's `average_ipu_power` ("IPU" is the firmware's name for the NPU) |
+
+The firmware values come from the platform firmware's metrics table, which the
+`amdgpu` driver hands out as `/sys/class/drm/card<N>/device/gpu_metrics`
+(format 3.0, `struct gpu_metrics_v3_0`). Three things to know when reading it:
+
+- The three power rows do not add up to the whole chip: about 20 to 30 W go
+  to the rest of the chip (memory controller, fabric, display, caches).
+- Every value is filtered by the firmware over about one second, so the table
+  lags a load by that much. "100 % busy" means the engine was never idle in
+  the interval, not that it was saturated.
+- The table cannot tell which program loads the graphics. With Gemma, SAM 3
+  and SmolVLA on the graphics together, each one's share has to come from
+  timing its stage.
+
+```bash
+./scripts/run_utilization_meters.sh                       # the table on this screen
+PYTHONPATH=src .venv/bin/python -m so101_smolvla.utilization --once --json   # one reading, no window
+PYTHONPATH=src python3 -m so101_smolvla.utilization_meters close             # end a running table
+```
+
+From a notebook or another Python program (standard library only, so any
+Python on the machine; the notebook `notebooks/voice_control_test.ipynb`,
+section 9, has the two cells):
+
+```python
+from so101_smolvla.utilization_meters import open_meters, close_meters
+open_meters()    # starts the window program if none runs; returns its facts
+close_meters()   # ends it, from any process
+```
+
+When the robot stack runs on a remote machine, start the table there through
+an SSH connection with X11 forwarding; it draws on your screen, which needs an
+X server (a Linux desktop has one; on GNOME with Wayland it is XWayland):
+
+```bash
+ssh -o ForwardX11=yes -o ForwardX11Trusted=yes <machine> <checkout>/workshops/so101-smolvla/scripts/run_utilization_meters.sh
+```
+
+Trusted X11 forwarding gives programs on the remote machine full access to
+your display; that is a property of the SSH connection, not of the table.
+The window is used with the mouse only: the × closes it, a drag moves it. It
+has no entry in the task bar, and on a monitor with fractional scaling under
+GNOME 46 it is enlarged by the desktop and looks softer. Measured on this
+machine (`TESTING_LEDGER.md`, [the section on the meters](TESTING_LEDGER.md#t-2026-11-22-utilization-meters)):
+the window's own graphics time is 0.02 % of the interval with the
+graphics-processor renderer, which it uses on a local display; on a forwarded
+display it uses Qt Quick's software renderer.
 
 ## SAPIEN policy backend
 
