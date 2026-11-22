@@ -897,6 +897,16 @@ section 5.2. Pass counts are still the user's (decision 4). Detail:
    Settled for task 1 by the user's answer after that test: way 1,
    with `object` and `place`. Open: the arguments of a stacking
    command (a second object); not tested.
+
+   Amendment, 2026-11-22, after 17:58: first evidence from a person's
+   voice, three sentences in the user's saved notebook. "put the red
+   cube on the blue cube" became `pick_place(object: red cube, place:
+   blue cube)`, "Put the green cube on the red" became
+   `pick_place(object: green cube, place: red)`: Gemma puts the second
+   cube into the place argument of the pick command. Whether that form
+   is the stacking command, or a `stack` command of its own is added,
+   stays this decision. Detail:
+   [`TESTING_LEDGER.md`](TESTING_LEDGER.md#t-2026-11-22-persons-voice).
 10. **Two places on the branch where a program, not Gemma, makes a
     command.** "stop robot" is matched as a phrase in the text before
     Gemma is asked (`vla_pipeline/main.py:209-218`,

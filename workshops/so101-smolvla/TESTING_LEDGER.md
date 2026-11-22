@@ -2566,3 +2566,33 @@ result file is written in the testing ledger only, the development
 ledger and the research file link to it, the spec links to both. The
 script ran once and is not kept; the check that every link resolves to
 an anchor found none unresolved.
+
+<a id="t-2026-11-22-persons-voice"></a>
+### Addition, after 17:58: three sentences in a person's voice, from the user's saved notebook
+
+Not a job: read from `notebooks/voice_control_test.ipynb` as the user
+saved it on 2026-11-22 at 01:58:56 (file time), committed with this
+addition. The user ran the two microphone cells of the notebook against
+the Gemma server (two slots, context 4,096) with their own voice; the
+notebook stores the transcript and the call of each sentence. These are
+the first results with a person's voice in this workshop; the ledger's
+earlier counts are typed sentences and a synthetic voice.
+
+| Cell | How | What the user said, as Gemma heard it | Call | Seconds |
+|---|---|---|---|---:|
+| 6, one recorded clip of 6 s | one request | "Pick up the blue cube" | `pick_place(object: blue cube)` | 0.90 |
+| 7, the live session on the microphone | the branch's loop | "pick put the red cube on the blue cube" | `pick_place(object: red cube, place: blue cube)` | not stored |
+| 7, the same session | the branch's loop | "Put the green cube on the red" | `pick_place(object: green cube, place: red)` | not stored |
+
+- Three sentences, each once; no count is claimed from them.
+- A stacking sentence ("put the red cube on the blue cube") becomes the
+  pick command with the second cube as the place. The spec's decision 9
+  (the arguments of a stacking command) has this as its first evidence
+  from a person's voice; `SPEC.md` carries the link.
+- The first sentence names no place and the call has none, as the
+  grammar allows.
+- The notebook's other cells hold a rerun of the typed and the synthetic
+  table with the counts of the committed run (typed 30 of 30, synthetic
+  voice 26 of 30, seconds per request 0.54 / 0.69 / 0.99 and 0.70 /
+  0.86 / 1.17); the last cell has no "Gemma stopped" line, because the
+  notebook was saved while the user's server was still running.
