@@ -52,6 +52,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- Readiness: the voice workshop's Python and its two environment scripts ---
+# The kernel starts through scripts/run_voice_env.sh, which sources the two
+# scripts; the same launcher runs the Gemma worker of the three-cube test.
+ENV_LAUNCHER="$(cd "$HERE/../scripts" && pwd)/run_voice_env.sh"
+[[ -x "$ENV_LAUNCHER" ]] || die "missing $ENV_LAUNCHER"
 [[ -d "$HERE/../../vvla-pipeline" ]] || die "the voice workshop is not at $HERE/../../vvla-pipeline"
 VOICE_WORKSHOP="$(cd "$HERE/../../vvla-pipeline" && pwd)"
 VENV="$VOICE_WORKSHOP/.venv"
@@ -62,21 +66,19 @@ VENV="$VOICE_WORKSHOP/.venv"
   || die "ipykernel / jupyter_client are not installed in $VENV"
 
 # --- The kernel: the workshop's two scripts, then the kernel itself ----------
-# The start command gets the workshop's path and the connection file as "$1"
-# and "$2". It does not change directory, so a notebook starts where it lies.
-# "exec" makes the kernel the process Jupyter started, so interrupting a cell
-# reaches it.
+# The start command is the environment launcher with the kernel's own command.
+# It does not change directory, so a notebook starts where it lies, and it
+# "exec"s the kernel, so interrupting a cell reaches the process Jupyter
+# started.
 SPEC_DIR="$(mktemp -d)"
 trap 'rm -rf "$SPEC_DIR"' EXIT
-"$VENV/bin/python" - "$SPEC_DIR/kernel.json" "$KERNEL_NAME" "$KERNEL_DISPLAY" "$VOICE_WORKSHOP" <<'PYEOF'
+"$VENV/bin/python" - "$SPEC_DIR/kernel.json" "$KERNEL_NAME" "$KERNEL_DISPLAY" "$ENV_LAUNCHER" <<'PYEOF'
 import json
 import sys
 
-path, name, display, workshop = sys.argv[1:]
-start = ('source "$1/.venv/bin/activate" && source "$1/scripts/ryzen_ai_env.sh" && '
-         'exec python -m ipykernel_launcher -f "$2"')
+path, name, display, launcher = sys.argv[1:]
 spec = {
-    "argv": ["bash", "-c", start, name, workshop, "{connection_file}"],
+    "argv": [launcher, "python", "-m", "ipykernel_launcher", "-f", "{connection_file}"],
     "display_name": display,
     "language": "python",
     "metadata": {"debugger": True},

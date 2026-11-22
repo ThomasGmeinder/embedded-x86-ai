@@ -45,6 +45,11 @@ WORDS_PER_MINUTE = 150
 PEAK = 0.5    # loudest sample of every sentence, as a share of full scale
 LEAD_S = 0.5  # quiet before the sentence in a clip
 
+# How the server is run here, beyond config/pipeline.yaml: two request slots and a context of 4,096 tokens
+# (SPEC.md section 5.1, departure 1). The notebook's start cell gives the same two values to start_server; the
+# Gemma worker of the three-cube test (src/so101_smolvla/voice_worker.py) gives these.
+SERVER_CHANGES = {"parallel": 2, "ctx_size": 4096}
+
 PICK = "pick with object and place"
 STACK = "learn / rebuild the stack"
 EXISTING = "commands the branch has today"
