@@ -2926,8 +2926,12 @@ result); without the variable the device is "AMD Radeon 8060S Graphics"
 and the kernel runs. The override therefore stays in the server process's
 environment alone (`GemmaServer.start`).
 
-Not run: `tests/test_voice_notebook.py`. It requires that nothing answers
-on the default port 8082, and the user's own `llama-server` of the other
-workshop's notebook session (pid 3037368) holds it; stopping it is the
-user's call. The notebook's kernel and launcher are covered by the
-launcher tests above; the notebook itself waits for the port.
+The notebook test ran last, after the user's word ("go for 1. and 2.") to
+stop their own `llama-server` of the other workshop's notebook session
+(pid 3037368, 21 hours old), which held the default port 8082 the test
+requires free; it ended on SIGTERM and both ports were free before the
+run.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `voice-notebook-230339` | 23:03:39 to 23:04:45, exit 0 | `pytest tests/test_voice_notebook.py -v -rA -s` (`/tmp/voice-notebook-230339.log`) | **2 passed in 66.28 s.** The notebook through its registered kernel (`.venv`) against the real server: **typed 30 of 30** right; spoken, synthetic voice, 26 of 30 (printed, not required; the same count as on 2026-11-21); the table of section 5 grew by one row per sentence, 30 redraws; "Gemma stopped." at the end. The short notebook: a second `GemmaServer(...).start()` refused with "SETUP FAILURE: something already answers", the live cell stopped with "The microphone or the speech detection could not be opened" on a microphone that does not exist, no server left on the port. |

@@ -6593,10 +6593,13 @@ process and the last borrowed piece (the NPU load test) are gone. Typed
 <a id="d-2026-11-22-voice-standalone-where-this-leaves-the-work"></a>
 ### Where this leaves the work
 
-- The notebook test (`tests/test_voice_notebook.py`) was not run: the
-  user's own `llama-server` of the other workshop's notebook session
-  (pid 3037368) still holds port 8082, which that test requires free. To
-  be run once the port is free.
+- The notebook test (`tests/test_voice_notebook.py`) ran last, once the
+  user had the old `llama-server` of the other workshop's notebook
+  session stopped (it held port 8082): 2 passed, typed 30 of 30, spoken
+  26 of 30 as on 2026-11-21. With it, every test of the workshop ran
+  tonight; the one red test is the spoken Gemma test, on the user's word.
+- The other workshop's `llama-server` (pid 3037368) is gone; the user's
+  own notebook session there has no server until it starts one again.
 - `HSA_OVERRIDE_GFX_VERSION=11.0.0` and the `gfx1100` build are the proven
   way on this machine; whether llama.cpp of a newer commit runs natively
   on `gfx1151` with ROCm 7.2.4 was not tried.
