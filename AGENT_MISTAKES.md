@@ -2813,3 +2813,37 @@ comparison of both runs' `result.json` (equal in 10 of 10 layouts);
 Nothing was built on the section in between. The prevention lines are
 unchanged; they have again not held in the first step after a summary.
 No new entry, because they are the same mistakes. Status: corrected.
+
+## 2026-11-22 — A tmux launch line ended its brace group with `exit`, so the job wrote no exit file and the wait returned on the server's death
+
+- **Agent/tool:** Claude Code (Claude Fable 5.1), the session that took
+  over the fast SAM 3 work after the Cursor session stopped
+- **Task:** Rerun the prewarm and manifest steps of the reference's
+  model build with the MIOpen fix, as a detached tmux job with log,
+  exit file and completion event (`workshops/so101-smolvla`).
+- **Mistake:** The launch line was
+  `{ date …; <command>; code=$?; date …; exit $code; } > $LOG 2>&1;
+  exit_code=$?; printf … > $EXIT; tmux wait-for -S …`. The `exit`
+  inside the brace group ends the whole `bash -lc` shell, so the
+  `printf` and the `tmux wait-for -S` after the group never ran. My
+  `tmux wait-for` returned anyway, because the tmux server had no
+  session left and went away; I read that as the completion event.
+- **Evidence:** `cat …/sam3-prewarm-1795361774.exit`: "No such file or
+  directory", while the log ends with "ALL OK" and `ended-16:36:51`.
+  The rule names a missing exit artifact as incomplete evidence
+  whatever the log says.
+- **Cause:** Copied the `{ …; exit $code; } 2>&1 | tee` shape of the
+  Cursor session's `job.sh`, where the group feeds a pipe and
+  `PIPESTATUS` is read afterwards, into a line without a pipe, where
+  the group runs in the shell itself.
+- **Correction:** The line now runs the command directly with a
+  redirect, takes `exit_code=$?`, writes the exit file and signals the
+  event in sequence. Rerun as `sam3-prewarm-1795361867`: exit file 0,
+  "Installation smoke PASS", manifest written 16:38:20. No result was
+  taken from the first run; the first run's work (an idempotent prewarm
+  and manifest) did no harm.
+- **Prevention:** No `exit` inside a brace group that is not the last
+  element of a pipeline; and, as the entry of 2026-11-20 on launch
+  lines says, a new launch line is tried once with `false` before it
+  carries a real job.
+- **Status:** corrected

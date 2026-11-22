@@ -2230,3 +2230,262 @@ Not run: anything of the reference on the graphics processor (its smoke
 test, the model build, a picture). The full suite has not run since the
 five files were added. `DEVELOPMENT_LEDGER.md` has no entry for this
 part.
+
+<a id="t-2026-11-22-fast-sam3-built"></a>
+## 2026-11-22 — The fast SAM 3 model built: the GPU checks, the build's failure in MIOpen, its cause and the fix; the full suite before the commits
+
+Written after 16:38:22, the `ended-` line of the last job below, by a
+Claude Code session that took the work over after the Cursor session
+stopped on its monthly usage limit (its last record at about 15:12).
+This ledger was read in full (2,232 lines) in the same turn before this
+section was written. Same job runner conventions as above for the jobs
+of the Cursor session (`job.sh`, socket `stack-memory-test`); the jobs
+of this session are plain `tmux new-session` commands with the same
+shape (live log, exit file with the command's own status, completion
+event `tmux wait-for`), logs under `/tmp/test-<id>.log` and
+`~/.cache/stack-memory-agent-test/logs/`. Clock times are the
+`started-` and `ended-` lines of each log or the `date` printed with
+the command; counts are from each log, read in this turn.
+
+### The Cursor session's last jobs, read from their logs (not entered by it)
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `sam3-gpu-checks-1795355898` | 14:58, exit 0 | through `scripts/run_sam3_reference.sh`: `-m rocm_sdk test`; a Torch check that the graphics processor is seen; the reference's own `docker/rocm101/smoke_test.py` | plan steps 0.1 and 0.2: `rocm_sdk test` "OK"; Torch sees gfx1151; "SAM3 ROCm runtime smoke test: OK". So the MIGraphX wheels run with the Python-packaged ROCm 10.1, the plan's main risk |
+| `sam3-model-build-1795356011` | 15:00:11 to 15:23:24, exit 1 | `scripts/run_sam3_reference.sh export/build_text_prompt_mig.py --checkpoint ~/GitHub/sam3-tracker-rocm-v0.4.0-rc1/model/sam3 --performance-build` (`SAM3_EC_POWER_MODE=performance`; the profile had been set to performance by that session) | steps 1 to 9 of 11 passed (backbone export 76 s, simplify 826 s, two backbone compiles 52 and 47 s, DETR encoder 15 s, ten memory-attention exports 11 to 12 s each, their compile 162 s, fixed decoder 26 and 37 s); step 10, "Prewarm runtime ORT caches" (`tools/smoke_live_release.py`, 3 frames of the swan video), **failed after 34 s**: six lines `MIOpen: Error [EvaluateInvokers] … Invalid elapsed time detected in EvaluateInvokers, failed condition: elapsed <= 0`, then `MIOpen Error: … No suitable algorithm was found to execute the required convolution`, "Installation smoke FAIL". "Total: 23.1 min, SOME STEPS FAILED". The compiled files of steps 1 to 9 are on disk under `~/.cache/sam3-tracker-rocm/build-0.4.0-rc1-8005dc6ab0f5/onnx_files_504/` |
+
+The Cursor session's record holds no launch of the build and no read of
+its failure; its last recorded step is a readiness check that found
+`scipy` missing from `.venv-sam3` (the reference imports it in one
+fallback only, `tracker/rocm_patches.py`; the build never reached it).
+
+### The cause, measured
+
+The failing step is the first of the build that runs the live pipeline.
+The reference's vision encoder, DETR encoder, DETR decoder and memory
+attention run in MIGraphX; its mask decoder, mask downsampler and
+memory encoder still run in PyTorch, and those hold convolutions
+(classes with `nn.Conv` in `transformers/models/sam3*/modeling_*.py` of
+`.venv-sam3`). PyTorch's convolutions go to MIOpen, which on the first
+call of a shape times every candidate kernel. The same six lines and
+the same error had stopped the PyTorch route at 11:28 (job
+`sam3-conv-setting-1795343291`, row above), where `MIOPEN_FIND_MODE=FAST`
+was the setting that made it work. Both environments hold the same
+MIOpen library, byte for byte (`cmp` of `libMIOpen.so.1` in `.venv` and
+`.venv-sam3`, version 3.6.1.39d8d603).
+
+Typed-in probe, foreground, through `scripts/run_sam3_reference.sh`,
+no log file, clock not read (between the suite below and 16:27):
+`/tmp/miopen_conv_probe.py`, a HIP event timer over a busy-wait kernel
+of 2,000,000 cycles and one fp16 `conv2d` (1×256×64×64, 3×3):
+
+| Setting | Timer reading | conv2d |
+|---|---|---|
+| as it is | 0.002 ms | failed, `RuntimeError: miopenStatusUnknownError`, the same six MIOpen lines |
+| `MIOPEN_FIND_MODE=FAST` | 0.001 ms | worked, first call 0.40 s |
+
+The timer reads near zero for work of about a millisecond, so every
+candidate is rejected; FAST takes a kernel from MIOpen's database
+without timing. Known upstream for this chip and these packages:
+ROCm/MIOpen issue 3964, ROCm/TheRock issue 4954. Not verified: whether
+the reference's container, with the apt ROCm 10.1 packages, is free of
+it (the reference sets no MIOpen variable anywhere). The upstream
+repository has no commit after the pinned `8005dc6` (`git fetch` at
+about 16:10; v0.4.0-rc1 is its newest tag).
+
+### The fix and its tests
+
+Changed, uncommitted: `scripts/run_sam3_reference.sh` exports
+`MIOPEN_FIND_MODE=FAST` for every reference command, with the reason
+beside it; `tests/test_sam3_reference_env.py` requires it in the
+launched command's environment. The PyTorch route keeps the same
+setting for its own worker process (`sam3_outlines.py:35`); that route
+is to be removed under the plan's decision D3, which removes the
+duplicate.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `test-suite-1795361236` (tmux, log `/tmp/test-suite-1795361236.log`) | 16:27:16 to 16:31:48, exit 0 | `env PYTHONPATH=src .venv/bin/python -m pytest tests -v --tb=short -rP --ignore=tests/test_voice_notebook.py` | **182 passed, 1 expected failure, 0 skipped, in 270.99 s.** Run before the fix and before the commits, on the working tree of the Cursor session; 182 = the 178 of 13:04 plus the 4 of `test_sam3_reference_env.py`. The notebook test is left out for the reason given at 13:14 (`llama-server`, pid 3037368, still on port 8082) |
+| (foreground, 16:34:32 to 16:34:36) | exit 0 | `env PYTHONPATH=src .venv/bin/python -m pytest tests/test_sam3_reference_env.py -v --tb=short`, after the fix | 4 passed in 3.98 s; the launched command reports `MIOPEN_FIND_MODE=FAST` |
+| `sam3-prewarm-1795361774` (tmux) | 16:36:14 to 16:36:51; **no exit file** | `scripts/run_sam3_reference.sh export/build_text_prompt_mig.py --checkpoint … --performance-build --steps prewarm manifest` | Log: step 10 "Installation smoke PASS", done in 21 s; step 11 manifest done in 10 s; "Total: 0.6 min, ALL OK". Not complete evidence: the launch line held `exit` inside its brace group, so the shell ended before the exit file and the completion signal were written, and the wait returned because the tmux server went away (`AGENT_MISTAKES.md`, entry of this day on the launch line). Rerun below |
+| `sam3-prewarm-1795361867` (tmux) | 16:37:47 to 16:38:22, exit 0 | the same, corrected launch line | step 10 "Installation smoke PASS" in 21 s, step 11 manifest in 9 s, "ALL OK"; `ARTIFACT_MANIFEST.json` written 16:38:20 (11,995 bytes). `/tmp/sam3-build-prewarm-504.json`: `"passed": true`, 3 frames processed, 3 detected, 3 non-empty masks, no error, mode `full`, `MIGFixedDetrDecoder`, parallel tail on |
+
+So the model files of plan step 0.3 are built and the reference's
+installation smoke passes on this machine. Not measured: the time per
+frame (plan step 0.4; the prewarm result holds no timing). Not run: the
+reference on our pictures (step 0.5); nothing of the workshop calls the
+reference yet (step 1).
+
+### Commits of this turn, after the suite
+
+`e1e54bb` (the three-cube test with SAM 3 outlines: 7 new modules, 9
+changed, 11 test files), `c03865f` (the notebook test), `1631757`
+(spec, research and both ledgers up to the section above), `690c953`
+(the journal, including the eight amendments that were unstaged). Left
+uncommitted on purpose: the five files of the fast SAM 3 environment
+(their build was still failing when the commits were made), the fix
+above, this section, and the notebook's changed outputs (the user's own
+microphone run of 01:58; not a source change).
+
+Also read: the platform profile is still `performance` (set by the
+Cursor session for the build; its plan was to set it back to `balanced`
+afterwards). Not changed in this turn.
+
+<a id="t-2026-11-22-fast-sam3-connected"></a>
+## 2026-11-22 — The fast SAM 3 connected as `--outlines sam3-fast`: the check on stored pictures, the tests, and the 10-layout run
+
+Written after 17:17:45 (clock printed with the run's progress below).
+Same conventions as the section above; jobs are tmux sessions with log,
+exit file and completion event under `~/.cache/stack-memory-agent-test/logs/`.
+The user's decision of this turn (plan decision D3): the PyTorch route
+stays as `--outlines sam3` until the fast route is shown to give the same
+quality of result; then it goes.
+
+Changed, uncommitted: new `src/so101_smolvla/sam3_fast_worker.py` (runs
+in `.venv-sam3` through `scripts/run_sam3_reference.sh`, imports nothing
+of the workshop; one `SAM3Live` per camera, full detection on every call,
+no cap on tracked things, `reset_tracking` per layout); `sam3_outlines.py`
+(`Sam3Outlines(source=…)`, the phrase "cube" and the camera names are the
+client's and go with the start request); `sam3_worker.py` (phrase from
+the client); `three_cube_rollout.py` (third outline source
+"sam3-fast", label "SAM 3 outlines (sam3-tracker-rocm)");
+`scripts/run_sam3_reference.sh` (exports `SAM3_MODEL_DIR`). Tests:
+`test_sam3_outlines.py` (+1), `test_three_cube_rollout.py` (+1),
+`test_sapien_protocol.py` (one more command line), `test_sam3_reference_env.py`
+(the new variable), `test_sam3_three_cubes_integration.py` (both real-model
+tests parametrized over the two routes; the fast one skips without
+`.venv-sam3` or the compiled model files).
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| (foreground) | 17:08:28 to 17:08:39, exit 0 | `env PYTHONPATH=src .venv/bin/python -m pytest tests/test_sam3_outlines.py tests/test_three_cube_rollout.py tests/test_sapien_protocol.py tests/test_sam3_reference_env.py tests/test_feeds_video.py -v --tb=short` | 56 passed in 10.64 s (no graphics processor) |
+| `sam3-fast-check-1795363801` | 17:10:01 to 17:11:01, exit 0 | `~/.cache/stack-memory-agent-test/sam3_fast_client_check.py` on the stored plan pictures of layouts 0 and 1 of the PyTorch run `random-three-cubes-sapien-others-painted-sam3-20261122-132554` (24 plans each), through the real client `Sam3Outlines(source="sam3-fast")`, both cameras; result `logs/sam3-fast-check-1795363801.json` | Plan step 0.5. Seconds per call, median over 48: top 0.247 (first call 6.618, the warm-up) against PyTorch 6.55; wrist 0.254 against 8.61; all 96 calls 30.6 s against 683 s. (plan, cube) pairs with a cube outlined by both routes: top 133, PyTorch only 3, fast only 0; wrist 117, PyTorch only 1, fast only 1 (neither: 8 and 25, cubes out of view). Overlap of the two routes' outlines of the same cube, median: top 0.948 (min 0.385), wrist 0.984 (min 0.732). Plans with an outline on no cube: top 0 PyTorch, 5 fast; wrist 46 PyTorch, 24 fast, of 48 |
+| `three-cubes-sam3-fast-1795363931` | started 17:12:12, **in progress** | `scripts/run_sapien_rollout.sh --task pick-place-three-cubes --pictures others-painted --outlines sam3-fast --count 10` (layout and policy seeds 0 to 9, the same as the PyTorch run of 13:25) | at 17:17:45: layouts 0, 1 and 2 ended with all three cubes in the bin, 9 of 9 commands. Result when it ends: `vla_testing/random-three-cubes-sapien-others-painted-sam3-fast-20261122-171212` |
+
+Readiness before the launches: the three Python environments and the
+compiled model files present; the check script parsed and the client
+imported in `.venv`; no session of the same name; the launch line tried
+once with `false` (exit file 1). The worker's provenance, as the client
+records it in every `result.json`: route `sam3-tracker-rocm`, commit
+`8005dc6…`, source clean, manifest checksum `1ffac298…`, torch
+2.14.0+rocm10.1.0, migraphx 2.18.0+rocm10.1.0, onnxruntime 1.29.0,
+picture size 504, 16-bit floats, `MIOPEN_FIND_MODE=FAST`.
+
+Not run yet: the four real-model integration tests (they need the
+graphics processor and wait for the run); the full suite after these
+changes. The comparison of the finished run with the PyTorch run is
+entered below when the run ends.
+
+### Addition, after 17:23:50: the reference supersedes the PyTorch route
+
+On the user's word of this turn ("supersede pytorch sam3 with fast
+sam3"), before the run above had ended. The run itself is not affected:
+its processes had started before the change. Changed, uncommitted: the
+reference worker is now `src/so101_smolvla/sam3_worker.py` (the PyTorch
+worker of that name is deleted); `sam3_outlines.py` starts it through
+the launcher and knows no other route; `three_cube_rollout.py` has the
+two outline sources `simulator` and `sam3` again, `sam3` now being the
+reference; the tests follow (`test_sam3_outlines.py`,
+`test_three_cube_rollout.py`, `test_sapien_protocol.py`,
+`test_sam3_three_cubes_integration.py`, the last one now one route and
+skipped without `.venv-sam3` and the compiled model files). The name
+`sam3-fast` of the rows above existed from 17:08 to 17:23 only. A search
+of `src`, `tests`, `scripts` and `configs` for the PyTorch worker's
+names (`Sam3VideoModel`, `WORKER_ENVIRONMENT`, `sam3-fast`,
+`sam3_fast_worker`) finds nothing but the one historical sentence in
+the client's description, which also carries the user's note that the
+plain PyTorch model could be made significantly faster if ever needed
+(their evidence is outside this repository).
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| (foreground) | 17:23:28 to 17:23:50, exit 0 | the unit-test command of the row above (five files) | 55 passed in 17.53 s (one test fewer: the one for the second name) |
+
+<a id="t-2026-11-22-fast-sam3-run"></a>
+### Addition, after 17:39:54: the run with the reference finished, compared layout by layout with the PyTorch run; the real-model tests
+
+Written after 17:39:54, the `ended-` line of the last test job below.
+The anchor above this heading is the first of the cross-link scheme
+proposed to the user on this day (short ids on headings, so that the
+other documents link here instead of repeating the numbers).
+
+**The run.** `three-cubes-sam3-fast-1795363931`, 17:12:12 to 17:30:36,
+exit 0, 1,098 s: `vla_testing/random-three-cubes-sapien-others-painted-sam3-fast-20261122-171213`,
+"succeeded 9 of 10"; `COMPLETE.json`, `REPORT.md`, `summary.json`, the
+three overall videos, ten layout folders. Its `result.json` files carry
+the worker's provenance given above (route `sam3-tracker-rocm`, commit
+`8005dc6…`, manifest `1ffac298…`) and the outline source label of that
+hour, "SAM 3 outlines (sam3-tracker-rocm)".
+
+**Against the PyTorch run of 13:25** (`~/.cache/stack-memory-agent-test/compare_three_cube_runs.py`,
+reads the twenty `result.json` only; equal in all 10 layouts in start
+layout, order, policy and environment seed, checkpoint revision, picture
+mode and steps per command):
+
+| Count | PyTorch route (13:25) | Reference (17:12) |
+|---|---:|---:|
+| Layouts with all three cubes in the bin at the end | 9 of 10 | 9 of 10 |
+| Cubes in the bin at the end | 29 of 30 | 29 of 30 |
+| Commands whose cube was in the bin when the command ended | 29 of 30 | 29 of 30 |
+| Commands in which the simulator's rule for a placed cube held at some step | 28 of 30 | 28 of 30 |
+
+Two layouts differ, in opposite directions; the other eight end with the
+same cubes in the bin: layout 1 passes with the PyTorch route (its blue
+cube in the bin at the end without the rule ever holding) and fails with
+the reference (the green cube, second command, not placed, and blue in
+without the rule holding); layout 3 fails with the PyTorch route (red,
+third command, not placed) and passes with the reference (red placed at
+step 163). Ten layouts do not rank the two routes; they show no
+difference in the counts.
+
+**Time per layout**, from the write times of the ten `COMPLETE.json` of
+each run (the first layout includes the loading of the models; SAM 3
+seconds are the sum of the 48 calls of a layout from `result.json`):
+
+| Layout | PyTorch: wall-clock s / SAM 3 s | Reference: wall-clock s / SAM 3 s |
+|---:|---|---|
+| 0 | 488 / 351 | 157 / 25 |
+| 1 | 434 / 332 | 91 / 14 |
+| 2 | 441 / 342 | 88 / 14 |
+| 3 | 633 / 494 | 94 / 13 |
+| 4 | 493 / 399 | 98 / 14 |
+| 5 | 502 / 404 | 100 / 14 |
+| 6 | 455 / 353 | 119 / 16 |
+| 7 | 447 / 342 | 127 / 18 |
+| 8 | 598 / 462 | 119 / 18 |
+| 9 | 549 / 423 | 100 / 13 |
+| median of layouts 1 to 9 | 493 / 376 | 100 / 15 |
+| whole run | 5,044 (13:25:52 to 14:49:56) | 1,098 (17:12:12 to 17:30:36) |
+
+SAM 3 over the 240 plans of each run (`plans[i]["sam3"]`): seconds per
+call, median (min, max): top 6.935 (2.407, 17.321) against 0.294
+(0.178, 10.988, the first call of the run); wrist 9.177 (2.449, 24.008)
+against 0.321 (0.179, 0.938); all calls 3,901 s against 164 s. The cube
+the command names has no outline in 24 (top) and 36 (wrist) of 240 plans
+with the PyTorch route, 36 and 37 with the reference; a cube the command
+does not name has none in 41 and 128 of 480 (plan, cube) pairs against
+37 and 119; plans with an outline on no cube 50 and 206 against 62 and
+172. Whether a cube without an outline was in view is not checked, as
+in the section above.
+
+**The real-model tests**, `tests/test_sam3_three_cubes_integration.py`,
+both tests now on the one route, from `workshops/so101-smolvla`,
+command `env PYTHONPATH=src .venv/bin/python -m pytest <files> -v --tb=short -rP`:
+
+| Job | Clock, exit | Files | Result |
+|---|---|---|---|
+| `sam3-real-1795365107` | 17:31:47 to 17:34:11, exit 1 | the SAM 3 file and `tests/test_sapien_three_cubes_integration.py` | 1 failed, 8 passed in 143.18 s. The failure was a fault of the new worker: asked for outlines before a layout was started it answered with an empty reply instead of the error "no layout was started", so the client failed on the missing camera key (`KeyError: 'top'`). Fixed in `sam3_worker.py`; the 10-layout run was not affected, it starts every layout first |
+| `sam3-real-1795365358` | 17:35:58 to 17:37:21, exit 1 | the SAM 3 file | 1 failed, 1 passed in 82.28 s. The failure was an expectation of the PyTorch route written into the test: at layout seed 3 it required an outline on no cube in both cameras (the PyTorch route had outlined the bin as a "cube" there); the reference outlines the bin in the top camera only (9,354 pixels, 9,346 on the bin) and nothing of the kind in the wrist camera. The test now requires only that such an outline, where there is one, lies on the bin |
+| `sam3-real-1795365513` | 17:38:33 to 17:39:54, exit 0 | the SAM 3 file | 2 passed in 80.49 s. Printed: layout seed 7, first picture, overlap with the simulator's outlines red 0.970, green 0.972 (top; blue not in the top camera's view there), 0.979 / 0.984 / 0.976 (wrist), the wrist outline on no cube 97,593 of 97,598 pixels on the bin; second picture 0.950 / 0.965 and 0.986 / 0.989 / 0.983; seed 3 first picture 0.967 / 0.973 / 0.962 (top) and 0.988 / 0.987 / 0.985 (wrist). Seconds: 6.43 for the first top call (warm-up), then 0.18 to 0.37 |
+
+The full suite after the supersession, tmux job `test-suite-1795365672`
+(log `/tmp/test-suite-1795365672.log`), 17:41:12 to 17:45:36, exit 0:
+`env PYTHONPATH=src .venv/bin/python -m pytest tests -v --tb=short -rP --ignore=tests/test_voice_notebook.py`,
+**183 passed, 1 expected failure, 0 skipped, in 263.12 s**. That is the
+182 of 16:27 plus the one new unit test of the launcher and worker
+(`test_sam3_outlines.py`); the notebook test is left out for the reason
+given at 13:14 (the user's `llama-server` on port 8082). Not
+measured: the reference's own demo frame time (plan step 0.4); the run
+above gives 0.29 and 0.32 s per 640 by 480 picture with full detection
+on every call, against its README's 0.09 s for one object at 504 pixels
+with its own pipeline.

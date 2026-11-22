@@ -518,11 +518,19 @@ Reading these:
   | as the cameras take them | 0 of 10 | 1 of 30 |
   | the two other cubes painted over with table, by the simulator's outlines | 7 of 10 | 26 of 30 |
   | the same, by SAM 3's outlines (phrase "cube", tracked) | 9 of 10 | 29 of 30 |
+  | the same, by the outlines of the fast SAM 3 reference (`sam3-tracker-rocm`, 0.3 s per picture instead of 7 to 9 s) | 9 of 10 | 29 of 30 |
   | painted over on the table only, a cube already in the bin left visible | 1 of 10 | 16 of 30 |
 
   Ten layouts do not show that 9 differs from 7. They do show the step
   from 0 to 7 and 9 layouts, and that most of it is lost when a cube
   already in the bin stays visible. Not run on the real arm.
+
+  Added after 17:39 on 2026-11-22: the last row. The two SAM 3 routes
+  give the same counts on the same ten layouts, with two layouts
+  changing outcome in opposite directions; the reference is now the
+  workshop's SAM 3. Detail, layout by layout and per call:
+  [`TESTING_LEDGER.md`](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-run);
+  what it means for the work: [`DEVELOPMENT_LEDGER.md`](DEVELOPMENT_LEDGER.md#d-2026-11-22-fast-sam3).
 
 ## Finding 9: playing all 50 predicted actions before the next look is the shipped default, not the best published method; a prediction at every step is not smoother by itself
 
@@ -627,6 +635,26 @@ Reading these:
   Docker in a Python environment of its own; it has not yet run on this
   machine's graphics processor.
 
+  Amendment, 2026-11-22 after 17:17: it runs now, without Docker, in
+  `.venv-sam3` (model files built at 504 pixels; one MIOpen setting
+  needed, `TESTING_LEDGER.md`, "The fast SAM 3 model built"). On the
+  stored plan pictures of two layouts (48 per camera, 640 by 480) it
+  took 0.25 s per picture in the median against 6.55 s (top camera) and
+  8.61 s (wrist) for the PyTorch route, and outlined the same cubes in
+  250 of the 254 (plan, cube) pairs in which either route outlined a
+  cube, with a median overlap of 0.95 (top) and 0.98 (wrist) between the
+  two routes' outlines (`TESTING_LEDGER.md`, "The fast SAM 3 connected").
+  The 10-layout run with it, same layouts and seeds as the 9 of 10 above,
+  was in progress when this was written; its result goes into the table
+  under Finding 8 when it is in.
+
+  Amendment, 2026-11-22 after 17:23: on the user's word the reference
+  now is the workshop's SAM 3 (`--outlines sam3`); the plain PyTorch
+  route is removed from the code. The user holds separate evidence that
+  the plain PyTorch SAM 3 can also be made significantly faster, should
+  it ever be needed again; that evidence is not part of this repository
+  and was not read for this file.
+
 ## Not verified, not measured
 
 - Nothing here was run on this workshop's SO-101, in simulation or real.
@@ -643,6 +671,11 @@ Reading these:
   Finding 8; counts and times in `TESTING_LEDGER.md`, sections of
   2026-11-22). Still not measured: anything on the real SO-101; SAM 3 on
   balls and cylinders; the fast SAM 3 reference on this machine.
+
+  Amendment, 2026-11-22 after 17:17: the fast SAM 3 reference has now
+  run on this machine (the amendment at the end of "What follows for
+  this workshop"). Still not measured: the real SO-101, and SAM 3 on
+  balls and cylinders.
 - The number of simulation trials per task in RMBench.
 - Success counts of two of the SO-101 example projects (so101-gap and
   the Gemini Robotics-ER 2 post).

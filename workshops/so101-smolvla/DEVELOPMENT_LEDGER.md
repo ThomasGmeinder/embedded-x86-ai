@@ -5911,3 +5911,101 @@ stand). The three entries carry "Status: corrected" (`:2056`, `:2120`,
 no entry marked unresolved; the amendment of after 11:34 says
 "corrected once the spec amendment is in", and that amendment is at
 `SPEC.md:755`.
+
+<a id="d-2026-11-22-fast-sam3"></a>
+## 2026-11-22 — The reference SAM 3 (`sam3-tracker-rocm`) replaces the PyTorch route: the same 9 of 10 on the same ten layouts, a layout in 100 s instead of 493 s
+
+Result in one line: SAM 3 through the user's reference, compiled with
+MIGraphX and run in its own Python environment without Docker, gives
+the three-cube test the same result as the plain PyTorch route on the
+same ten layouts (9 of 10 layouts, 29 of 30 commands in both), takes
+0.3 s per picture instead of 7 to 9 s, and is now the workshop's only
+SAM 3 (`--outlines sam3`). Written after 17:39:54 by a Claude Code
+session that took the work over at about 16:00, after the Cursor
+session stopped on its monthly usage limit. This ledger was read in full
+(5,913 lines) in the same turn. Every count and time below is in
+`TESTING_LEDGER.md` with its job, clock and command; this section says
+what was decided and what it means, and repeats no table. Links:
+[the build and the MIOpen fix](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-built),
+[the connection and the check on stored pictures](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-connected),
+[the run and the comparison](TESTING_LEDGER.md#t-2026-11-22-fast-sam3-run).
+
+### What the user asked for and decided
+
+- The plan `~/.cursor/plans/sam3_tracker_rocm_in_venv_4e7b91c3.plan.md`
+  of 13:43: the reference in a `.venv`, no Docker; one call per cube as
+  a question to test (its step 3, decision D4, still open).
+- 16:5x: rerun the tests that were run with the PyTorch SAM 3 with the
+  reference, "to ensure that the quality of result is the same".
+- D3, asked at 17:00: replace the PyTorch route "only after it was
+  validated to have the same quality of result". At 17:23, while the run
+  was on layout 6 with 19 of 19 commands in the bin, the user superseded
+  it: the reference becomes `sam3`, the PyTorch worker is deleted. The
+  user adds that the plain PyTorch model could be optimized to run
+  significantly faster if ever needed, and holds evidence for that in a
+  separate internal repository; by the user's instruction no link to it
+  enters this public repository, and it was not read for this ledger.
+
+### What was built and found (details by link above)
+
+- The reference's model build failed at its last step in MIOpen, the
+  convolution library PyTorch uses on AMD: its kernel timer reads zero on
+  this machine with the ROCm 10.1 Python packages, so every candidate
+  kernel is rejected ("Invalid elapsed time", then "No suitable
+  algorithm"). Reproduced with a ten-line probe; the same failure had
+  stopped the PyTorch route at 11:28. One setting, `MIOPEN_FIND_MODE=FAST`,
+  exported by the reference's launcher, removes it; known upstream
+  (ROCm/MIOpen issue 3964). The parts of the reference that still run in
+  PyTorch (mask decoder, memory encoder) are what hit it.
+- The worker `src/so101_smolvla/sam3_worker.py` runs in `.venv-sam3`
+  through `scripts/run_sam3_reference.sh`, imports nothing of the
+  workshop, holds one `SAM3Live` per camera, asks for the full detection
+  on every call (the pictures of a layout are 50 steps apart), caps no
+  number of tracked things, and records the reference's commit, model
+  manifest checksum and package versions in every `result.json`. The
+  client, the request protocol and the picture editor did not change.
+- On the stored pictures of the PyTorch run's first two layouts the two
+  routes outline the same cubes in 250 of 254 (plan, cube) pairs, with a
+  median overlap of 0.95 (top) and 0.98 (wrist) between their outlines.
+- The ten-layout run: the same counts, two layouts flipped in opposite
+  directions, SAM 3 15 s of a 100 s layout instead of 376 s of 493 s.
+  The remaining 85 s per layout are SmolVLA, the simulator and the video.
+
+### What it means
+
+- Decision 2 of `SPEC.md` (the reference as the SAM 3 implementation)
+  is carried out; `SPEC.md` still describes the service "in its
+  container" (section 5.2, its table of parts) and its measurement M4 as
+  open. Both need an amendment; not written in this turn.
+- SAM 3 is no longer what limits the test. Asking SmolVLA for a plan
+  more often than every 50 steps (`RESEARCH.md`, Finding 9) costs 0.6 s
+  of SAM 3 per plan now instead of 16 s; the test of fewer actions per
+  plan, listed as open in `TESTING_LEDGER.md` ("How often SmolVLA is
+  asked for a new plan"), is practical.
+- The plan's step 3, one SAM 3 call per cube instead of one per plan,
+  loses most of its reason: 48 calls per layout cost 15 s. It stays the
+  user's decision (D4).
+- Where SAM 3 misses a cube, the cube stays in SmolVLA's picture; that
+  was so with both routes and is not changed. The counts of missing
+  outlines are in the testing ledger; whether the cube was in view is
+  not checked.
+
+### Where this leaves the work
+
+- Uncommitted: the five files of the fast SAM 3 environment, the worker,
+  the changes to the client, the rollout and the tests, the ledger and
+  research additions of this afternoon. The user's four commits of the
+  afternoon (`e1e54bb` to `690c953`) are pushed; nothing of the fast SAM
+  3 is.
+- The platform profile is still `performance`, set by the Cursor session
+  for the model build; it was to go back to `balanced` after the GPU
+  measurements.
+- The full suite after the supersession was launched after this section
+  was written; its result goes into the testing ledger.
+
+Agent mistakes of this afternoon are in `AGENT_MISTAKES.md`: one new
+entry of the Claude Code session (a tmux launch line that ended its
+brace group with `exit`, so a job wrote no exit file). The two failures
+of the real-model tests above were a worker fault and a test written
+against the old route's behaviour; both are described in the testing
+ledger and were fixed before the tests passed.
