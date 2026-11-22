@@ -553,6 +553,7 @@ def test_with_sam3_the_pictures_are_painted_by_its_outlines_of_every_plan(
         for camera in CAMERAS:
             assert np.array_equal(request[camera], stored[f"{camera}_taken"][index])
 
+    assert set(OUTLINE_SOURCES) == {"simulator", "sam3"}
     assert result["outline_source"] == OUTLINE_SOURCES["sam3"] == "SAM 3 outlines"
     assert result["sam3"] == StandInSam3.provenance
     for index, plan in enumerate(result["plans"]):

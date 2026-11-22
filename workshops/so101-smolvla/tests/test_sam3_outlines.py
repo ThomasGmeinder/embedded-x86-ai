@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pytest
 
 from so101_smolvla.bin_layouts import BIN_CUBE_COLORS
 from so101_smolvla.sam3_outlines import (
     COLOUR_SHARE,
+    LAUNCHER,
+    PHRASE,
+    WORKER,
     CameraOutlines,
     FoundOutline,
     cube_colour,
@@ -136,3 +141,13 @@ def test_outlines_that_do_not_fit_their_picture_are_refused():
         read_outlines(picture, masks[0], [0], 1.0)
     with pytest.raises(ValueError, match="1 outlines with 2 numbers"):
         read_outlines(picture, masks, [0, 1], 1.0)
+
+
+def test_the_worker_runs_through_the_reference_launcher_and_imports_nothing_of_the_package():
+    # The word SAM 3 is asked for is the client's and goes with every start.
+    assert PHRASE == "cube"
+    assert LAUNCHER.is_file() and os.access(LAUNCHER, os.X_OK)
+    assert WORKER.is_file()
+    # The worker runs in the reference's environment, where this package is
+    # not installed: no import of it after the module's description.
+    assert "so101_smolvla" not in WORKER.read_text(encoding="utf-8").split('"""', 2)[2]

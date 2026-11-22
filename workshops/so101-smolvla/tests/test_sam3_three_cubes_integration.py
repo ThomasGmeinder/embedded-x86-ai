@@ -1,21 +1,25 @@
-"""The real SAM 3 on the pictures of the real three-cube scene."""
+"""The real SAM 3 (the reference sam3-tracker-rocm) on the pictures of the real three-cube scene.
+
+Skipped while the reference's environment .venv-sam3 or its compiled model
+files are missing.
+"""
 
 import json
+import os
 from contextlib import ExitStack
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from huggingface_hub import try_to_load_from_cache
 
 from clip_reading import read_clip
 from so101_smolvla import sapien_rollout, three_cube_rollout
 from so101_smolvla.bin_layouts import BIN_CUBE_COLORS
 from so101_smolvla.feeds_video import CAPTION_HEIGHT, ROLE_COLORS, TINT
 from so101_smolvla.picture_editor import edit_pictures
-from so101_smolvla.sam3_outlines import CAMERAS, Sam3Outlines, cube_colours
-from so101_smolvla.sam3_worker import MODEL, PHRASE
+from so101_smolvla.sam3_outlines import CAMERAS, PHRASE, Sam3Outlines, cube_colours
 from so101_smolvla.sapien_config import (
     IMAGE_SHAPE,
     OUTLINE_CODES,
@@ -24,6 +28,17 @@ from so101_smolvla.sapien_config import (
     THREE_CUBE_TASK,
 )
 from so101_smolvla.sapien_env_client import SapienPolicyEnvironment
+from so101_smolvla.three_cube_rollout import OUTLINE_SOURCES
+
+WORKSHOP = Path(__file__).resolve().parents[1]
+SETTINGS = json.loads((WORKSHOP / "configs" / "sam3_reference.json").read_text())
+READY = (WORKSHOP / ".venv-sam3" / "bin" / "python").is_file() and (
+    Path(os.path.expanduser(SETTINGS["compiled_dir"])) / "ARTIFACT_MANIFEST.json"
+).is_file()
+# The least overlap of a SAM 3 outline with the simulator's outline of the
+# same cube (measured with the PyTorch route of before: 0.968 to 0.995; the
+# reference's own figures are printed by the first test).
+OVERLAP_FLOOR = 0.9
 
 pytestmark = [
     pytest.mark.skipif(
@@ -31,8 +46,8 @@ pytestmark = [
         reason="run scripts/setup_sapien_env.sh to install the real SAPIEN backend",
     ),
     pytest.mark.skipif(
-        not isinstance(try_to_load_from_cache(MODEL, "config.json"), str),
-        reason=f"the files of {MODEL} are not in the local Hugging Face cache",
+        not READY,
+        reason="run scripts/setup_sam3_env.sh and build the reference's model files",
     ),
 ]
 
@@ -45,6 +60,18 @@ def _overlap(left: np.ndarray, right: np.ndarray) -> float:
 def _coloured(picture: np.ndarray, color: str) -> int:
     """Pixels of a picture that have a cube's colour."""
     return int(cube_colours(picture.reshape(-1, 3))[color].sum())
+
+
+def _check_provenance(provenance: dict) -> None:
+    assert provenance["phrase"] == PHRASE == "cube"
+    assert provenance["route"] == "sam3-tracker-rocm"
+    assert provenance["source_commit"] == SETTINGS["commit"]
+    assert provenance["source"]["commit"] == SETTINGS["commit"]
+    assert len(provenance["manifest_sha256"]) == 64
+    assert provenance["miopen_find_mode"] == "FAST"
+    assert provenance["full_detection_every_call"] is True
+    assert provenance["max_objects_per_prompt"] is None
+    assert provenance["image_size"] == 504
 
 
 def _compare(label: str, taken, outlined, found) -> dict[str, dict[str, float]]:
@@ -69,13 +96,14 @@ def _compare(label: str, taken, outlined, found) -> dict[str, dict[str, float]]:
 
 
 def test_real_sam3_outlines_the_cubes_and_the_pictures_are_painted_by_them():
+    floor = OVERLAP_FLOOR
     with ExitStack() as stack:
         env = SapienPolicyEnvironment(horizon=6, task_mode=THREE_CUBE_TASK)
         stack.callback(env.close)
         sam3 = Sam3Outlines()
         stack.callback(sam3.close)
-        assert sam3.provenance["model"] == MODEL == "facebook/sam3"
-        assert sam3.provenance["phrase"] == PHRASE == "cube"
+        _check_provenance(sam3.provenance)
+        print(json.dumps(sam3.provenance))
         # On this seed the wrist camera sees all three cubes.
         first = env.reset(environment_seed=7)
         facts = env.set_target("green")
@@ -98,9 +126,9 @@ def test_real_sam3_outlines_the_cubes_and_the_pictures_are_painted_by_them():
         # An outline of SAM 3 lies on the simulator's outline of the same cube
         # (measured overlaps: 0.968 to 0.995).
         for color in BIN_CUBE_COLORS:
-            assert overlaps["wrist"][color] > 0.9
+            assert overlaps["wrist"][color] > floor
         for color in ("red", "green"):
-            assert overlaps["top"][color] > 0.9
+            assert overlaps["top"][color] > floor
         # The outline with no cube's colour inside lies on the bin (measured:
         # 98,092 of 98,113 pixels).
         unused = found["wrist"].unused
@@ -160,7 +188,7 @@ def test_real_sam3_outlines_the_cubes_and_the_pictures_are_painted_by_them():
             numbers_next = {o.cube: o.number for o in found_next[camera].found if o.cube}
             assert numbers and numbers_next == numbers
         for color in BIN_CUBE_COLORS:
-            assert overlaps["wrist"][color] > 0.9
+            assert overlaps["wrist"][color] > floor
 
         # A new layout starts new: SAM 3 outlines the cubes where they stand
         # now. On this seed both cameras see all three (measured overlaps:
@@ -171,11 +199,15 @@ def test_real_sam3_outlines_the_cubes_and_the_pictures_are_painted_by_them():
         overlaps = _compare("seed 3, first picture", second, outlined, found)
         for camera in CAMERAS:
             for color in BIN_CUBE_COLORS:
-                assert overlaps[camera][color] > 0.9
+                assert overlaps[camera][color] > floor
+            # An outline on no cube is not required (the PyTorch route of
+            # before gave one on the bin in both cameras here; the reference
+            # gives one in the top camera only, measured 2026-11-22). Where
+            # there is one, it lies on the bin.
             unused = found[camera].unused
             truth = getattr(second, f"{camera}_outline")
-            assert unused.sum() > 5000
-            assert (truth[unused] == OUTLINE_CODES["bin"]).mean() > 0.95
+            if unused.any():
+                assert (truth[unused] == OUTLINE_CODES["bin"]).mean() > 0.95
 
         # A picture of another size is refused before it is sent.
         with pytest.raises(ValueError, match="top picture is uint8 of shape"):
@@ -222,9 +254,8 @@ def test_real_three_cube_batch_with_sam3_outlines_through_the_command_line(
     rows = json.loads((destination / "summary.json").read_text(encoding="utf-8"))
     assert len(rows) == 1 and len(shown) == 9
     row = rows[0]
-    assert row["outline_source"] == "SAM 3 outlines"
-    assert row["sam3"]["model"] == MODEL and row["sam3"]["phrase"] == PHRASE
-    assert row["sam3"]["worker_environment"]["MIOPEN_FIND_MODE"] == "FAST"
+    assert row["outline_source"] == OUTLINE_SOURCES["sam3"]
+    _check_provenance(row["sam3"])
     assert row["order"] == ["green", "red", "blue"]
     assert [plan["step"] for plan in row["plans"]] == [0, 2, 3, 5, 6, 8]
     for plan in row["plans"]:

@@ -1,19 +1,26 @@
 """Cube outlines from SAM 3 for the pictures SmolVLA plans on.
 
-SAM 3 (Segment Anything Model 3) runs in a process of its own
-(sam3_worker.py) and follows what it finds for the word "cube" through the
-pictures of one layout, with one tracking session per camera. It outlines
-things and does not say which cube an outline is; that is read here from the
-colour inside the outline. An outline with no cube's colour inside is kept
-apart and the picture editor does not paint by it.
+SAM 3 (Segment Anything Model 3) runs in a process of its own (sam3_worker.py,
+the reference sam3-tracker-rocm in its own environment .venv-sam3, started
+through scripts/run_sam3_reference.sh) and follows what it finds for the word
+"cube" through the pictures of one layout, with one tracking session per
+camera. It outlines things and does not say which cube an outline is; that is
+read here from the colour inside the outline. An outline with no cube's colour
+inside is kept apart and the picture editor does not paint by it.
+
+Until 2026-11-22 the worker was the plain PyTorch route (facebook/sam3 through
+the transformers package, in this environment); it took 6.6 to 8.6 s per
+picture against the reference's 0.25 s and was replaced on the user's word,
+with the two routes' outlines agreeing on the stored pictures (the testing
+ledger of that day). The user holds separate evidence that the plain PyTorch
+model can be made significantly faster too, should it ever be needed again;
+that evidence is not part of this repository.
 """
 
 from __future__ import annotations
 
-import importlib.metadata
 import os
 import subprocess
-import sys
 from dataclasses import dataclass, replace
 from multiprocessing import Pipe
 from pathlib import Path
@@ -26,13 +33,13 @@ from so101_smolvla.sapien_config import IMAGE_SHAPE, OUTLINE_CODES
 
 ROOT = Path(__file__).resolve().parents[2]
 CAMERAS = ("top", "wrist")
-# What the worker's process is given on top of this process's environment.
-# Without MIOPEN_FIND_MODE=FAST the first call of SAM 3 fails in the graphics
-# processor's convolution library ("No suitable algorithm was found",
-# 22 Nov 2026). The setting is the worker's alone, so SmolVLA runs in this
-# process as it does without SAM 3. The model files are read from the local
-# cache only.
-WORKER_ENVIRONMENT = {"MIOPEN_FIND_MODE": "FAST", "HF_HUB_OFFLINE": "1"}
+# The one word SAM 3 is asked for. It follows every thing it finds for it
+# from picture to picture and keeps the thing's number.
+PHRASE = "cube"
+# The worker runs through the reference's launcher, which gives it the
+# reference's environment and settings.
+LAUNCHER = ROOT / "scripts" / "run_sam3_reference.sh"
+WORKER = Path(__file__).with_name("sam3_worker.py")
 # Share of an outline's pixels that must have one cube's colour for the
 # outline to be that cube.
 COLOUR_SHARE = 0.5
@@ -144,21 +151,12 @@ class Sam3Outlines:
     def __init__(self) -> None:
         request_end, self._requests = Pipe(duplex=False)
         self._replies, reply_end = Pipe(duplex=False)
-        env = os.environ.copy()
-        env.update(WORKER_ENVIRONMENT)
-        source = str(ROOT / "src")
-        existing = env.get("PYTHONPATH")
-        env["PYTHONPATH"] = source if not existing else source + os.pathsep + existing
+        # A missing environment, checkout or model file ends the launcher
+        # with a message that names what is missing; there is no other route.
         self._process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "so101_smolvla.sam3_worker",
-                str(request_end.fileno()),
-                str(reply_end.fileno()),
-            ],
+            [str(LAUNCHER), str(WORKER), str(request_end.fileno()), str(reply_end.fileno())],
             cwd=ROOT,
-            env=env,
+            env=os.environ.copy(),
             pass_fds=(request_end.fileno(), reply_end.fileno()),
         )
         # The worker holds these two ends now. With this process's copies
@@ -173,12 +171,8 @@ class Sam3Outlines:
             self._terminate()
             raise
         self.provenance = {
-            "model": hello["model"],
-            "phrase": hello["phrase"],
-            "device": hello["device"],
-            "transformers": importlib.metadata.version("transformers"),
-            "worker_environment": dict(WORKER_ENVIRONMENT),
-        }
+            key: value for key, value in hello.items() if key != "ready"
+        } | {"phrase": PHRASE}
 
     def _reply(self) -> dict:
         try:
@@ -203,7 +197,7 @@ class Sam3Outlines:
 
     def start_layout(self) -> None:
         """Begin a new tracking session for each camera."""
-        self._ask({"operation": "start"})
+        self._ask({"operation": "start", "cameras": list(CAMERAS), "phrase": PHRASE})
 
     def outline(
         self, observation: PolicyObservation

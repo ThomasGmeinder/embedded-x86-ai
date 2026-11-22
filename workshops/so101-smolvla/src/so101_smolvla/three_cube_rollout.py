@@ -47,8 +47,9 @@ PICTURE_MODES = {
 }
 # Where the outlines come from that the picture editor paints by, and what
 # the video of a layout writes above them. The simulator knows every pixel of
-# its scene at every step. SAM 3 (so101_smolvla.sam3_outlines) is asked for
-# the pictures SmolVLA plans on and outlines cubes only.
+# its scene at every step. SAM 3 (so101_smolvla.sam3_outlines, the reference
+# sam3-tracker-rocm) is asked for the pictures SmolVLA plans on and outlines
+# cubes only.
 OUTLINE_SOURCES = {
     "simulator": "simulator outlines",
     "sam3": "SAM 3 outlines",
