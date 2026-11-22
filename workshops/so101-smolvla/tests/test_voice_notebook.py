@@ -2,9 +2,10 @@
 
 Two runs, both with nbconvert of the voice workshop's Python:
 
-1. The notebook as it lies in git, run by tests/notebook_display_updates.py: the class `jupyter nbconvert
+1. The notebook file, run by tests/notebook_display_updates.py: the class `jupyter nbconvert
    --execute` runs a notebook with, which also keeps every redraw the kernel sends. It leaves out the cells
-   tagged "skip-execution", the two that need a person at the microphone. Every other cell has to run without
+   tagged "skip-execution", the two that need a person at the microphone; they have to come out of the run as
+   the file holds them, whether that is empty or a person's own saved run. Every other cell has to run without
    an error, and section 5 has to report every typed sentence right. The count for the synthetic voice is
    printed (pytest -rP shows it) and not required: the user's decision of 2026-11-21, because the synthetic
    voice gave two different sounds for one sentence. The table of section 5 has to grow while the cell runs:
@@ -105,14 +106,21 @@ def _row_numbers(table: str) -> list:
 def test_notebook_runs_every_typed_sentence_gives_its_call_and_the_table_grows(jupyter, tmp_path):
     executed = _execute(jupyter, tmp_path / "executed.ipynb", redraws=tmp_path / "redraws.json")
     code = [c for c in executed["cells"] if c["cell_type"] == "code"]
-    left_out = [c for c in code if SKIP_TAG in c["metadata"].get("tags", [])]
-    assert len(left_out) == 2  # sections 6 and 7, which need a person
-    for cell in code:
-        assert not _errors(cell), "".join(cell["source"])
-        if cell in left_out:
-            assert cell["execution_count"] is None and not cell["outputs"]
+    in_file = [c for c in json.loads(NOTEBOOK.read_text(encoding="utf-8"))["cells"] if c["cell_type"] == "code"]
+    assert len(code) == len(in_file)
+    left_out, numbers = 0, []
+    for cell, before in zip(code, in_file):
+        if SKIP_TAG in cell["metadata"].get("tags", []):
+            # Not run: the cell comes out as the file holds it. In git that is empty; after a person has run the
+            # microphone sections and saved the notebook, it is their own run.
+            assert cell == before, "".join(cell["source"])
+            left_out += 1
         else:
-            assert cell["execution_count"] is not None
+            assert not _errors(cell), "".join(cell["source"])
+            numbers.append(cell["execution_count"])
+    assert left_out == 2  # sections 6 and 7, which need a person
+    # Every other cell ran, in order, and the two left out took no number.
+    assert numbers == list(range(1, len(numbers) + 1))
 
     table = _printed(_code_after(executed["cells"], "## 5."))
     typed = re.search(r"^typed: (\d+) of (\d+) right", table, flags=re.M)
