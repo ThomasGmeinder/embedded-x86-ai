@@ -145,6 +145,18 @@ row per camera: the picture as taken, SAM 3's outlines with what was done with
 each, and the picture SmolVLA was given; its `REPORT.md` lists every sentence,
 what Gemma heard, its call and the cube chosen.
 
+### Live demo
+
+`notebooks/pick_place_demo.ipynb` runs the same use case with a person at the
+microphone: say which cube goes next and watch the six pictures of the feeds
+video live, with a voice meter, the transcript of what Gemma heard and called,
+the command's progress and the gripper's jaw opening, beside the utilization
+and power window. The pick-and-place loop is the one the test runs
+(`src/so101_smolvla/pick_place.py`); the notebook, the batch runner and the
+tests share it. `notebooks/run_notebooks.sh` registers the kernel and opens
+JupyterLab; `tests/test_demo_notebook.py` runs the notebook against the real
+Gemma, SAM 3 and SAPIEN.
+
 ## Compute placement
 
 A run is four processes: the main one (`.venv`: the runner, the Gemma client,
@@ -171,7 +183,8 @@ worth of work. The column "Dedicated CPUs" is that measured placement.
 <tr><th style="background-color: rgba(128, 128, 128, 0.2); border: 1px solid rgba(128, 128, 128, 0.4)">Task</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">Model or algorithm</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">What it does</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">Runs on</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">Runtime and process</th><th style="border: 1px solid rgba(128, 128, 128, 0.4)">Dedicated CPUs (measured, to be applied)</th></tr>
 </thead>
 <tbody>
-<tr><td rowspan="2" valign="middle" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: middle; border: 1px solid rgba(128, 128, 128, 0.4)">Voice command</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Gemma 4 E4B (Q4_0) with its audio projector</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">understands user intent and produces robot commands</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">iGPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)"><code>llama.cpp</code> <code>llama-server</code> (HIP, built by <code>scripts/setup_voice.sh</code>), a child of the main process, port 8083</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">0 to 9, with the run; at most two threads busy</td></tr>
+<tr><td rowspan="3" valign="middle" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: middle; border: 1px solid rgba(128, 128, 128, 0.4)">Voice command</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Microphone and VAD: 20 ms frames, Silero speech detection (ONNX Runtime on the CPU) gates each frame; every 2 s with speech the last 6 s go to Gemma (the demo and the voice notebook)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">hears the room, decides which sound is speech</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Python, the microphone thread of the main process (<code>so101_smolvla.voice.microphone</code>)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">0 to 9, with the run; a fraction of one processor</td></tr>
+<tr><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Gemma 4 E4B (Q4_0) with its audio projector</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">understands user intent and produces robot commands</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">iGPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)"><code>llama.cpp</code> <code>llama-server</code> (HIP, built by <code>scripts/setup_voice.sh</code>), a child of the main process, port 8083</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">0 to 9, with the run; at most two threads busy</td></tr>
 <tr><td style="border: 1px solid rgba(128, 128, 128, 0.4)">espeak-ng (the test's synthetic voice) and the Gemma client</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">speaks a test sentence, sends text or speech to Gemma</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Python, the main process (<code>so101_smolvla.voice</code>, <code>.venv</code>)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">0 to 9, with the run</td></tr>
 <tr><td valign="middle" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: middle; border: 1px solid rgba(128, 128, 128, 0.4)">Choosing the cube</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">a program, <code>cube_commands.py</code></td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">picks the cube the command names; refuses a command that names no single cube</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Python, the main process</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">0 to 9, with the run</td></tr>
 <tr><td valign="middle" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: middle; border: 1px solid rgba(128, 128, 128, 0.4)">Outlines</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">SAM 3 (<code>sam3-tracker-rocm</code>, 504 px, compiled with MIGraphX; mask decoder and memory encoder in PyTorch)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">finds every cube in both camera pictures</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">iGPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">ONNX Runtime MIGraphX EP and torch (ROCm), the SAM 3 worker (<code>.venv-sam3</code>)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">0 to 9; a quarter of one processor</td></tr>

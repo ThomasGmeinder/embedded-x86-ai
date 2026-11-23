@@ -3,7 +3,7 @@
 #
 #   1. the Python packages of so101_smolvla.voice (requests, scipy, sounddevice,
 #      onnxruntime, silero-vad, huggingface_hub) and of the notebooks (ipykernel,
-#      jupyterlab, nbconvert), held to constraints.txt;
+#      jupyterlab, nbconvert, ipywidgets), held to constraints.txt;
 #   2. llama.cpp at the pinned commit, built with HIP for the graphics target of
 #      configs/voice.json, into third_party/llama.cpp (not in git);
 #   3. the two Gemma model files, into the Hugging Face cache (~/.cache/huggingface),
@@ -49,8 +49,8 @@ mmproj_file="$(setting gemma mmproj_file)"
 missing=()
 
 echo "== 1 of 3: the voice packages in .venv, and the notebooks' kernel and JupyterLab"
-packages=(requests scipy sounddevice onnxruntime "silero-vad==6.2.3" huggingface_hub ipykernel jupyterlab nbconvert)
-if "$python" -c "import requests, scipy, sounddevice, onnxruntime, silero_vad, huggingface_hub, ipykernel, jupyterlab, nbconvert" 2>/dev/null; then
+packages=(requests scipy sounddevice onnxruntime "silero-vad==6.2.3" huggingface_hub ipykernel jupyterlab nbconvert ipywidgets)
+if "$python" -c "import requests, scipy, sounddevice, onnxruntime, silero_vad, huggingface_hub, ipykernel, jupyterlab, nbconvert, ipywidgets" 2>/dev/null; then
   echo "present"
 elif [[ $check_only -eq 1 ]]; then
   missing+=("the voice packages in .venv (${packages[*]})")

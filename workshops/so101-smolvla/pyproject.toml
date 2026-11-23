@@ -28,8 +28,9 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest"]
-# The notebooks' kernel and JupyterLab (notebooks/run_notebooks.sh), and the notebook test.
-notebooks = ["ipykernel", "jupyterlab", "nbconvert"]
+# The notebooks' kernel and JupyterLab (notebooks/run_notebooks.sh), the notebook tests, and
+# the demo notebook's live picture and controls (so101_smolvla.demo_view).
+notebooks = ["ipykernel", "jupyterlab", "nbconvert", "ipywidgets"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

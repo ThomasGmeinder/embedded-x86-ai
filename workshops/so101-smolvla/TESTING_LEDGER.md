@@ -2935,3 +2935,24 @@ run.
 | Job | Clock, exit | Command | Result |
 |---|---|---|---|
 | `voice-notebook-230339` | 23:03:39 to 23:04:45, exit 0 | `pytest tests/test_voice_notebook.py -v -rA -s` (`/tmp/voice-notebook-230339.log`) | **2 passed in 66.28 s.** The notebook through its registered kernel (`.venv`) against the real server: **typed 30 of 30** right; spoken, synthetic voice, 26 of 30 (printed, not required; the same count as on 2026-11-21); the table of section 5 grew by one row per sentence, 30 redraws; "Gemma stopped." at the end. The short notebook: a second `GemmaServer(...).start()` refused with "SETUP FAILURE: something already answers", the live cell stopped with "The microphone or the speech detection could not be opened" on a microphone that does not exist, no server left on the port. |
+
+<a id="t-2026-11-23-demo-notebook"></a>
+## 2026-11-23 — The demo notebook and the shared pick-and-place loop: the equivalence run, the unit tests, the notebook against the real stack, the full suite
+
+What was tested: the per-command loop moved into `pick_place.py` under the
+batch runner, and the demo notebook on it
+(`DEVELOPMENT_LEDGER.md`, [the entry of this morning](DEVELOPMENT_LEDGER.md#d-2026-11-23-demo-what-the-user-asked-for)).
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| runner tests, foreground | 08:0x, 7.61 s | `pytest tests/test_three_cube_rollout.py tests/test_cube_commands.py tests/test_feeds_video.py` (`/tmp/so101-pickplace-unit-1.log`) | **36 passed**, unchanged tests on the extracted loop. |
+| `e2e-after-extract-080940` | 08:09:40 to 08:12, exit 0 | `scripts/run_sapien_rollout.sh --task pick-place-three-cubes --pictures others-painted --outlines sam3 --sentences built-in --count 1` | `vla_testing/random-three-cubes-sapien-others-painted-sam3-gemma-typed-20261123-080941`: succeeded 1 of 1. Against last night's run (`...-20261122-224529`, layout 0): `trajectory.npz` arrays `target`, `commanded`, `achieved`, `success` **identical**; `result.json` `order`, `cubes_in_bin`, `initial_layout` identical, `picks` and `plans` identical once the `seconds` fields are dropped; the REPORT's sentence rows and result row identical; the progress lines of the log unchanged in form. |
+| new unit tests, foreground | 08:1x, 2.5 s, three runs | `pytest tests/test_pick_place.py tests/test_demo_console.py tests/test_demo.py` (`/tmp/so101-demo-unit-2.log`) | first run 3 failed, 13 passed: two assertions of mine wrong (the stand-in scene's contact comes after the first step, not the second; a flat colour's three channels differ, so `std` over all axes is not 0) and one real fault: a submitted command was dropped when the next arrived before the worker had taken it. Fixed (one running, at most one waiting, under one condition); then **16 passed**, three times in a row. |
+| `demo-notebook-082047` | 08:20:47 to 08:22:05, exit 1 | `pytest tests/test_demo_notebook.py tests/test_notebooks_launcher.py -rA -s` (`/tmp/demo-notebook-082047.log`) | **The demo notebook passed** (76.97 s for the file): the stack came up (Gemma's server, the SAM 3 worker, SmolVLA, the SAPIEN scene with layout seed 0, the utilization window), the microphone opened, the typed command gave `cube: red | in the bin at the end: True | the rule first held at step: 174`, the new layout came up with seed 1, section 6 stopped everything and left nothing on Gemma's port. Of the launcher's three tests one failed: `test_launcher_serves_the_notebooks_directory`, connection refused on the port JupyterLab had just printed; its two reruns alone passed in 2.7 and 2.5 s. First JupyterLab start after the `ipywidgets` install; cause unknown; the test now keeps the server's whole output on failure. |
+| `test-suite-082422` | 08:24:22 to 08:31:20, exit 1 | `pytest tests -v --tb=short -rA --ignore=tests/test_voice_notebook.py --ignore=tests/test_demo_notebook.py` (`/tmp/test-suite-082422.log`; the two notebook tests ran on their own above and last night) | **1 failed, 239 passed, 1 expected failure in 417.17 s.** The one failure is the spoken Gemma test, red on the user's word. Against last night's suite (223 passed): the 16 tests of the loop, the console and the session joined. The launcher test that had failed once passed in this run. |
+
+A frame of the demo picture from the stand-in scene was drawn and looked at
+(`/tmp/demo-frame.png`): six tiles, the voice bar green at 60 %, the
+transcript, the gripper bar, the layout line. One flaw seen and fixed: lines
+longer than the panel were cut, which dropped the seconds of a call; they
+wrap now.

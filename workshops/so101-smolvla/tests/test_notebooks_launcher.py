@@ -79,10 +79,17 @@ def test_launcher_serves_the_notebooks_directory(tmp_path):
                 break
         assert address, "no address line from JupyterLab:\n" + "".join(lines)
         base, token = address.groups()
+        # Keep reading the server's output, so a server that ends after its address line explains itself.
+        threading.Thread(target=lambda: lines.extend(server.stdout), daemon=True).start()
 
         def get(path):
-            with urllib.request.urlopen(f"{base}{path}?token={token}", timeout=30) as response:
-                return json.load(response)
+            try:
+                with urllib.request.urlopen(f"{base}{path}?token={token}", timeout=30) as response:
+                    return json.load(response)
+            except OSError as exc:
+                raise AssertionError(
+                    f"{path}: {exc}; JupyterLab's output so far (exit status {server.poll()}):\n" + "".join(lines)
+                ) from exc
 
         served = {item["name"] for item in get("/api/contents")["content"]}
         assert {path.name for path in NOTEBOOKS.glob("*.ipynb")} <= served

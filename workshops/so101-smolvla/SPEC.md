@@ -382,9 +382,10 @@ and, where the table names one, the place. Three runs on 2026-11-21
 
 Built 2026-11-22, evening. The three-cube test of [Finding 8](RESEARCH.md#r-finding-8)
 (`RESEARCH.md`) takes its three commands per layout as sentences: each
-goes to Gemma 4 through the voice client in `voice/`, typed (the
-client's `parse`) or said by the synthetic voice as one 6 s clip (its
-`parse_audio`), right before its pick. Gemma's fields come back as
+goes to Gemma 4 through the voice client (`so101_smolvla.voice`; until
+2026-11-22 the copy in `voice/`), typed (the client's `parse`) or said
+by the synthetic voice as one 6 s clip (its `parse_audio`), right
+before its pick. Gemma's fields come back as
 they are; `src/so101_smolvla/cube_commands.py` reads the cube from
 `command` and `object` alone, in one place: a `pick_place` whose object
 names exactly one of red, green and blue, and no other kind of thing,
@@ -408,6 +409,44 @@ of the 7 sentences that should move nothing was refused; in the
 synthetic voice, 34 of the 37, and two of the three misses are a
 question and a negation that became a pick of the red cube (section
 10). The ten-layout run with typed sentences is in the testing ledger.
+
+### 4.8 The live demo notebook, on the same pick-and-place loop
+
+Built 2026-11-23. The user's rule: the pick-and-place logic is one
+piece of code, used by the tests and the notebook alike. So the
+per-command loop that lived inside the runner's layout function is
+`src/so101_smolvla/pick_place.py` (`PickPlaceScene`: one scene, one
+policy, the outlines' source; `start_layout` once, `run_command` per
+command, never a reset between commands; an `Observer` hears of every
+plan and every step). `three_cube_rollout.run_three_cube_episode` runs
+on it and writes the episode folder from its record; checked by
+rerunning layout 0 by typed sentences: every joint target of the 1,200
+steps identical to the run of 2026-11-22, 22:45, the records identical
+apart from their timing fields (`TESTING_LEDGER.md`, the section of
+2026-11-23).
+
+`notebooks/pick_place_demo.ipynb` drives that loop with a person at the
+microphone: `so101_smolvla.demo.DemoSession` owns the state the picture
+is drawn from (an immutable snapshot replaced whole, the transcript,
+the voice level, one "changed" event) and one worker thread that runs
+requests one at a time with at most one waiting behind it; a typed
+sentence is given to Gemma on that thread, a spoken one arrives with
+Gemma's fields from the `Listener`; a new layout is a request too, so
+only the worker touches the scene. `demo_console.compose` draws the six
+tiles of the feeds video (the same `feeds_video` functions) and a panel
+with the voice meter (the frame level, green while Silero counts it as
+speech, red after 2 s without a frame), the transcript, the command's
+progress and the gripper: the jaw opening the simulator reports (0 to
+100 % of travel), green while a jaw touches the target cube, "grasped"
+while it holds it. The twin measures no gripper current or force, so
+none is shown (decision of 2026-11-23). `demo_view.DemoView` shows the
+picture in one `ipywidgets.Image`, redrawn by a thread that blocks on
+the "changed" event and draws at most ten times a second; the cell
+returns, the text box and the buttons are widget callbacks. Not taken
+from the reference console of the other workshop: its fixed-rate redraw
+loop that blocks the kernel, its polled gripper value, its locked
+shared fields, its JSON round trip of commands, and its servo current
+computed from an effort this twin has not got.
 
 <a id="s-5-parts-and-what-each-one"></a>
 ## 5. Parts and what each one owns

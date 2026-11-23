@@ -6605,3 +6605,112 @@ process and the last borrowed piece (the NPU load test) are gone. Typed
   on `gfx1151` with ROCm 7.2.4 was not tried.
 - The spoken Gemma test stays red on the user's word (section of 19:05):
   34 of 37 in the synthetic voice, the question and the negation again.
+
+## 2026-11-23 — The live demo notebook: say which cube, Gemma 4 understands, SAM 3 outlines, SmolVLA picks; one pick-and-place loop for the tests and the notebook
+
+Result in one line: `notebooks/pick_place_demo.ipynb` lets an operator speak
+or type which cube goes into the bin and watch the six pictures of the test's
+feeds video live, with a voice meter, the transcript, the command's progress
+and the gripper's jaw opening, beside the utilization and power window; the
+pick-and-place loop it drives is the one the batch runner and the tests run,
+moved into `src/so101_smolvla/pick_place.py` with layout 0 reproduced step
+for step. Numbers in `TESTING_LEDGER.md`
+([the section of this morning](TESTING_LEDGER.md#t-2026-11-23-demo-notebook)).
+
+<a id="d-2026-11-23-demo-what-the-user-asked-for"></a>
+### What the user asked for and decided
+
+- "Create a notebook that enables a demo. The operator can give a voice
+  command to decide which cube should be picked up. gemma4 understands intent
+  and produces robot command, sam3 segments, SmolVLA executes pick and place
+  motion control. Focus on key functionality. it needs to launch the
+  activity/power window. re-use info from readme concisely. make compute
+  placement table including VAD. use workshops/vvla-pipeline/README.md as
+  working reference for the VAD meter and transcript and gripper current
+  meter. interactive area needs to show the 6 video tiles produced by the
+  test." Then: "identify anything that is not sota or breaks programming
+  rules and do not copy mistakes."
+- Not copied from the reference console (`workshop/common/twin_console.py`
+  of the other workshop and its notebook cell): the fixed-rate redraw loop
+  that blocks the kernel and needs a patched `jupyter_ui_poll`; the gripper
+  value polled inside the draw 15 times a second; mutable fields shared under
+  a lock; the JSON round trip of a command inside one process; a servo
+  current computed from an effort this twin has not got; `top` shelled out
+  for utilization (the Qt table of this workshop is opened instead).
+- Question form: the gripper meter shows the jaw opening and the simulator's
+  contact and grasp facts, no invented current (the SAPIEN twin exposes no
+  current, effort or force; the state's sixth value is the gripper as 0 to
+  100 % of travel, 0.5 to 46 in last night's run); "the pick and place logic
+  and processes must be in one common python code re-used by tests and
+  notebook"; one composed picture, event-driven.
+
+<a id="d-2026-11-23-demo-what-was-built"></a>
+### What was built
+
+- `src/so101_smolvla/pick_place.py`: `PickPlaceScene` (one scene, one policy,
+  the outlines' source; `start_layout` resets once, `run_command` runs one
+  command and never resets; an `Observer` hears of every plan and every step;
+  `record=True` keeps what a layout's episode folder needs), `PickCommand`
+  from a colour or from Gemma's fields, and the helpers the runner's tests
+  import (`cubes_to_paint`, `cube_outlines`, the modes and sources).
+  `three_cube_rollout.run_three_cube_episode` keeps its signature and its
+  result and runs on it; its progress lines come from an observer. The
+  runner's 21 tests pass unchanged; layout 0 by typed sentences is identical
+  to last night's run in every joint target of its 1,200 steps and in every
+  record apart from the timing fields.
+- `demo.py`: `DemoSession`, the one owner of the state the picture is drawn
+  from (an immutable `Snapshot` replaced whole, the transcript, the voice
+  level, one "changed" event) and the one worker that touches the scene; one
+  request runs, at most one waits, a newer one replaces the waiting one and
+  the transcript says so; a typed sentence goes to Gemma on the worker, a
+  spoken one arrives with Gemma's fields; a new layout is a request too;
+  `wait_idle` is one bounded wait on the "idle" event. `DemoStack` builds the
+  real parts (Gemma's server and client on the default port, SAM 3, SmolVLA,
+  the SAPIEN scene, the microphone) and closes them.
+- `demo_console.py`: pure drawing. The six tiles at half size through the
+  `feeds_video` functions, the panel with the voice meter (level, green while
+  Silero counts speech, red after 2 s without a frame, "no microphone; type a
+  command" without one), the transcript (wrapped, newest lines win), the
+  command's progress bar, the gripper bar and the layout line.
+- `demo_view.py`: one `ipywidgets.Image`, a text box, "new layout" and
+  "stop"; a render thread that blocks on "changed", draws once, caps itself
+  at 10 frames a second, and re-arms a one-shot timer so a stopped
+  microphone shows as such; the cell returns at once.
+- The notebook: six sections (what it does, start everything with the
+  utilization window, the compute placement table with the VAD row, live,
+  a typed command, new layout, stop). No cell is tagged to be left out: a
+  missing microphone is shown, not raised, so the whole notebook runs
+  headless. `ipywidgets` added to `setup_voice.sh` and the `notebooks`
+  extra. README: a "Live demo" paragraph and the VAD row of the compute
+  placement table; SPEC.md section 4.8.
+- Tests: `test_pick_place.py` (6), `test_demo_console.py` (4), `test_demo.py`
+  (6, the session and the view in the stand-in scene), and
+  `test_demo_notebook.py`: the notebook through its kernel against the real
+  Gemma, SAM 3 and SAPIEN.
+
+<a id="d-2026-11-23-demo-what-it-means"></a>
+### What it means
+
+- One loop. What the demo shows is what the test measures, by construction
+  and by the step-for-step comparison; a change to the loop reaches both.
+- The session's first design dropped a request that had not yet been taken
+  by the worker when the next one arrived (a bounded queue with replace
+  semantics). `test_demo.py` caught it; the state is now one running and at
+  most one waiting request under one condition (`AGENT_MISTAKES.md`).
+- The picture is drawn only when something changed. With the microphone
+  open, the level arrives every 20 ms and the cap of 10 frames a second
+  holds the drawing; without it, nothing is drawn until a command runs.
+
+<a id="d-2026-11-23-demo-where-this-leaves-the-work"></a>
+### Where this leaves the work
+
+- Not done: the notebook with a person speaking at the microphone. The test
+  runs it headless (the microphone cell reports "no microphone" when none
+  opens; on this machine it opened); the spoken path itself is covered by the
+  Gemma tests and the voice notebook. To be tried by the user.
+- One launcher test (`test_launcher_serves_the_notebooks_directory`) failed
+  once with a refused connection right after the first JupyterLab start
+  following the `ipywidgets` install, and passed twice alone afterwards; the
+  cause is not known. The test now keeps JupyterLab's whole output on failure.
+- The scene's horizon is set for several commands; a very long session
+  reaches the simulator's truncation flag, which the loop ignores.
