@@ -1,0 +1,87 @@
+# Which model does what, and on which processor: the one place for it.
+# Read in Python by so101_smolvla.models (load_models), in shell by
+# scripts/setup_voice.sh and scripts/sam3_reference_settings.sh.
+#
+# No model file is stored in the workshop: the Gemma files for llama-server
+# live in the Hugging Face cache, the FastFlowLM model in FastFlowLM's own
+# store (~/.config/flm/models), SAM 3 in its reference's checkout and build
+# cache, the SmolVLA checkpoint in the Hugging Face cache.
+#
+# Processors: "npu" is the neural processing unit (XDNA 2), "igpu" the
+# integrated graphics (through ROCm).
+
+# ---- command: Gemma 4 E4B turns the sentence, spoken or typed, into fields ---------
+
+[command]
+# Where Gemma runs: "npu" or "igpu", one of the two sections below. The two
+# answer the same request shape: a JSON schema built from the commands for
+# FastFlowLM, the grammar file intent.gbnf for llama-server. Measured side by
+# side in TESTING_LEDGER.md, 2026-11-23. After a change, run
+# scripts/setup_voice.sh once.
+backend = "npu"
+
+[command.npu]  # FastFlowLM (flm serve) on the NPU
+# A FastFlowLM tag. The same downloaded weights as gemma4-it:e4b
+# (FastFlowLM/Gemma4-E4B-IT-NPU2, Q4_1). The flash tag pins the instructions and
+# prefills a short prompt in one pass, context fixed at 1,024 tokens, one turn; the
+# standard tag has a 32k context and tool calling. Both measured in TESTING_LEDGER.md.
+model = "gemma4e-flash:e4b"
+# context is left out: the tag's own context (1,024 tokens for the flash tag).
+# A number here is passed to flm serve as -c.
+binary = "flm"
+# 1.0.10 is the first FastFlowLM that holds the answer to response_format while it
+# generates; 1.0.7 accepted the field and ignored it (probe of 2026-11-23).
+min_version = "1.0.10"
+# FastFlowLM's power mode: powersaver, balanced, performance (its default) or turbo.
+# turbo on the user's word of 2026-11-23, for the shortest answer time.
+pmode = "turbo"
+# Measured start to the readiness line: 10.1 s on a cold file cache, 4.9 to 5.0 s
+# warm (2026-11-23).
+ready_timeout_s = 60
+
+[command.igpu]  # llama-server (llama.cpp) on the integrated graphics
+repo = "ggml-org/gemma-4-E4B-it-GGUF"  # a Hugging Face repository, resolved in its cache
+model = "gemma-4-E4B-it-Q4_0.gguf"
+mmproj = "mmproj-gemma-4-E4B-it-Q8_0.gguf"
+context = 4096
+n_gpu_layers = 99
+parallel = 2
+no_warmup = true
+ready_timeout_s = 120
+
+[command.igpu.build]  # the llama.cpp build of scripts/setup_voice.sh; paths relative to the workshop
+repository = "https://github.com/ggml-org/llama.cpp.git"
+commit = "781dbc5ac98921dbdb5e5b2ec5b7a50960e937d4"
+checkout = "third_party/llama.cpp"
+server_bin = "third_party/llama.cpp/build/bin/llama-server"
+# The HIP kernels for the native gfx1150/gfx1151 crash on this machine's integrated
+# graphics; built for gfx1100, and presented as such through the override, they run.
+gfx_target = "gfx1100"
+# Set in the environment of the llama-server process only, never in the caller's:
+# SmolVLA's PyTorch runs natively on gfx1151 and must not see it.
+hsa_override_gfx_version = "11.0.0"
+
+# ---- outlines: SAM 3 finds every cube in both camera pictures ----------------------
+
+[outlines]
+# Stated, not a choice: the fast SAM 3 reference (sam3-tracker-rocm, MIGraphX)
+# runs on the integrated graphics only. Another value is refused.
+device = "igpu"
+# The reference's git checkout, and the commit it must be at. A leading ~ is
+# the home directory. SAM3_REFERENCE_SETTINGS names another file with this section.
+checkout = "~/GitHub/sam3-tracker-rocm-v0.4.0-rc1"
+commit = "8005dc6ab0f52d5291e423e2519018b4aa4fd01c"
+# The model's own files (weights and processor), as the reference ships them.
+model_dir = "~/GitHub/sam3-tracker-rocm-v0.4.0-rc1/model/sam3"
+# The model compiled for this machine's graphics by the reference's build
+# (504 pixels); its ARTIFACT_MANIFEST.json says the build is complete.
+compiled_dir = "~/.cache/sam3-tracker-rocm/build-0.4.0-rc1-8005dc6ab0f5/onnx_files_504"
+
+# ---- motion: SmolVLA moves the arm -------------------------------------------------
+
+[motion]
+# Stated, not a choice: PyTorch through ROCm on the integrated graphics. Another
+# value is refused; a run on the processor cores is not a pass.
+device = "igpu"
+# A Hugging Face repository, resolved in its cache: the checkpoint of the runs.
+checkpoint = "Harrysunshine/so101-smolvla-sim-real-10task"

@@ -24,6 +24,7 @@ if [[ ! -x "$python" ]]; then
   exit 1
 fi
 
+sam3_check_device || exit 1
 checkout="$(sam3_setting checkout)"
 commit="$(sam3_setting commit)"
 if [[ ! -d "$checkout/.git" ]]; then

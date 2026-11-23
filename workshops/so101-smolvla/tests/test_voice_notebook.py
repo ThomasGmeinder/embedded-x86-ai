@@ -14,11 +14,11 @@ Two runs, both with nbconvert of the workshop's own .venv:
    Gemma, a second start of the server (has to be refused), a cell that sets MIC to a microphone that does not
    exist, the live-session cell (has to stop with its error), stop of Gemma.
 
-Needed on the machine: the set-up voice path (scripts/setup_voice.sh: the packages in .venv, llama-server, the
-Gemma files in the Hugging Face cache), its graphics processor, espeak-ng, and nothing answering on the Gemma
-port. A missing piece fails the tests; nothing is skipped. Jupyter's data and settings go to a temporary
-directory, as in the launcher's tests, so the user's own kernels are not touched. The server's log is
-notebooks/logs/llama-server.log.
+Needed on the machine: the set-up voice path on the backend of configs/models.toml (scripts/setup_voice.sh: the
+packages in .venv, then llama-server and the Gemma files in the Hugging Face cache, or FastFlowLM and its
+model), espeak-ng, and nothing answering on the Gemma port. A missing piece fails the tests; nothing is
+skipped. Jupyter's data and settings go to a temporary directory, as in the launcher's tests, so the user's
+own kernels are not touched. The server's log is notebooks/logs/llama-server.log or flm-server.log.
 """
 import copy
 import json
@@ -30,6 +30,7 @@ import uuid
 
 import pytest
 
+from so101_smolvla.voice.server import RUNTIMES
 from so101_smolvla.voice.settings import load_settings
 from test_notebooks_launcher import KERNEL, LAUNCHER, NOTEBOOKS, VENV, WORKSHOP, _environment
 
@@ -41,10 +42,11 @@ RUN_LIMIT_S = 600
 
 
 def _gemma_answers() -> bool:
-    """Whether a server answers on the default port of configs/voice.json, the notebook's."""
-    server = load_settings().server
+    """Whether a server answers on the default port of configs/voice.toml, the notebook's."""
+    settings = load_settings()
+    server, path = settings.server, RUNTIMES[settings.backend].health_path
     try:
-        urllib.request.urlopen(f"http://{server['host']}:{server['port']}/health", timeout=5).close()
+        urllib.request.urlopen(f"http://{server['host']}:{server['port']}{path}", timeout=5).close()
     except urllib.error.HTTPError:
         return True  # it answers, with an error status
     except OSError:

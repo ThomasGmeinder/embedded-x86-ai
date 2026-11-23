@@ -27,7 +27,10 @@ MACHINES = {
         # YOLO26s on the NPU: columns 32, 58, 77 to 78 % while the load ran, power 1.24 W mean
         # (step 0, item 1). Measured once by hand. The automated NPU load test was removed on
         # 2026-11-22 with the NPU runtime it borrowed from outside this workshop; no test reads
-        # these two until this workshop has an NPU load of its own.
+        # these two yet. Since 2026-11-23 the workshop has an NPU load of its own, Gemma 4 on
+        # FastFlowLM, but it holds every column at 97 to 99 % and about 2.2 W for as long as the
+        # model is loaded, requests or not (TESTING_LEDGER.md, 2026-11-23), so a load test would
+        # read the held context, not the work; none is written.
         "npu_columns_mean_under_load_percent": 30.0,
         "npu_power_under_load_w": 0.5,
     },

@@ -56,6 +56,23 @@ CLIENT_CASES = [
     ("what's the weather like today", Intent.UNKNOWN, None),
 ]
 
+# The "stop" entry of the instructions (2026-11-23): an order to stop, with or without the robot
+# named, is `stop`; talk about stopping that is no order to the robot is `unknown`. Typed, every
+# sentence of the first two lists must hold on both backends.
+STOP_ORDERS = [
+    "stop robot", "Stop robot", "stop robot.", "stop, robot", "robot stop", "stop the robot",
+    "stop robot now", "robot, stop!", "stop", "Stop!", "stop now", "please stop",
+]
+NOT_STOP_ORDERS = [
+    "stop talking", "why did the robot stop", "don't stop", "do not stop the robot",
+    "the bus stop is over there", "I can't stop laughing",
+]
+# In the synthetic voice. A lone "stop" (0.5 s) and "stop now" are left out: asked only to write
+# down the words, the model writes "Ah." and "Ciao" for those clips on both backends, so they
+# test the voice's sound, not the instructions (TESTING_LEDGER.md, 2026-11-23).
+SPOKEN_STOP_ORDERS = ["stop robot", "robot stop", "stop the robot", "robot stop now", "please stop"]
+SPOKEN_NOT_STOP_ORDERS = ["stop talking", "don't stop", "why did the robot stop"]
+
 
 def same(a: str, b: str) -> bool:
     """Two argument values, compared after trimming and lower-casing."""

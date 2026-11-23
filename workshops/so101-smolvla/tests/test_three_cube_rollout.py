@@ -793,7 +793,7 @@ def test_sentences_through_the_voice_name_the_cubes_and_a_refused_one_moves_noth
     assert result["sentences"][0]["gemma"] == {
         "sentence": "put the green cube in the bin", "how": "typed", "command": "pick_place",
         "object": "green cube", "place": "bin", "heard": "Put the green cube in the bin",
-        "seconds": 0.5, "spoken_s": None,
+        "seconds": 0.5, "spoken_s": None, "call_seconds": None,
     }
     assert [pick["command"] for pick in result["picks"]] == [
         "pick_place(object: green cube, place: bin)",

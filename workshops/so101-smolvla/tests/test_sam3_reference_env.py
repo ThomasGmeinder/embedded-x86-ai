@@ -10,14 +10,15 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
 
 WORKSHOP = Path(__file__).resolve().parents[1]
 LAUNCHER = WORKSHOP / "scripts" / "run_sam3_reference.sh"
-SETTINGS_FILE = WORKSHOP / "configs" / "sam3_reference.json"
-SETTINGS = json.loads(SETTINGS_FILE.read_text())
+SETTINGS_FILE = WORKSHOP / "configs" / "models.toml"
+SETTINGS = tomllib.loads(SETTINGS_FILE.read_text(encoding="utf-8"))["outlines"]  # the SAM 3 section
 CHECKOUT = Path(os.path.expanduser(SETTINGS["checkout"]))
 
 needs_reference = pytest.mark.skipif(
@@ -57,8 +58,15 @@ def launch(*arguments: str, **environment: str) -> subprocess.CompletedProcess:
 
 
 def settings_copy(tmp_path: Path, **changed: str) -> str:
-    path = tmp_path / "sam3_reference.json"
-    path.write_text(json.dumps({**SETTINGS, **changed}))
+    """A file with the SAM 3 section and some of its values changed: every value is a string."""
+    path = tmp_path / "models.toml"
+    # A JSON string is a TOML basic string for these values (paths, a commit, a device name).
+    path.write_text(
+        "[outlines]\n"
+        + "".join(f"{key} = {json.dumps(value)}\n" for key, value in {**SETTINGS, **changed}.items()),
+        encoding="utf-8",
+    )
+    assert tomllib.loads(path.read_text(encoding="utf-8")) == {"outlines": {**SETTINGS, **changed}}
     return str(path)
 
 
@@ -116,6 +124,17 @@ def test_a_missing_checkout_is_named(tmp_path):
     assert result.returncode == 1
     assert "ran" not in result.stdout
     assert f"SAM 3 reference checkout is missing: {missing}" in result.stderr
+
+
+@needs_reference
+def test_a_device_other_than_the_integrated_graphics_is_refused(tmp_path):
+    result = launch(
+        "-c", "print('ran')",
+        SAM3_REFERENCE_SETTINGS=settings_copy(tmp_path, device="npu"),
+    )
+    assert result.returncode == 1
+    assert "ran" not in result.stdout
+    assert "outlines.device is 'npu'" in result.stderr and "integrated graphics only" in result.stderr
 
 
 @needs_reference

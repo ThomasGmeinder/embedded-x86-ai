@@ -5,7 +5,7 @@
 # from system packages; here it comes from Python packages, as in .venv.
 #
 # Sources, none of them copied into this script:
-#   configs/sam3_reference.json                     where the checkout is, and its commit
+#   configs/models.toml, section [outlines]         where the checkout is, and its commit
 #   <checkout>/docker/rocm101/build.sh              wheel addresses and SHA256 checksums
 #   <checkout>/docker/rocm101/runtime-constraints.txt   versions of the other packages
 #   <checkout>/requirements.txt                     the reference's package list

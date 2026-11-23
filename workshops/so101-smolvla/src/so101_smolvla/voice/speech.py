@@ -1,7 +1,7 @@
 """A sentence in a synthetic voice (espeak-ng), inside a quiet clip, as the bytes of a WAV file.
 
 The voice, speaking rate, loudness and lead-in are the ``synthetic_voice``
-section of ``configs/voice.json``; the clip's length and sample rate are those
+section of ``configs/voice.toml``; the clip's length and sample rate are those
 of the live session's windows, so a clip reaches Gemma as a window does.
 """
 

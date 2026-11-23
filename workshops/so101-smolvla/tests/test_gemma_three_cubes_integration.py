@@ -1,8 +1,9 @@
 """One real layout commanded by sentences: Gemma 4, the real SAM 3 and the real scene, the arm held.
 
-Needs the voice path (llama-server and the Gemma files, scripts/setup_voice.sh),
-the SAM 3 reference's environment and model files, and the SAPIEN backend;
-skipped while one is not set up.
+Needs the voice path on the backend of configs/models.toml (llama-server and the
+Gemma files, or FastFlowLM and its model; scripts/setup_voice.sh), the SAM 3
+reference's environment and model files, and the SAPIEN backend; skipped while
+one is not set up.
 """
 
 from __future__ import annotations
@@ -17,13 +18,16 @@ import pytest
 
 from so101_smolvla import sapien_rollout, three_cube_rollout
 from so101_smolvla.cube_commands import TEMPLATES, call_text
+from so101_smolvla.models import load_models
 from so101_smolvla.sam3_outlines import CAMERAS
 from so101_smolvla.sapien_config import SAPIEN_PYTHON, SAPIEN_SOURCE, THREE_CUBE_TASK
 from so101_smolvla.three_cube_rollout import COMMANDS_FROM, OUTLINE_SOURCES, draw_order
 from so101_smolvla.voice.commands import voice_ready
+from so101_smolvla.voice.server import RUNTIMES
+from so101_smolvla.voice.settings import load_settings
 
 WORKSHOP = Path(__file__).resolve().parents[1]
-SETTINGS = json.loads((WORKSHOP / "configs" / "sam3_reference.json").read_text())
+SETTINGS = load_models()["outlines"]  # the SAM 3 section of configs/models.toml
 SAM3_READY = (WORKSHOP / ".venv-sam3" / "bin" / "python").is_file() and (
     Path(os.path.expanduser(SETTINGS["compiled_dir"])) / "ARTIFACT_MANIFEST.json"
 ).is_file()
@@ -79,8 +83,11 @@ def test_real_layout_commanded_by_typed_sentences_through_gemma_sam3_and_the_sce
     assert row["order"] == expected
     assert row["order_given_by"] == COMMANDS_FROM["typed"] == "typed sentences through Gemma 4"
     assert row["outline_source"] == OUTLINE_SOURCES["sam3"]
-    assert row["voice"]["base"].endswith(":8083")
-    assert (destination / "llama-server.log").is_file()
+    settings = load_settings()
+    assert row["voice"]["base"].endswith(f":{settings.runner_port}")  # the runner's port of configs/voice.toml
+    backend = settings.backend
+    assert row["voice"]["backend"] == backend
+    assert (destination / RUNTIMES[backend].log_name).is_file()
     # The three sentences of layout 0 of a batch from seed 7, every one of
     # them read as the cube it names.
     assert [entry["sentence"] for entry in row["sentences"]] == [

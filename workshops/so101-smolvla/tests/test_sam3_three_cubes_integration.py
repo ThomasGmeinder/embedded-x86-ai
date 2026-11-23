@@ -18,6 +18,7 @@ from clip_reading import read_clip
 from so101_smolvla import sapien_rollout, three_cube_rollout
 from so101_smolvla.bin_layouts import BIN_CUBE_COLORS
 from so101_smolvla.feeds_video import CAPTION_HEIGHT, ROLE_COLORS, TINT
+from so101_smolvla.models import load_models
 from so101_smolvla.picture_editor import edit_pictures
 from so101_smolvla.sam3_outlines import CAMERAS, PHRASE, Sam3Outlines, cube_colours
 from so101_smolvla.sapien_config import (
@@ -31,7 +32,7 @@ from so101_smolvla.sapien_env_client import SapienPolicyEnvironment
 from so101_smolvla.three_cube_rollout import OUTLINE_SOURCES
 
 WORKSHOP = Path(__file__).resolve().parents[1]
-SETTINGS = json.loads((WORKSHOP / "configs" / "sam3_reference.json").read_text())
+SETTINGS = load_models()["outlines"]  # the SAM 3 section of configs/models.toml
 READY = (WORKSHOP / ".venv-sam3" / "bin" / "python").is_file() and (
     Path(os.path.expanduser(SETTINGS["compiled_dir"])) / "ARTIFACT_MANIFEST.json"
 ).is_file()

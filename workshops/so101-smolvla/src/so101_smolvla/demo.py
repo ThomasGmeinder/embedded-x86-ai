@@ -6,7 +6,8 @@
 the shared pick-and-place loop (``pick_place.PickPlaceScene``), one at a time
 with at most one waiting behind it (a newer request replaces the waiting one):
 a typed sentence is first given to Gemma on that thread, a spoken one arrives
-with Gemma's fields already; a new layout is a request too, so only the worker
+with Gemma's call already, the moment Gemma had written it and before the
+words it heard; a new layout is a request too, so only the worker
 ever touches the scene. Nothing here sleeps to wait: the worker blocks on a
 condition and ends when the session closes, callers of ``wait_idle`` block
 once on the ``idle`` event.
@@ -17,6 +18,7 @@ the SAPIEN scene, the microphone) around a session and closes them.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import deque
@@ -37,7 +39,13 @@ from so101_smolvla.pick_place import (
 from so101_smolvla.voice.commands import SPOKEN, TYPED, CommandFields
 from so101_smolvla.voice.intents import ParsedCommand
 
+logger = logging.getLogger(__name__)
+
 TRANSCRIPT_LINES = 40
+# The two events of a command, in the order they happen. Gemma writes the call first and the
+# words it heard after it; each is shown the moment it is complete.
+COMMAND_RECEIVED = "command received"
+TRANSCRIPT_RECEIVED = "transcript received"
 
 
 @dataclass(frozen=True)
@@ -82,6 +90,9 @@ class DemoSession:
         self.voice = VoiceLevel()
         self._transcript: deque = deque(maxlen=TRANSCRIPT_LINES)
         self.changed = threading.Event()  # something to draw
+        # A command or its transcript was received: the renderer draws now, not at its next frame.
+        self.urgent = threading.Event()
+        self.events: deque = deque(maxlen=TRANSCRIPT_LINES)  # (name, monotonic time, text) of each event
         self.idle = threading.Event()  # no request runs and none waits
         self.results: list[dict] = []
         # One request runs, at most one waits behind it; a newer one replaces the waiting one.
@@ -122,9 +133,39 @@ class DemoSession:
         self.voice = replace(self.voice, available=False, error=error)
         self.say("no microphone: type a command", "error")
 
-    def on_spoken(self, parsed: ParsedCommand, seconds: float = 0.0) -> None:
-        """A command the Listener found in the microphone's sound."""
-        self._request(CommandRequest(parsed.transcript or "(spoken)", SPOKEN, parsed, seconds))
+    # -- the two events of a command ----------------------------------------------
+
+    def _emit(self, name: str, text: str, kind: str, seconds: float | None) -> None:
+        """One event of a command: logged, kept in ``events``, written into the transcript, and
+        the picture is drawn for it at once (``urgent`` cuts the renderer's frame pause short)."""
+        took = "" if seconds is None else f"  ({seconds:.2f} s)"
+        logger.info("%s%s: %s", name, took, text)
+        self.events.append((name, time.monotonic(), text))
+        self._transcript.append((text + took, kind))
+        self.urgent.set()
+        self.changed.set()
+
+    def command_received(self, parsed: ParsedCommand, seconds: float = 0.0) -> None:
+        """Event 1 of a spoken command: Gemma has written the call (command, object, place).
+
+        Called by the Listener the moment the call is complete, while Gemma still writes the
+        words it heard. The picture shows the call at once, on this thread, also while another
+        pick still runs; the pick itself waits its turn on the worker. ``transcript_received``
+        follows with the words. An answer that already holds its words gives both events here."""
+        sentence = parsed.transcript or "(spoken)"
+        pick = command_from_fields(fields_from_parsed(parsed, sentence, SPOKEN, seconds), sentence)
+        self._emit(COMMAND_RECEIVED, f"-> {pick.command}", "call", seconds)
+        if parsed.transcript:
+            self.transcript_received(parsed)
+        self._request(CommandRequest(sentence, SPOKEN, parsed, seconds))
+
+    def transcript_received(self, parsed: ParsedCommand, seconds: float | None = None) -> None:
+        """Event 2 of a spoken command: Gemma has written the words it heard, the whole answer.
+
+        The picture shows the words at once: a second update after the call's. Nothing is
+        shown for an answer whose words Gemma could not make out."""
+        if parsed.transcript:
+            self._emit(TRANSCRIPT_RECEIVED, f"you: {parsed.transcript}", "you", seconds)
 
     # -- requests --------------------------------------------------------------
 
@@ -214,16 +255,21 @@ class DemoSession:
 
     def _run_command(self, request: CommandRequest) -> None:
         if request.parsed is None:
+            # Typed: the sentence is its own words and is shown before Gemma is asked; the call
+            # is the same event as a spoken one's, the moment Gemma has written it.
+            self._emit(TRANSCRIPT_RECEIVED, f"you: {request.sentence}", "you", None)
             self._update(status="asking Gemma...")
             began = time.perf_counter()
             parsed = self.parse(request.sentence)
             seconds = time.perf_counter() - began
+            fields = fields_from_parsed(parsed, request.sentence, request.how, seconds)
+            pick = command_from_fields(fields, request.sentence)
+            self._emit(COMMAND_RECEIVED, f"-> {pick.command}", "call", seconds)
         else:
-            parsed, seconds = request.parsed, request.seconds
-        fields = fields_from_parsed(parsed, request.sentence, request.how, seconds)
-        pick = command_from_fields(fields, request.sentence)
-        self.say(f"you: {fields.heard or request.sentence}", "you")
-        self.say(f"-> {pick.command}  ({seconds:.2f} s)", "call")
+            # Spoken: ``command_received`` showed the call when it arrived, ``transcript_received``
+            # shows the words.
+            fields = fields_from_parsed(request.parsed, request.sentence, request.how, request.seconds)
+            pick = command_from_fields(fields, request.sentence)
         if pick.cube is None:
             self.say(f"refused: {pick.refusal}; nothing moves", "error")
             self._update(status=f"refused: {pick.refusal}"[:60])
@@ -297,6 +343,9 @@ class DemoStack:
         self.server = GemmaServer(self.log_dir, settings=settings).start()
         self.client = GemmaClient(self.server.base, settings)
         say(f"Gemma 4 server at {self.server.base} after {time.perf_counter() - began:.1f} s; log {self.server.log_path}")
+        # The first request pays for the instructions being read into the model: here, not at
+        # the user's first command.
+        say(f"Gemma 4 warmed up with one request, {self.client.warm_up():.1f} s")
         began = time.perf_counter()
         self.sam3 = Sam3Outlines()
         say(f"SAM 3 worker ready after {time.perf_counter() - began:.1f} s")
@@ -316,7 +365,10 @@ class DemoStack:
         )
         self.scene.start_layout(self.seed, self.seed)
         say(f"SAPIEN scene, layout seed {self.seed}, after {time.perf_counter() - began:.1f} s")
-        self.session = DemoSession(self.scene, self.client.parse, seed=self.seed).start()
+        # A typed sentence is its own words: the request ends when Gemma has written the call.
+        self.session = DemoSession(
+            self.scene, lambda sentence: self.client.parse(sentence, words=False), seed=self.seed
+        ).start()
         return self
 
     def listen(self, device=None, wait_s: float = 10.0) -> bool:
@@ -324,8 +376,13 @@ class DemoStack:
         from so101_smolvla.voice.microphone import Listener
 
         session = self.session
-        self.listener = Listener(self.client, device=device).start(
-            on_command=session.on_spoken, on_level=session.on_level, on_busy=session.on_busy,
+        # Two events per command: the call the moment Gemma has written it (the pick starts on
+        # it), then the whole answer with the words Gemma heard and the seconds it took.
+        client = self.client
+        self.listener = Listener(client, device=device).start(
+            on_call=session.command_received,
+            on_command=lambda answer: session.transcript_received(answer, client.last_total_s),
+            on_level=session.on_level, on_busy=session.on_busy,
         )
         if not self.listener.opened.wait(wait_s) or self.listener.error:
             session.microphone_failed(self.listener.error or f"not opened within {wait_s:.0f} s")

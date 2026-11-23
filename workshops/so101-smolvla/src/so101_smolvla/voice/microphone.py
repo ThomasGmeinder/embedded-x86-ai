@@ -2,9 +2,11 @@
 
 Frames of 20 ms arrive from the microphone. Each is gated by Silero and a
 level threshold. Every ``hop_s`` that holds enough speech, the last ``window_s``
-of sound goes to Gemma as one clip, and a command it finds is reported once;
-the same command is not reported again within ``cooldown_s``. The parameters
-are the ``listening`` section of ``configs/voice.json``. Nothing here sleeps to
+of sound goes to Gemma as one clip, and a command it finds is reported: its
+call the moment Gemma has written it, the whole answer with the words heard
+when that is complete. The same command is not reported again within
+``cooldown_s``. The parameters
+are the ``listening`` section of ``configs/voice.toml``. Nothing here sleeps to
 discover speech: the microphone read blocks on sound, the request thread
 blocks on its queue.
 """
@@ -140,11 +142,18 @@ class Listener:
         self._pending: queue.Queue = queue.Queue(maxsize=1)
         self._threads: list[threading.Thread] = []
 
-    def start(self, on_command: Callable[[ParsedCommand], None], on_level=None, on_busy=None) -> "Listener":
-        """Begin listening. ``on_command`` receives each command Gemma found; ``on_level`` the frame level
-        in 0..1 and whether the frame counted as speech; ``on_busy`` whether a request is under way."""
+    def start(
+        self, on_command: Callable[[ParsedCommand], None] | None = None, on_level=None, on_busy=None,
+        on_call: Callable[[ParsedCommand, float], None] | None = None,
+    ) -> "Listener":
+        """Begin listening. A command Gemma finds is reported twice, each once: ``on_call`` receives
+        the call (command, object, place) the moment Gemma has written it, with the seconds since the
+        request began and without the words heard, which are still being written; ``on_command``
+        receives the whole answer, words included, when it is complete. ``on_level`` gets the frame
+        level in 0..1 and whether the frame counted as speech; ``on_busy`` whether a request is under
+        way."""
         requester = threading.Thread(
-            target=self._request, args=(on_command, on_busy), daemon=True, name="gemma-audio",
+            target=self._request, args=(on_command, on_busy, on_call), daemon=True, name="gemma-audio",
         )
         microphone = threading.Thread(
             target=self._listen, args=(on_level,), daemon=True, name="microphone",
@@ -179,7 +188,7 @@ class Listener:
             except queue.Full:
                 pass
 
-    def _request(self, on_command, on_busy) -> None:
+    def _request(self, on_command, on_busy, on_call) -> None:
         listening = self.settings.listening
         rate = int(listening["sample_rate"])
         commands = CommandFilter(float(listening["cooldown_s"]))
@@ -194,8 +203,20 @@ class Listener:
             if on_busy is not None:
                 on_busy(True)
             self.transcribing = True
+            accepted = []  # the call of this window, once the filter has let it through
+
+            def call_written(call: ParsedCommand, seconds: float) -> bool:
+                # Runs inside the request, while Gemma still writes the words it heard. An early
+                # window often has no command yet; the next hop can still carry the phrase.
+                if not commands.accept(call.intent.value, started, ended, time.monotonic()):
+                    return False  # no command, or a repeat: its words are not read, the next window is asked sooner
+                accepted.append(call)
+                if on_call is not None:
+                    on_call(call, seconds)
+                return True
+
             try:
-                command = self.client.parse_audio(wav_bytes(window, rate))
+                command = self.client.parse_audio(wav_bytes(window, rate), on_call=call_written)
             except Exception:
                 logger.exception("Gemma audio request failed")
                 continue
@@ -203,8 +224,7 @@ class Listener:
                 self.transcribing = False
                 if on_busy is not None:
                     on_busy(False)
-            # An early window often has no command yet; the next hop can still carry the phrase.
-            if commands.accept(command.intent.value, started, ended, time.monotonic()):
+            if accepted and on_command is not None:
                 on_command(command)
 
     def _listen(self, on_level) -> None:

@@ -2,9 +2,12 @@
 
 The render thread blocks on the session's ``changed`` event, draws the picture
 once and sets it on the widget; it never draws when nothing changed. Drawing
-is capped at ``fps`` frames a second: after a draw the thread waits out the
-rest of the frame time before it blocks on the event again (a rate cap, not a
-wait for a condition). A one-shot timer redraws once after the voice meter's
+is capped at ``fps`` frames a second for the camera pictures and the voice
+meter: after a draw the thread waits out the rest of the frame time before it
+blocks on the event again (a rate cap, not a wait for a condition). The two
+events of a command (the session's ``command received`` and ``transcript
+received``) end that pause through the session's ``urgent`` event, so each is
+on the picture one draw (about 9 ms, measured) after it happens. A one-shot timer redraws once after the voice meter's
 silence time, so "no microphone signal" appears even when nothing else changes.
 The cell that shows the view returns at once; the text box and the buttons are
 widget callbacks.
@@ -61,6 +64,9 @@ class DemoView:
             changed.wait()  # blocks until something changed or the view closes
             if self._closing.is_set():
                 return
+            # Cleared before the state is read: an event that arrives from here on is either in
+            # this draw or starts the next one at once.
+            session.urgent.clear()
             changed.clear()
             began = time.monotonic()
             self.image.value = jpeg(compose(session.snapshot, session.transcript, session.voice, began))
@@ -69,7 +75,9 @@ class DemoView:
             self._arm_watchdog()
             rest = 1.0 / self.fps - (time.monotonic() - began)
             if rest > 0:
-                time.sleep(rest)  # the frame-rate cap
+                # The frame-rate cap for the camera pictures and the voice meter. A command or
+                # its transcript ends it at once: those are drawn when they happen.
+                session.urgent.wait(rest)
 
     def _arm_watchdog(self) -> None:
         """One redraw after the voice meter's silence time, so a stopped microphone shows as such."""

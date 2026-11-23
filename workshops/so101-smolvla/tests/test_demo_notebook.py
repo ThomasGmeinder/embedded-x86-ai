@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from so101_smolvla.models import load_models
 from so101_smolvla.sapien_config import SAPIEN_PYTHON, SAPIEN_SOURCE
 from so101_smolvla.voice.commands import voice_ready
 from test_notebooks_launcher import KERNEL, LAUNCHER, NOTEBOOKS, VENV, WORKSHOP, _environment
@@ -26,7 +27,7 @@ from test_voice_notebook import _code_after, _errors, _gemma_answers, _printed
 NOTEBOOK = NOTEBOOKS / "pick_place_demo.ipynb"
 RUN_LIMIT_S = 900  # the stack loads (about 1 min), the live picture, the closes
 
-SETTINGS = json.loads((WORKSHOP / "configs" / "sam3_reference.json").read_text())
+SETTINGS = load_models()["outlines"]  # the SAM 3 section of configs/models.toml
 SAM3_READY = (WORKSHOP / ".venv-sam3" / "bin" / "python").is_file() and (
     Path(os.path.expanduser(SETTINGS["compiled_dir"])) / "ARTIFACT_MANIFEST.json"
 ).is_file()

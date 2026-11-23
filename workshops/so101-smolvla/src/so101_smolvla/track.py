@@ -14,10 +14,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from so101_smolvla.models import motion_checkpoint
 from so101_smolvla.record import _write_clip
 from so101_smolvla.sim import TICK_STEPS, ArmSim
 
-CHECKPOINT = "Harrysunshine/so101-smolvla-sim-real-10task"
+CHECKPOINT = motion_checkpoint()  # the [motion] section of configs/models.toml
 TASK = "Pick up a cube and place in the bin"
 POWER_ON = np.array([-5.76, -100.0, 92.97, 63.38, -0.53, 1.90], dtype=np.float64)
 CHUNK = 50

@@ -1,6 +1,0 @@
-{
-  "checkout": "~/GitHub/sam3-tracker-rocm-v0.4.0-rc1",
-  "commit": "8005dc6ab0f52d5291e423e2519018b4aa4fd01c",
-  "model_dir": "~/GitHub/sam3-tracker-rocm-v0.4.0-rc1/model/sam3",
-  "compiled_dir": "~/.cache/sam3-tracker-rocm/build-0.4.0-rc1-8005dc6ab0f5/onnx_files_504"
-}

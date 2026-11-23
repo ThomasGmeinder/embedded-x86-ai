@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 
-from so101_smolvla.demo import DemoSession
+from so101_smolvla.demo import COMMAND_RECEIVED, TRANSCRIPT_RECEIVED, DemoSession
 from so101_smolvla.pick_place import PickPlaceScene
 from so101_smolvla.voice.intents import Intent, ParsedCommand
 from test_three_cube_rollout import StandInPolicy, StandInScene
@@ -27,9 +27,11 @@ class Gemma:
     def __init__(self) -> None:
         self.hold = threading.Event()
         self.hold.set()
+        self.entered = threading.Event()  # set when a request has reached Gemma
         self.asked: list[str] = []
 
     def parse(self, text: str) -> ParsedCommand:
+        self.entered.set()
         self.hold.wait()
         self.asked.append(text)
         return ANSWERS.get(text, ParsedCommand(Intent.UNKNOWN, {}, text))
@@ -68,12 +70,105 @@ def test_a_typed_command_runs_one_pick_and_the_state_follows_it():
 def test_a_spoken_command_arrives_with_gemmas_fields_and_is_not_asked_again():
     scene, gemma, session = _session()
     try:
-        session.on_spoken(ANSWERS["grab the blue one"], 0.9)
+        session.command_received(ANSWERS["grab the blue one"], 0.9)
         assert session.wait_idle(10)
         assert gemma.asked == [] and scene.targets == ["blue"]
         assert session.results[-1]["gemma"]["how"] == "synthetic voice"
         assert _kinds(session, "you") == ["you: grab the blue one"]
     finally:
+        session.close()
+
+
+def test_a_spoken_call_starts_the_pick_before_its_words_and_the_words_are_said_when_they_come():
+    scene, gemma, session = _session()
+    try:
+        # The call as the listener hands it over the moment Gemma has written it: no words yet.
+        session.command_received(ParsedCommand(Intent.PICK_PLACE, {"object": "blue one"}), 1.4)
+        assert session.wait_idle(10)
+        assert gemma.asked == [] and scene.targets == ["blue"]
+        assert _kinds(session, "you") == []  # nothing is made up for the words
+        assert _kinds(session, "call")[0].startswith("-> pick_place(object: blue one)  (1.40 s)")
+        # The whole answer follows: its words, and no second pick.
+        session.transcript_received(ANSWERS["grab the blue one"])
+        assert _kinds(session, "you") == ["you: grab the blue one"]
+        assert session.wait_idle(10) and scene.targets == ["blue"]
+        session.transcript_received(ParsedCommand(Intent.PICK_PLACE, {"object": "blue one"}))  # words not made out
+        assert _kinds(session, "you") == ["you: grab the blue one"]
+    finally:
+        session.close()
+
+
+def test_the_picture_is_told_of_the_call_when_it_arrives_and_again_of_the_words_while_the_worker_is_busy():
+    scene, gemma, session = _session()
+    try:
+        gemma.hold.clear()  # the worker is held inside a typed request: it cannot say anything
+        session.submit("put the green cube in the bin")
+        # The typed sentence is shown before Gemma has answered; its call is not there yet.
+        assert gemma.entered.wait(10)
+        assert _kinds(session, "you") == ["you: put the green cube in the bin"] and _kinds(session, "call") == []
+
+        # A spoken call arrives: the picture has it when command_received returns, on the caller's thread.
+        session.changed.clear()
+        session.command_received(ParsedCommand(Intent.PICK_PLACE, {"object": "blue one"}), 1.4)
+        assert session.changed.is_set()
+        assert _kinds(session, "call") == ["-> pick_place(object: blue one)  (1.40 s)"]
+        assert _kinds(session, "you") == ["you: put the green cube in the bin"]  # its words are not there yet
+        assert scene.targets == []  # nothing moved: the worker is still held
+
+        # The words follow: a second update of the picture.
+        session.changed.clear()
+        session.transcript_received(ANSWERS["grab the blue one"])
+        assert session.changed.is_set()
+        assert _kinds(session, "you") == ["you: put the green cube in the bin", "you: grab the blue one"]
+
+        gemma.hold.set()
+        assert session.wait_idle(10)
+        assert scene.targets == ["green", "blue"]
+        # The spoken call was shown once, when it arrived; the worker did not write it again.
+        calls = _kinds(session, "call")
+        assert len(calls) == 2 and sum(call.startswith("-> pick_place(object: blue one)") for call in calls) == 1
+        # The events, by name, in the order they happened: the typed sentence, the spoken call,
+        # its words, and the typed sentence's call when Gemma was let go.
+        assert [(name, text) for name, _, text in session.events] == [
+            (TRANSCRIPT_RECEIVED, "you: put the green cube in the bin"),
+            (COMMAND_RECEIVED, "-> pick_place(object: blue one)"),
+            (TRANSCRIPT_RECEIVED, "you: grab the blue one"),
+            (COMMAND_RECEIVED, "-> pick_place(object: green cube, place: bin)"),
+        ]
+        times = [at for _, at, _ in session.events]
+        assert times == sorted(times)
+    finally:
+        gemma.hold.set()
+        session.close()
+
+
+def test_a_command_and_its_transcript_are_drawn_when_they_happen_not_at_the_next_frame():
+    from so101_smolvla.demo_view import DemoView
+
+    scene, _, session = _session()
+    # One frame every 30 s: a draw that waits for the frame pause cannot come within the bounds below.
+    view = DemoView(session, fps=1 / 30)
+    try:
+        view.show()
+        session.say("a note")  # an ordinary change: drawn, then the frame pause begins
+        assert view.drawn.wait(10)
+        frames = view.frames
+        for event in (
+            lambda: session.command_received(ParsedCommand(Intent.LEARN_STACK, {}), 1.4),
+            lambda: session.transcript_received(ANSWERS["learn the stack"], 2.1),
+        ):
+            view.drawn.clear()
+            event()
+            assert view.drawn.wait(10)  # the draw the event caused, inside the 30 s pause
+            assert view.frames > frames
+            frames = view.frames
+        calls = _kinds(session, "call")
+        assert len(calls) == 1 and calls[0].startswith("-> learn_stack") and calls[0].endswith("  (1.40 s)")
+        assert _kinds(session, "you") == ["you: learn the stack  (2.10 s)"]
+        # Both events ended the pause through the session's own event, which the draw clears.
+        assert [name for name, _, _ in session.events] == [COMMAND_RECEIVED, TRANSCRIPT_RECEIVED]
+    finally:
+        view.close()
         session.close()
 
 
