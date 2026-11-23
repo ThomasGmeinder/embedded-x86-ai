@@ -9,12 +9,18 @@ from __future__ import annotations
 
 import ctypes
 import io
+import struct
+import subprocess
+import sys
 import wave
+from pathlib import Path
 
 import numpy as np
 from scipy.signal import resample_poly
 
 from so101_smolvla.voice.settings import Settings, SetupFailure, load_settings
+
+ESPEAK_ONCE = Path(__file__).with_name("espeak_once.py")  # one sentence, in a process of its own
 
 
 def wav_bytes(pcm: bytes, sample_rate: int) -> bytes:
@@ -41,7 +47,8 @@ def clip(sound: np.ndarray, sample_rate: int, window_s: float, lead_s: float) ->
 
 
 class SyntheticVoice:
-    """espeak-ng through its C library, set to the voice and rate of the settings."""
+    """espeak-ng through its C library, set to the voice and rate of the settings; each sentence is
+    made in a process of its own (``espeak_once.py``), so it sounds the same every time."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or load_settings()
@@ -52,55 +59,40 @@ class SyntheticVoice:
         self.peak = float(voice["peak"])
         self.lead_s = float(voice["lead_s"])
         try:
-            lib = ctypes.CDLL(self.library_name)
+            ctypes.CDLL(self.library_name)  # only whether it is installed; no sentence is made in this process
         except OSError:
             raise SetupFailure(f"{self.library_name} is not installed (apt install espeak-ng)") from None
-        lib.espeak_Initialize.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
-        lib.espeak_Initialize.restype = ctypes.c_int
-        lib.espeak_SetVoiceByName.argtypes = [ctypes.c_char_p]
-        lib.espeak_SetVoiceByName.restype = ctypes.c_int
-        lib.espeak_SetParameter.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
-        lib.espeak_SetParameter.restype = ctypes.c_int
-        lib.espeak_Synth.argtypes = [
-            ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint, ctypes.c_int, ctypes.c_uint, ctypes.c_uint,
-            ctypes.POINTER(ctypes.c_uint), ctypes.c_void_p,
-        ]
-        lib.espeak_Synth.restype = ctypes.c_int
-        lib.espeak_Synchronize.restype = ctypes.c_int
-        rate = lib.espeak_Initialize(2, 0, None, 0)  # 2 = AUDIO_OUTPUT_SYNCHRONOUS: samples go to the callback
-        if rate <= 0:
-            raise SetupFailure(f"espeak_Initialize returned {rate}")
-        if lib.espeak_SetVoiceByName(self.voice.encode()) != 0:
-            raise SetupFailure(f"espeak-ng has no voice {self.voice!r}")
-        if lib.espeak_SetParameter(1, self.words_per_minute, 0) != 0:  # 1 = espeakRATE
-            raise SetupFailure("espeak-ng did not take the speaking rate")
-        self._lib, self.rate = lib, rate
-        self._callback_type = ctypes.CFUNCTYPE(
-            ctypes.c_int, ctypes.POINTER(ctypes.c_short), ctypes.c_int, ctypes.c_void_p
-        )
+        self._spoken: dict[str, tuple[int, bytes]] = {}  # per sentence: espeak-ng's rate and samples
+
+    def _espeak(self, text: str) -> tuple[int, bytes]:
+        """espeak-ng's own samples of the sentence, made in a process of their own.
+
+        espeak-ng keeps state between sentences: asked twice in one process, the same sentence
+        comes out differently, and a spoken test's clip then depends on which tests spoke before
+        it (found 2026-11-23: a sentence the NPU heard right in a fresh process and wrong after
+        the 45 sentences of the tests before it). A process per sentence gives the same samples
+        every time; they are kept, so a sentence is made once per voice.
+        """
+        if text not in self._spoken:
+            # One child, awaited to its exit; the bound is for a child that hangs.
+            ran = subprocess.run(
+                [sys.executable, str(ESPEAK_ONCE), self.library_name, self.voice, str(self.words_per_minute), text],
+                capture_output=True, timeout=60,
+            )
+            if ran.returncode != 0 or len(ran.stdout) <= 4:
+                reason = ran.stderr.decode("utf-8", "replace").strip().splitlines()[-1:] or ["no sound"]
+                raise SetupFailure(f"espeak-ng could not speak {text!r}: {reason[0]}")
+            self._spoken[text] = (struct.unpack("<I", ran.stdout[:4])[0], ran.stdout[4:])
+        return self._spoken[text]
 
     def say(self, text: str, out_rate: int) -> np.ndarray:
-        """The sentence as int16 samples at ``out_rate``, without the silence before and after it."""
-        chunks = []
-
-        def collect(samples, count, _events):
-            if samples and count > 0:
-                chunks.append(np.ctypeslib.as_array(samples, shape=(count,)).copy())
-            return 0
-
-        callback = self._callback_type(collect)
-        self._lib.espeak_SetSynthCallback(callback)
-        data = text.encode("utf-8")
-        # position 0, counted in characters (1), no end position, text is UTF-8 (flag 1)
-        if self._lib.espeak_Synth(data, len(data) + 1, 0, 1, 0, 1, None, None) != 0:
-            raise SetupFailure(f"espeak-ng could not speak {text!r}")
-        self._lib.espeak_Synchronize()
-        if not chunks:
-            raise SetupFailure(f"espeak-ng gave no sound for {text!r}")
-        sound = np.concatenate(chunks).astype(np.float64)
+        """The sentence as int16 samples at ``out_rate``, without the silence before and after it.
+        The same sentence gives the same samples, whatever was said before it."""
+        rate, samples = self._espeak(text)
+        sound = np.frombuffer(samples, dtype="<i2").astype(np.float64)
         loud = np.flatnonzero(np.abs(sound) > 0.01 * np.abs(sound).max())
         sound = sound[loud[0]:loud[-1] + 1]
-        sound = resample_poly(sound, out_rate, self.rate)
+        sound = resample_poly(sound, out_rate, rate)
         sound *= self.peak * 32767 / np.abs(sound).max()
         return np.round(sound).astype(np.int16)
 

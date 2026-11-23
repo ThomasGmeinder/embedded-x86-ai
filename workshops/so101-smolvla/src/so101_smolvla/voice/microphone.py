@@ -1,14 +1,20 @@
-"""The live session: the microphone, Silero speech detection, rolling windows, Gemma.
+"""The live session: the microphone, Silero speech detection, utterances, Gemma.
 
 Frames of 20 ms arrive from the microphone. Each is gated by Silero and a
-level threshold. Every ``hop_s`` that holds enough speech, the last ``window_s``
-of sound goes to Gemma as one clip, and a command it finds is reported: its
-call the moment Gemma has written it, the whole answer with the words heard
-when that is complete. The same command is not reported again within
-``cooldown_s``. The parameters
-are the ``listening`` section of ``configs/voice.toml``. Nothing here sleeps to
-discover speech: the microphone read blocks on sound, the request thread
-blocks on its queue.
+level threshold. An utterance is the sound from the first frame of speech
+(with a little before it) to the moment the speaker has been silent for
+``end_silence_ms``; the frame that ends it sends it to Gemma as one clip, no
+longer than ``window_s``. Gemma takes a whole clip, not sound as it comes, so
+the end of the speech is the earliest moment a sentence can be sent. A command
+Gemma finds in it is reported: its call the moment Gemma has written it, the
+whole answer with the words heard when that is complete. The parameters are
+the ``listening`` section of ``configs/voice.toml``. Nothing here sleeps to
+discover speech: the microphone read blocks on sound, the end of an utterance
+is counted in its own frames, the request thread blocks on its queue.
+
+Until 2026-11-23 the session sent the last ``window_s`` of sound on a fixed
+grid, every 2 s that held speech: up to 2 s passed after a sentence before it
+was sent, half sentences were sent, and a filter dropped the repeats.
 """
 
 from __future__ import annotations
@@ -23,15 +29,17 @@ from collections import deque
 from typing import Callable
 
 import numpy as np
+from scipy.signal import lfilter, lfilter_zi
 
 from so101_smolvla.voice.client import GemmaClient
-from so101_smolvla.voice.intents import ParsedCommand
+from so101_smolvla.voice.intents import Intent, ParsedCommand
 from so101_smolvla.voice.settings import Settings, load_settings, silero_model
 from so101_smolvla.voice.speech import wav_bytes
 
 logger = logging.getLogger(__name__)
 
 FRAME_MS = 20
+WAITING_UTTERANCES = 4  # how many utterances may wait for Gemma; the oldest goes when one more arrives
 _STOP = None  # the sentinel that ends the request thread
 
 
@@ -42,49 +50,107 @@ def dbfs(pcm: bytes) -> float:
     return 20 * math.log10(max(rms / 32768, 1e-6))
 
 
-class HopWindows:
-    """Keep the latest window and emit it once per hop of qualified speech."""
+class OffsetRemover:
+    """Takes a constant offset out of the microphone's samples, frame after frame.
 
-    def __init__(self, sample_rate: int, window_s: float, hop_s: float, min_voice_ms: int) -> None:
+    This machine's built-in microphone delivers samples around +1028, not around 0 (measured
+    2026-11-23: the mean alone reads -30.1 dBFS, the room without it -59.8 dBFS). With the
+    offset in, the level of every frame reads about -30 dBFS whatever is said, and it is in
+    the sound the detector and Gemma get. A first-order high-pass with its corner near 13 Hz
+    at 16 kHz, far below speech; it starts settled on the first sample, so there is no thump.
+    """
+
+    def __init__(self, pole: float = 0.995) -> None:
+        self._b, self._a = (1.0, -1.0), (1.0, -pole)
+        self.reset()
+
+    def reset(self) -> None:
+        self._state = None
+
+    def feed(self, pcm: bytes) -> bytes:
+        samples = np.frombuffer(pcm, dtype="<i2").astype(np.float64)
+        if self._state is None:
+            self._state = lfilter_zi(self._b, self._a) * samples[0]
+        cleaned, self._state = lfilter(self._b, self._a, samples, zi=self._state)
+        return np.clip(np.round(cleaned), -32768, 32767).astype("<i2").tobytes()
+
+
+class Utterances:
+    """Cut the microphone's frames into utterances and hand each one over the moment it has ended.
+
+    An utterance begins at the first frame that counts as speech, with ``pre_roll_ms`` of the
+    sound before it (the detector answers a little after a word begins). It has ended when
+    ``end_silence_ms`` of frames in a row did not count as speech: that frame returns the
+    utterance, so nothing waits for a clock. One that grows to ``max_s`` is handed over as it
+    is and the next begins. One with less than ``min_voice_ms`` of speech in it (a click, a
+    cough) is dropped.
+    """
+
+    def __init__(
+        self, sample_rate: int, max_s: float, end_silence_ms: int, pre_roll_ms: int, min_voice_ms: int
+    ) -> None:
         self.frame_bytes = sample_rate * FRAME_MS // 1000 * 2
-        self.frames: deque[tuple[bytes, bool]] = deque(maxlen=round(window_s * 1000 / FRAME_MS))
-        self.hop = round(hop_s * 1000 / FRAME_MS)
+        self.max_frames = round(max_s * 1000 / FRAME_MS)
+        self.end_silence_frames = max(1, round(end_silence_ms / FRAME_MS))
         self.min_voice_frames = max(1, round(min_voice_ms / FRAME_MS))
-        self.count = 0
+        self.before: deque[bytes] = deque(maxlen=max(1, round(pre_roll_ms / FRAME_MS)))
+        self.clear()
 
     def clear(self) -> None:
-        self.frames.clear()
-        self.count = 0
+        self.before.clear()
+        self.frames: list[bytes] = []  # the utterance under way; empty between utterances
+        self.voiced = 0  # its frames that counted as speech
+        self.silent = 0  # its frames in a row, at its end, that did not
+
+    @property
+    def speaking(self) -> bool:
+        """Whether an utterance is under way."""
+        return bool(self.frames)
 
     def feed(self, pcm: bytes, qualified: bool) -> bytes | None:
-        """Append one 20 ms frame. Return the window PCM when a hop is due and holds speech."""
+        """Take one 20 ms frame. Return the utterance's PCM on the frame that ends it."""
         if len(pcm) != self.frame_bytes:
             raise ValueError("Invalid PCM frame length")
-        self.frames.append((pcm, qualified))
-        self.count += 1
-        if self.count % self.hop:
+        if not self.frames:
+            if not qualified:
+                self.before.append(pcm)
+                return None
+            self.frames = [*self.before, pcm]
+            self.before.clear()
+            self.voiced, self.silent = 1, 0
             return None
-        recent = list(self.frames)[-self.hop:]
-        if sum(1 for _, spoke in recent if spoke) < self.min_voice_frames:
+        self.frames.append(pcm)
+        if qualified:
+            self.voiced += 1
+            self.silent = 0
+        else:
+            self.silent += 1
+        if self.silent < self.end_silence_frames and len(self.frames) < self.max_frames:
             return None
-        return b"".join(frame for frame, _ in self.frames)
+        ended, voiced = self.frames, self.voiced
+        self.frames, self.voiced, self.silent = [], 0, 0
+        # The end of this utterance is the sound before the next one. Gemma hears a sentence
+        # badly that begins at a clip's first sample (measured 2026-11-23: two of four test
+        # sentences lost their first words without sound before them).
+        self.before.extend(ended[-self.before.maxlen:])
+        return b"".join(ended) if voiced >= self.min_voice_frames else None
 
 
-class CommandFilter:
-    """Drop unknown, stale, and repeated commands from overlapping windows."""
+def at_level(pcm: bytes, peak: float, most_gain: float) -> bytes:
+    """The sound scaled so that its loud samples reach ``peak`` of full scale, by ``most_gain`` at most.
 
-    def __init__(self, cooldown_s: float) -> None:
-        self.cooldown_s = cooldown_s
-        self.accepted: dict[str, tuple[float, float]] = {}
-
-    def accept(self, command: str, window_start: float, window_end: float, now: float) -> bool:
-        if not command or command == "unknown":
-            return False
-        last = self.accepted.get(command)
-        if last and (window_start <= last[0] or now - last[1] < self.cooldown_s):
-            return False
-        self.accepted[command] = (window_end, now)
-        return True
+    Gemma hears quiet sound worse (measured 2026-11-23: at a tenth of the synthetic test
+    voice's level a "green" became "blue"), and this machine's microphone is quiet: speech
+    frames at -43 dBFS in the median. "Loud" is the level only one sample in a thousand
+    exceeds, so a click does not set the scale; what exceeds full scale after it is clipped.
+    Silence stays silence: there is a most gain.
+    """
+    samples = np.frombuffer(pcm, dtype="<i2").astype(np.float64)
+    loud = float(np.percentile(np.abs(samples), 99.9)) if samples.size else 0.0
+    if loud <= 0.0:
+        return pcm
+    gain = min(most_gain, peak * 32767 / loud)
+    return np.clip(np.round(samples * gain), -32768, 32767).astype("<i2").tobytes()
 
 
 class Silero:
@@ -137,9 +203,12 @@ class Listener:
         self.device = device if device is not None else self.settings.listening.get("mic_device")
         self.opened = threading.Event()  # set once the microphone streams, or once ``error`` is set
         self.error: str | None = None
+        self.overflows = 0  # reads at which the microphone's buffer had overflowed
         self.transcribing = False
         self._stop = threading.Event()
-        self._pending: queue.Queue = queue.Queue(maxsize=1)
+        # Utterances that wait while Gemma answers an earlier one. Each is a sentence of its own,
+        # so they are kept; bounded, the oldest goes when a fifth arrives.
+        self._pending: queue.Queue = queue.Queue(maxsize=WAITING_UTTERANCES)
         self._threads: list[threading.Thread] = []
 
     def start(
@@ -175,7 +244,7 @@ class Listener:
             thread.join(timeout=5.0)
 
     def _put(self, item) -> None:
-        """Queue one item, dropping the one still waiting: Gemma gets the latest window."""
+        """Queue one item without blocking the microphone; when the queue is full the oldest goes."""
         try:
             self._pending.put_nowait(item)
         except queue.Full:
@@ -191,32 +260,30 @@ class Listener:
     def _request(self, on_command, on_busy, on_call) -> None:
         listening = self.settings.listening
         rate = int(listening["sample_rate"])
-        commands = CommandFilter(float(listening["cooldown_s"]))
         max_age = float(listening["max_age_s"])
         while True:
-            item = self._pending.get()  # blocks on the next window or the stop sentinel
+            item = self._pending.get()  # blocks on the next utterance or the stop sentinel
             if item is _STOP:
                 return
-            window, started, ended = item
+            utterance, ended = item
             if time.monotonic() - ended > max_age:
                 continue
             if on_busy is not None:
                 on_busy(True)
             self.transcribing = True
-            accepted = []  # the call of this window, once the filter has let it through
+            accepted = []  # the call of this utterance, when it holds a command
 
             def call_written(call: ParsedCommand, seconds: float) -> bool:
-                # Runs inside the request, while Gemma still writes the words it heard. An early
-                # window often has no command yet; the next hop can still carry the phrase.
-                if not commands.accept(call.intent.value, started, ended, time.monotonic()):
-                    return False  # no command, or a repeat: its words are not read, the next window is asked sooner
+                # Runs inside the request, while Gemma still writes the words it heard.
+                if call.intent is Intent.UNKNOWN:
+                    return False  # no command: its words are not read, the next utterance is asked sooner
                 accepted.append(call)
                 if on_call is not None:
                     on_call(call, seconds)
                 return True
 
             try:
-                command = self.client.parse_audio(wav_bytes(window, rate), on_call=call_written)
+                command = self.client.parse_audio(wav_bytes(utterance, rate), on_call=call_written)
             except Exception:
                 logger.exception("Gemma audio request failed")
                 continue
@@ -231,17 +298,22 @@ class Listener:
         listening = self.settings.listening
         rate = int(listening["sample_rate"])
         samples = rate * FRAME_MS // 1000
-        windows = HopWindows(
-            rate, float(listening["window_s"]), float(listening["hop_s"]), int(listening["min_voice_ms"])
+        utterances = Utterances(
+            rate, float(listening["window_s"]), int(listening["end_silence_ms"]),
+            int(listening["pre_roll_ms"]), int(listening["min_voice_ms"]),
         )
         threshold = float(listening["min_dbfs"])
-        window_s = float(listening["window_s"])
+        sent_peak, most_gain = float(listening["sent_peak"]), float(listening["most_gain"])
+        offset = OffsetRemover()
         try:
             import sounddevice
 
             vad = Silero(float(listening["vad_threshold"]))
+            # latency "low": the sound library's default for input is its "high" figure (34.8 ms
+            # against 8.7 ms on this machine's default device, read from the library 2026-11-23).
             stream = sounddevice.RawInputStream(
                 samplerate=rate, blocksize=samples, channels=1, dtype="int16", device=self.device,
+                latency="low",
             )
         except Exception as exc:
             self.error = str(exc)
@@ -254,14 +326,21 @@ class Listener:
                 buffer, overflow = stream.read(samples)  # blocks on sound
                 now = time.monotonic()
                 if overflow:
-                    windows.clear()
+                    # Sound was lost between two reads: what was collected does not continue.
+                    self.overflows += 1
+                    logger.warning("the microphone's buffer overflowed (%d so far); the sentence under way is dropped", self.overflows)
+                    utterances.clear()
                     vad.reset()
+                    offset.reset()
                     continue
-                pcm = bytes(buffer)
+                # The offset comes out first: the level, the detector and Gemma get the sound itself.
+                pcm = offset.feed(bytes(buffer))
                 level = dbfs(pcm)
                 qualified = vad.feed(pcm, rate) >= vad.threshold and level >= threshold
                 if on_level is not None:
                     on_level(max(0.0, min(1.0, (level + 60) / 60)), qualified)
-                window = windows.feed(pcm, qualified)
-                if window is not None:
-                    self._put((window, now - window_s, now))
+                # The frame that ends an utterance hands it over: it goes to Gemma now, at the
+                # level Gemma was measured with.
+                utterance = utterances.feed(pcm, qualified)
+                if utterance is not None:
+                    self._put((at_level(utterance, sent_peak, most_gain), now))

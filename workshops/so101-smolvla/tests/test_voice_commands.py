@@ -12,12 +12,14 @@ import time
 import wave
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import numpy as np
 import pytest
 
 from so101_smolvla.voice import settings as voice_settings
 from so101_smolvla.voice.client import GemmaClient, answer_pieces
 from so101_smolvla.voice.commands import SPOKEN, TYPED, CommandFields, voice_ready
 from so101_smolvla.voice.intents import (
+    FIELDS,
     HEARD_PATTERN,
     INTENT_SYSTEM_PROMPT,
     OBJECT_PATTERN,
@@ -31,7 +33,7 @@ from so101_smolvla.voice.intents import (
     response_schema,
     schema_text,
 )
-from so101_smolvla.voice.microphone import _STOP, Listener
+from so101_smolvla.voice.microphone import _STOP, Listener, OffsetRemover, Utterances, at_level, dbfs
 from so101_smolvla.voice.server import RUNTIMES, GemmaServer
 from so101_smolvla.voice.settings import BACKENDS, SetupFailure, check_ready, grammar, load_settings
 from so101_smolvla.voice.speech import SyntheticVoice
@@ -109,14 +111,21 @@ def test_readiness_names_each_missing_piece_and_the_setup_script():
 def test_the_grammar_and_the_schema_name_every_command_and_the_instructions_describe_each():
     text = grammar()
     schema = response_schema()
-    assert schema["properties"]["command"]["enum"] == [intent.value for intent in Intent]
+    # One answer is a list of four strings, in the grammar's order: command, object, place, heard.
+    assert FIELDS == ("command", "object", "place", "heard")
+    assert schema["type"] == "array" and schema["items"] is False
+    assert schema["minItems"] == schema["maxItems"] == len(schema["prefixItems"]) == len(FIELDS)
+    assert schema["prefixItems"][0]["enum"] == [intent.value for intent in Intent]
+    assert [item.get("pattern") for item in schema["prefixItems"][1:]] == [OBJECT_PATTERN, PLACE_PATTERN, HEARD_PATTERN]
     for intent in Intent:
         assert f'"\\"{intent.value}\\""' in text, intent
         assert f'"{intent.value}"' in INTENT_SYSTEM_PROMPT, intent
-    assert schema["required"] == ["command", "object", "place", "heard"]  # the grammar's order
-    assert schema["additionalProperties"] is False
+    assert 'root    ::= "[" ws cmd ws "," ws obj ws "," ws place ws "," ws said ws "]"' in text
+    # The instructions show the same shape and name the three fields after the command in its order.
+    assert 'with a JSON list ["<name>", "<object or empty string>", "<place or empty string>", "<words>"]' in INTENT_SYSTEM_PROMPT
+    assert 'the command, then "object", then "place", then "heard".' in INTENT_SYSTEM_PROMPT
     assert response_format() == {"type": "json_schema", "json_schema": {"name": "intent", "schema": schema}}
-    assert schema_text() == schema_text() and schema_text().startswith('{"additionalProperties":false')
+    assert schema_text() == schema_text() and schema_text().startswith('{"items":false')
 
 
 @pytest.mark.parametrize(
@@ -140,11 +149,16 @@ def test_the_schemas_patterns_accept_and_reject_what_the_grammar_does(pattern, a
 
 
 def test_an_answer_is_read_from_gemmas_json_and_anything_else_is_none():
-    command = command_from_json('{"command": "pick_place", "object": "red cube", "place": "bin", "heard": "put it"}')
+    command = command_from_json('["pick_place", "red cube", "bin", "put it"]')
     assert command.intent is Intent.PICK_PLACE and command.object_name == "red cube"
     assert command.place == "bin" and command.transcript == "put it"
-    assert command_from_json('{"command": "fly"}').intent is Intent.UNKNOWN
+    stop = command_from_json('["stop", "", "", "stop robot"]')
+    assert stop.intent is Intent.STOP and stop.params == {} and stop.transcript == "stop robot"
+    assert command_from_json('["fly"]').intent is Intent.UNKNOWN
     assert command_from_json("not json") is None and command_from_json("") is None
+    assert command_from_json("[]") is None and command_from_json('["stop", 3]') is None
+    # The shape of before 2026-11-23, an object with named keys, is not an answer any more.
+    assert command_from_json('{"command": "stop", "object": "", "place": "", "heard": ""}') is None
 
 
 def test_the_synthetic_voice_gives_a_clip_of_the_windows_length_at_the_listening_rate():
@@ -160,6 +174,22 @@ def test_the_synthetic_voice_gives_a_clip_of_the_windows_length_at_the_listening
     assert frames == int(settings.listening["window_s"]) * rate
     assert 0.5 < spoken_s < settings.listening["window_s"] - voice.lead_s
     assert voice.recorded()["clip_s"] == settings.listening["window_s"]
+
+
+def test_a_sentence_sounds_the_same_whatever_the_voice_said_before_it():
+    settings = load_settings()
+    sentence = "robot, please place the green cube into the container"
+    voice = SyntheticVoice(settings)
+    first, spoken_s = voice.clip(sentence)
+    # espeak-ng keeps state between sentences in one process; each is made in a process of its own.
+    for other in ("stop robot", "put the red cube in the bin", "grab the blue one and drop it in the box"):
+        voice.clip(other)
+    assert voice.clip(sentence) == (first, spoken_s)
+    assert SyntheticVoice(settings).clip(sentence) == (first, spoken_s)  # another voice object, the same sound
+    assert voice.clip("stop robot")[0] != first
+    nobody = dataclasses.replace(settings, synthetic_voice={**settings.synthetic_voice, "voice": "no-such-voice"})
+    with pytest.raises(SetupFailure, match="espeak-ng could not speak 'stop robot': espeak-ng has no voice 'no-such-voice'"):
+        SyntheticVoice(nobody).clip("stop robot")
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -231,8 +261,8 @@ def test_the_fields_record_as_the_dictionary_a_result_stores():
 
 # ---- the answer read as it is written: the call before the words heard ---------------------------
 
-ANSWER = '{"command": "pick_place", "object": "green cube", "place": "bin", "heard": "Put the green cube in the bin"}'
-CALL_ENDS = ANSWER.index(', "heard"') + 1  # the comma after the place completes the call
+ANSWER = '["pick_place", "green cube", "bin", "Put the green cube in the bin"]'
+CALL_ENDS = ANSWER.index(', "Put') + 1  # the comma after the place completes the call
 
 
 def test_the_call_is_read_from_the_text_so_far_once_its_last_character_is_in():
@@ -249,10 +279,14 @@ def test_the_call_is_read_from_the_text_so_far_once_its_last_character_is_in():
     assert heard_from_partial(ANSWER[: ANSWER.index("Put the gre") + len("Put the gre")]) == "Put the gre"
     assert heard_from_partial(ANSWER) == whole.transcript == "Put the green cube in the bin"
     # Empty fields stay out of the parameters; a command the model may not name is unknown.
-    stop = call_from_partial('{"command": "stop", "object": "", "place": "", "heard": "st')
+    stop = call_from_partial('["stop", "", "", "st')
     assert stop.intent is Intent.STOP and stop.params == {}
-    assert call_from_partial('{"command": "fly", "object": "", "place": "",').intent is Intent.UNKNOWN
+    assert heard_from_partial('["stop", "", "", "st') == "st"
+    assert call_from_partial('["fly", "", "",').intent is Intent.UNKNOWN
     assert call_from_partial("") is None and call_from_partial("not json") is None
+    # Written without spaces, as a server may write it, it reads the same.
+    tight = call_from_partial('["pick_place","green cube","bin","Put')
+    assert tight.params == {"object": "green cube", "place": "bin"} and heard_from_partial('["stop","","","go') == "go"
 
 
 def _events(*pieces: str, usage: dict | None = None) -> list[bytes]:
@@ -343,34 +377,118 @@ def test_the_client_hands_over_the_call_while_the_words_are_still_unwritten():
         stand_in.close()
 
 
-def test_the_listener_reports_the_call_first_then_the_whole_answer_and_a_repeat_neither():
-    call = ParsedCommand(Intent.PICK_PLACE, {"object": "green cube"})
-    whole = ParsedCommand(Intent.PICK_PLACE, {"object": "green cube"}, "grab the green cube")
-    order = []
-    asked = threading.Semaphore(0)  # released each time the listener gives the client a window
+def test_the_listener_reports_the_call_first_then_the_whole_answer_and_nothing_for_no_command():
+    answers = [
+        (ParsedCommand(Intent.PICK_PLACE, {"object": "green cube"}),
+         ParsedCommand(Intent.PICK_PLACE, {"object": "green cube"}, "grab the green cube")),
+        (ParsedCommand(Intent.UNKNOWN), ParsedCommand(Intent.UNKNOWN, {}, "nice weather")),
+        # The same command again is a sentence of its own: utterances do not overlap, nothing is dropped.
+        (ParsedCommand(Intent.PICK_PLACE, {"object": "green cube"}),
+         ParsedCommand(Intent.PICK_PLACE, {"object": "green cube"}, "grab the green cube")),
+    ]
+    order, wanted = [], []
 
     class Client:
         def parse_audio(self, wav, on_call=None):
-            asked.release()
-            on_call(call, 1.5)
+            call, whole = answers[len(wanted)]
+            wanted.append(on_call(call, 1.5))  # False: the listener has no use for the words
             order.append("words written")
             return whole
 
     listener = Listener(Client(), settings=load_settings())
     now = time.monotonic()
-    window = bytes(2 * 16000 * 6)
     reported = threading.Thread(
         target=listener._request,
         args=(lambda command: order.append(("whole", command.transcript)), None,
               lambda found, seconds: order.append(("call", found.transcript, seconds))),
     )
+    for _ in answers:  # utterances wait in the queue while Gemma answers an earlier one
+        listener._put((bytes(2 * 16000), now))
+    listener._put(_STOP)
     reported.start()
-    listener._pending.put((window, now - 6, now))
-    # The queue holds one window: the next goes in once the client was given this one.
-    assert asked.acquire(timeout=10)
-    listener._pending.put((window, now - 4, now + 2))  # the next hop holds the same sentence: within the cooldown
-    assert asked.acquire(timeout=10)
-    listener._pending.put(_STOP)
     reported.join(10)
     assert not reported.is_alive()
-    assert order == [("call", "", 1.5), "words written", ("whole", "grab the green cube"), "words written"]
+    assert order == [
+        ("call", "", 1.5), "words written", ("whole", "grab the green cube"),
+        "words written",
+        ("call", "", 1.5), "words written", ("whole", "grab the green cube"),
+    ]
+    assert wanted == [True, False, True]
+
+
+def test_an_utterance_is_handed_over_on_the_frame_that_ends_it():
+    frame = bytes(640)  # 20 ms at 16 kHz
+    cut = Utterances(16000, max_s=1.0, end_silence_ms=100, pre_roll_ms=40, min_voice_ms=40)
+    assert cut.end_silence_frames == 5 and cut.max_frames == 50 and cut.before.maxlen == 2
+
+    def feed(pattern: str) -> list[int | None]:
+        """One frame per character, 'v' speech and '.' not; the length in frames of what each returned."""
+        return [None if got is None else len(got) // 640 for got in (cut.feed(frame, c == "v") for c in pattern)]
+
+    # Silence, then speech, then silence: handed over on the fifth silent frame, not a frame later,
+    # with the two frames from before the speech: 2 + 4 + 5 frames.
+    assert feed("....vvvv....") == [None] * 12 and cut.speaking
+    assert feed(".") == [11] and not cut.speaking
+    # A pause shorter than the end silence stays inside the utterance. It begins right after the
+    # one before it, whose last two frames are the sound in front of it: Gemma hears a sentence
+    # badly that starts at a clip's first sample.
+    assert feed("vv...vv....") == [None] * 11
+    assert feed(".") == [2 + 2 + 3 + 2 + 5]
+    # Less speech than min_voice_ms (a click) is dropped.
+    cut.clear()
+    assert feed("v.....") == [None] * 6 and not cut.speaking
+    # One that reaches the longest length is handed over as it is; the speech after it is the
+    # next, again with the two frames before it.
+    cut.clear()
+    assert feed("v" * 49) == [None] * 49
+    assert feed("v") == [50] and not cut.speaking
+    assert feed("vv.....") == [None] * 6 + [2 + 2 + 5]
+    # After a break in the microphone's frames nothing of the old sound is kept.
+    feed("vvv")
+    cut.clear()
+    assert not cut.speaking and not cut.before and feed(".....") == [None] * 5
+    with pytest.raises(ValueError, match="Invalid PCM frame length"):
+        cut.feed(bytes(10), True)
+
+
+def test_the_microphones_constant_offset_is_taken_out_and_the_speech_is_left():
+    rate = 16000
+    time_s = np.arange(rate) / rate
+    tone = 2000 * np.sin(2 * np.pi * 300 * time_s)  # in the range of speech
+    samples = np.round(tone + 1028).astype("<i2")  # this machine's microphone: samples around +1028
+    frames = [samples[i:i + 320].tobytes() for i in range(0, rate, 320)]
+    assert -31 < dbfs(frames[10]) < -22  # with the offset in, the level is the offset's and the tone's together
+
+    remover = OffsetRemover()
+    cleaned = np.concatenate([np.frombuffer(remover.feed(frame), "<i2") for frame in frames]).astype(float)
+    assert abs(cleaned[rate // 2:].mean()) < 2  # the offset is gone
+    assert abs(np.abs(cleaned[rate // 2:]).max() - 2000) < 30  # the tone is as loud as it was
+    assert np.abs(cleaned[:320]).max() < 2100  # no thump at the start: it begins settled on the first sample
+
+    # Silence with the offset reads as silence, not as -30 dBFS.
+    quiet = OffsetRemover()
+    offset_only = np.full(320, 1028, "<i2").tobytes()
+    assert dbfs(offset_only) > -31 and dbfs(quiet.feed(offset_only)) < -90
+    # After a break in the frames it settles anew on the next first sample.
+    quiet.reset()
+    assert dbfs(quiet.feed(np.full(320, -500, "<i2").tobytes())) < -90
+
+
+def test_an_utterance_is_sent_at_the_test_voices_level_and_silence_is_not_blown_up():
+    time_s = np.arange(16000) / 16000
+    speech = np.round(300 * np.sin(2 * np.pi * 300 * time_s)).astype("<i2")  # quiet: about -40 dBFS
+    loud = np.frombuffer(at_level(speech.tobytes(), peak=0.5, most_gain=100), "<i2")
+    assert abs(int(np.abs(loud).max()) - 16384) < 200  # half of full scale
+    # The gain has a ceiling: quiet speech is raised by most_gain and no further.
+    capped = np.frombuffer(at_level(speech.tobytes(), peak=0.5, most_gain=20), "<i2")
+    assert abs(int(np.abs(capped).max()) - 6000) < 20
+    # One click does not set the scale: the speech still comes up, the click is clipped.
+    clicked = speech.copy()
+    clicked[100] = 32000
+    out = np.frombuffer(at_level(clicked.tobytes(), peak=0.5, most_gain=100), "<i2")
+    assert abs(int(np.abs(out[200:]).max()) - 16384) < 400 and out[100] == 32767
+    # Sound that is already loud is brought down to the same level; nothing stays nothing.
+    assert abs(int(np.abs(np.frombuffer(at_level((speech * 100).astype("<i2").tobytes(), 0.5, 20), "<i2")).max()) - 16384) < 200
+    assert at_level(bytes(640), 0.5, 20) == bytes(640) and at_level(b"", 0.5, 20) == b""
+    settings = load_settings()
+    assert settings.listening["sent_peak"] == settings.synthetic_voice["peak"]  # the level Gemma was measured with

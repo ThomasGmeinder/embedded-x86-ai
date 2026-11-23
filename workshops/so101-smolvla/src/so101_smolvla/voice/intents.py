@@ -9,6 +9,13 @@ instructions and the grammar are the texts measured in SPEC.md and are not
 edited lightly. The "stop" entry is the wording of 2026-11-23, chosen by
 measurement on both backends (TESTING_LEDGER.md, "the stop entry"); the
 sentences that hold it are ``examples.STOP_ORDERS`` and the lists beside it.
+
+One answer is a JSON list of four strings: the command, the object, the place
+and the words heard, in that order (:data:`FIELDS`). Until 2026-11-23 it was
+an object with those four names as keys; the list was chosen by measurement
+for its fewer tokens, on the user's word to shorten the answer. The sentence
+of the instructions that shows the shape, the grammar and the schema changed
+with it; every other word of the instructions is as it was.
 """
 
 from __future__ import annotations
@@ -25,18 +32,27 @@ PLACE_PATTERN = f"^$|^{WORD}( {WORD}){{0,1}}$"  # empty, or one or two lowercase
 HEARD_PATTERN = r"^[a-zA-Z0-9',.?!\- ]*$"  # the words said; empty when they cannot be made out
 
 
+FIELDS = ("command", "object", "place", "heard")  # one answer, in the order it is written
+
+
 def response_schema() -> dict:
-    """The JSON schema of one answer: the grammar's shape, with the commands of :class:`Intent`."""
+    """The JSON schema of one answer: the grammar's shape, with the commands of :class:`Intent`.
+
+    A list of four strings, the fields of :data:`FIELDS` by position. A list and not an object
+    with named keys: the call is then 12 tokens of Gemma's instead of 21 (measured on
+    FastFlowLM, 2026-11-23: 1.25 s to the complete call instead of 1.94 s; shorter key names
+    saved nothing, a key is one token whatever its length)."""
     return {
-        "type": "object",
-        "properties": {
-            "command": {"type": "string", "enum": [intent.value for intent in Intent]},
-            "object": {"type": "string", "pattern": OBJECT_PATTERN},
-            "place": {"type": "string", "pattern": PLACE_PATTERN},
-            "heard": {"type": "string", "pattern": HEARD_PATTERN},
-        },
-        "required": ["command", "object", "place", "heard"],
-        "additionalProperties": False,
+        "type": "array",
+        "prefixItems": [
+            {"type": "string", "enum": [intent.value for intent in Intent]},
+            {"type": "string", "pattern": OBJECT_PATTERN},
+            {"type": "string", "pattern": PLACE_PATTERN},
+            {"type": "string", "pattern": HEARD_PATTERN},
+        ],
+        "items": False,
+        "minItems": len(FIELDS),
+        "maxItems": len(FIELDS),
     }
 
 
@@ -93,33 +109,26 @@ class ParsedCommand:
 
 
 def command_from_json(text: str) -> ParsedCommand | None:
-    """The answer in Gemma's JSON text, or None when the text is not one."""
+    """The answer in Gemma's JSON text, a list of the four fields, or None when the text is not one."""
     raw = (text or "").strip()
-    if not raw.startswith("{"):
+    if not raw.startswith("["):
         return None
     try:
         data = json.loads(raw)
-        command = data["command"]
-    except (json.JSONDecodeError, KeyError, TypeError):
+    except json.JSONDecodeError:
         return None
-    params: dict[str, str] = {}
-    obj = str(data.get("object", "") or "").strip()
-    if obj:
-        params["object"] = obj
-    place = str(data.get("place", "") or "").strip()
-    if place:
-        params["place"] = place
-    heard = str(data.get("heard", "") or "").strip()
-    return ParsedCommand(Intent.from_string(str(command)), params=params, transcript=heard)
+    if not isinstance(data, list) or not data or not all(isinstance(item, str) for item in data):
+        return None
+    command, obj, place, heard = (*data, "", "", "")[: len(FIELDS)]
+    params = {key: value.strip() for key, value in (("object", obj), ("place", place)) if value.strip()}
+    return ParsedCommand(Intent.from_string(command), params=params, transcript=heard.strip())
 
 
 # An answer is written in the order command, object, place, heard (the grammar and the
 # schema fix it), so the call is complete while the words heard are still being written.
 # The values of the first three hold no quote and no backslash (WORD above).
-_CALL_SO_FAR = re.compile(
-    r'\s*\{\s*"command"\s*:\s*"([a-z_]*)"\s*,\s*"object"\s*:\s*"([a-z ]*)"\s*,\s*"place"\s*:\s*"([a-z ]*)"\s*,'
-)
-_HEARD_SO_FAR = re.compile(r'"heard"\s*:\s*"([^"\\]*)')
+_CALL_SO_FAR = re.compile(r'\s*\[\s*"([a-z_]*)"\s*,\s*"([a-z ]*)"\s*,\s*"([a-z ]*)"\s*,')
+_HEARD_SO_FAR = re.compile(r'\s*"([^"\\]*)')  # what follows the call
 
 
 def call_from_partial(text: str) -> ParsedCommand | None:
@@ -138,7 +147,8 @@ def call_from_partial(text: str) -> ParsedCommand | None:
 
 def heard_from_partial(text: str) -> str:
     """The words heard as far as the answer's text has them: all of them in a finished answer."""
-    found = _HEARD_SO_FAR.search(text or "")
+    call = _CALL_SO_FAR.match(text or "")
+    found = _HEARD_SO_FAR.match(text, call.end()) if call else None
     return found.group(1).strip() if found else ""
 
 
@@ -147,7 +157,7 @@ You are the command router for a robot arm on a crowded floor. Other people
 are talking. Ignore background conversation, a second speaker, questions,
 quotes, negations, and anything not addressed to the robot: those are
 "unknown". Map a clear instruction to exactly one command and answer ONLY
-with a JSON object {"command": "<name>", "object": "<object or empty string>", "place": "<place or empty string>", "heard": "<words>"}.
+with a JSON list ["<name>", "<object or empty string>", "<place or empty string>", "<words>"]: the command, then "object", then "place", then "heard".
 "object" is the thing to act on for pick_place (one to three plain words,
 e.g. "ball", "water bottle", "small green bottle"); for every other command
 use "".

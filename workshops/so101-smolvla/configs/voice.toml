@@ -20,13 +20,26 @@ timeout_s = 30
 sample_rate = 16000
 # mic_device is left out: the system's default microphone. A device index or name
 # here selects another.
-window_s = 6
-hop_s = 2
-min_dbfs = -35
-vad_threshold = 0.5
-min_voice_ms = 100
-cooldown_s = 5
-max_age_s = 10
+# A frame quieter than this is not speech, whatever the detector says. Levels are of the sound
+# with the microphone's constant offset taken out. Measured on this machine's built-in
+# microphone, 2026-11-23: a person's speech frames -56 to -28 dBFS (median -43), the room
+# -61 to -48. Speech and room overlap, so the level cannot tell them apart here: at -60 this
+# does not hold speech back and the detector decides. (It was -35 and never closed: the
+# offset alone read -30.)
+min_dbfs = -60
+vad_threshold = 0.5  # Silero's probability from which a frame counts as speech
+# An utterance goes to Gemma with its loud samples at this share of full scale, the synthetic
+# test voice's level, raised by most_gain at most: Gemma hears quiet sound worse.
+sent_peak = 0.5
+most_gain = 20
+# An utterance is sent to Gemma the moment the speaker has been silent this long. Shorter
+# sends sooner and cuts a sentence at a shorter pause; 400 is a first value, not yet tuned
+# with a person at the microphone.
+end_silence_ms = 400
+pre_roll_ms = 300    # sound kept from before the first frame of speech: the detector answers late
+min_voice_ms = 100   # an utterance with less speech than this (a click, a cough) is dropped
+window_s = 6         # the longest utterance; also the length of the synthetic voice's test clip
+max_age_s = 10       # an utterance that waited longer than this for Gemma is not asked
 
 [synthetic_voice]
 library = "libespeak-ng.so.1"
