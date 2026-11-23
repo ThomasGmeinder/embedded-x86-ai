@@ -145,7 +145,7 @@ def test_a_seed_places_the_cube_outside_the_tray_and_is_written(tmp_path):
     assert saved["cube_yaw_deg"] == round(float(np.degrees(yaw)), 2)
 
 
-def test_scenarios_are_the_yaml_list_plus_the_scene():
+def test_scenarios_are_the_settings_list_plus_the_scene():
     names = [name for name, _xy in scenarios()]
     assert names[0] == "scene"
     assert "cube-0.14-0.18" in names

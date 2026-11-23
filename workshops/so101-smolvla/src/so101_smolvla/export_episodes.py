@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tomllib
 from pathlib import Path
-
-import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 DATASET = ROOT / "scripted_testing" / "dataset"
@@ -37,8 +36,8 @@ def accumulate() -> None:
 
 
 def main() -> None:
-    cfg = yaml.safe_load((ROOT / "configs" / "sim.yaml").read_text())
-    positions = [tuple(item) for item in cfg["cube_positions"]]
+    cfg = tomllib.loads((ROOT / "configs" / "sim.toml").read_text(encoding="utf-8"))
+    positions = [tuple(item) for item in cfg["distinct_cube_positions"]]
     top_src = DATASET / "videos" / "observation.images.top" / "chunk-000" / "file-000.mp4"
     wrist_src = DATASET / "videos" / "observation.images.wrist" / "chunk-000" / "file-000.mp4"
     probe = subprocess.run(

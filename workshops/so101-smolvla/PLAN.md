@@ -50,7 +50,7 @@ Order, for `observation.state` and `action`:
 
 The five arm values are degrees of the MJCF hinge of the same name (`<name>_joint`), sign +1, offset 0. The Menagerie model is the mid-range calibration, so those degrees match LeRobot's `use_degrees=True` body convention. Hinge limits are read from the vendored XML at runtime and tested. They are not copied into a second table.
 
-The gripper value is 0 when closed and 100 when open, the LeRobot `RANGE_0_100` convention. It maps linearly onto the gripper hinge range read from that XML. Stage 2 measures which hinge end closes by closing the jaw on the cube, and that measurement sets the 0 end and the 100 end in `configs/sim.yaml`.
+The gripper value is 0 when closed and 100 when open, the LeRobot `RANGE_0_100` convention. It maps linearly onto the gripper hinge range read from that XML. Stage 2 measures which hinge end closes by closing the jaw on the cube, and that measurement sets the 0 end and the 100 end in `configs/sim.toml`.
 
 The adapter converts the five arm values with `deg2rad` and the gripper with the 0–100 map. A test feeds a known mixed vector, including a gripper value such as 15, and checks that the gripper command is the interpolated hinge angle. Applying `deg2rad` to all six values fails that test.
 
@@ -60,7 +60,7 @@ Actions are absolute positions. Stage 1 reads `use_delta_joint_actions_aloha` fr
 
 SmolVLA's robotics pretraining used real community demonstrations, not synthetic robot trajectories. The [SmolVLA blog](https://huggingface.co/blog/smolvla) and [paper](https://arxiv.org/pdf/2506.01844) describe about 481 to 487 SO-100 datasets, about 10 million frames, collected in labs and homes. Cameras were not recorded with one shared extrinsics file. Hugging Face manually labeled each view as top (`camera1`), wrist (`camera2`), or an extra side view (`camera3`). LIBERO and Meta-World appear only as later evaluation fine-tunes. The paper states the base model was not pretrained on SO-101 recordings. The SO-101 paper evaluation used a top camera and a side camera. The SO-100 pick-place set that the fine-tune guide names, [lerobot/svla_so100_pickplace](https://huggingface.co/datasets/lerobot/svla_so100_pickplace), uses a top camera and a wrist camera at 640×480 and 30 fps, and the task text is `Pick up the cube and place it in the box.`
 
-No published number gives the camera's xyz or orientation. The closest mechanical standard is The Robot Studio's overhead mount, fixed to the arm base so a 640×480 webcam sees the whole workspace, and the wrist module screwed to the jaw replacement so it looks at the fingertips. Stage 2 vendors those mount meshes, measures the camera seat from the mesh, and writes that pose into `configs/sim.yaml`. Until that measurement exists, the scene does not invent a camera position.
+No published number gives the camera's xyz or orientation. The closest mechanical standard is The Robot Studio's overhead mount, fixed to the arm base so a 640×480 webcam sees the whole workspace, and the wrist module screwed to the jaw replacement so it looks at the fingertips. Stage 2 vendors those mount meshes, measures the camera seat from the mesh, and writes that pose into `configs/sim.toml`. Until that measurement exists, the scene does not invent a camera position.
 
 | Our key | Policy key | Source |
 |---|---|---|
@@ -139,7 +139,7 @@ Stage 2 tests the reading on the simulator actuator API: an empty close, and a c
 1. Command the gripper closed with no cube between the jaws and record that actuator force. That is the empty-close baseline.
 2. Pick up the red cube through the adapter. Assert jaw-cube contact, and assert the gripper actuator force is above the empty-close baseline.
 3. Hold the close command and advance the simulator by exactly 3.0 s, which is 1440 steps at timestep `1/480` s. This is not `time.sleep`, and it is not a loop that retries until the cube settles.
-4. Read MuJoCo again. Jaw-cube contact is still present, and the cube center is still above the table by the lift margin in `configs/sim.yaml`.
+4. Read MuJoCo again. Jaw-cube contact is still present, and the cube center is still above the table by the lift margin in `configs/sim.toml`.
 
 An exception in this test fails it. A missed contact is a failed assertion, not a skipped test.
 
@@ -153,7 +153,7 @@ The evaluator reads the cube free-joint pose. That pose is not part of the polic
 
 An episode records:
 
-- lift: cube center rises above the table by a margin written in `configs/sim.yaml`
+- lift: cube center rises above the table by a margin written in `configs/sim.toml`
 - place: cube center is inside the open box, below the lift height, and the gripper command is open
 - success: lift then place in that order
 - inference time per `select_action`, and control-tick rate
@@ -169,7 +169,7 @@ so101-smolvla/
 ├── pyproject.toml
 ├── configs/
 │   ├── contract.yaml          # checkpoint facts plus the project choices below
-│   └── sim.yaml               # timestep, success geometry, gripper ends, expert positions
+│   └── sim.toml               # timestep, success geometry, gripper ends, expert positions
 ├── assets/
 │   ├── robotstudio_so101/     # vendored Menagerie model, scenes, and meshes
 │   └── scene.xml              # red cube, target, workspace camera, wrist camera if needed
@@ -215,9 +215,9 @@ Acceptance: a clean environment imports; the venv reports ROCm 10.1 and the gfx1
 
 ## Stage 2 — Scene and simulator
 
-1. Start from the vendored Menagerie `scene.xml` and `scene_box.xml`. Add a light matte table, a small cube, and an open box. Vendor the SO-ARM100 overhead-mount and wrist-mount meshes, measure the camera seat on each mesh, and write those poses into `configs/sim.yaml`. The overhead camera looks down across the workspace. The wrist camera sits on the jaw mount and looks at the fingertips. Keep a wrist `<camera>` from `so101.xml` when its seat matches that mount. Otherwise replace it.
+1. Start from the vendored Menagerie `scene.xml` and `scene_box.xml`. Add a light matte table, a small cube, and an open box. Vendor the SO-ARM100 overhead-mount and wrist-mount meshes, measure the camera seat on each mesh, and write those poses into `configs/sim.toml`. The overhead camera looks down across the workspace. The wrist camera sits on the jaw mount and looks at the fingertips. Keep a wrist `<camera>` from `so101.xml` when its seat matches that mount. Otherwise replace it.
 2. Implement reset, the 16-step tick at timestep `1/480` s, camera rendering, joint readback in the unit contract, and position-actuator commands in radians.
-3. Measure which gripper hinge end closes, and store the 0 and 100 ends in `configs/sim.yaml`.
+3. Measure which gripper hinge end closes, and store the 0 and 100 ends in `configs/sim.toml`.
 4. Tests: each of the six actuators moves toward a commanded target and stays inside the XML range; both images are 640×480×3; the cube moves when the jaw pushes it; the same seed resets to the same joint and cube state; 16 steps consume exactly `1/30` s of simulation time and finish in under `1/30` s of wall clock. The empty-close and cube-contact readings are tested on the actuator API. The full 3.0 s pick-then-hold test is Stage 3, through the adapter.
 
 Acceptance: those tests pass. A viewer is optional and is not part of acceptance.
@@ -242,7 +242,7 @@ Acceptance: the episode finishes with no device, shape, or processor error. A co
 ## Stage 5 — Demonstrations
 
 1. Implement the oriented expert, the per-take approach azimuth, and the keep-or-discard check (jaws closed on the cube, then the place check).
-2. Write the held-out seed list to `configs/sim.yaml` before recording.
+2. Write the held-out seed list to `configs/sim.toml` before recording.
 3. Record 50 kept training episodes into a local LeRobot dataset at `fps: 30` with timestamps `k/30`. Validate episode bounds, timestamp spacing, camera keys, the mixed unit vector, and the task string.
 4. A test runs one expert episode and requires a successful place.
 

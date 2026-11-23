@@ -11,12 +11,12 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from collections.abc import Iterable
 from itertools import chain
 from pathlib import Path
 
 import numpy as np
-import yaml
 
 from so101_smolvla.task import TASK
 
@@ -155,7 +155,7 @@ def record() -> Path:
 
     from so101_smolvla.sim import HOLD_S
 
-    sim_cfg = yaml.safe_load((ROOT / "configs" / "sim.yaml").read_text())
+    sim_cfg = tomllib.loads((ROOT / "configs" / "sim.toml").read_text(encoding="utf-8"))
     positions = [tuple(item) for item in sim_cfg["distinct_cube_positions"]]
     if DATASET.exists():
         raise SystemExit(f"{DATASET} already exists")

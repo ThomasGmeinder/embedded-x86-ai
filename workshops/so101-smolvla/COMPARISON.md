@@ -1,6 +1,6 @@
 # Twin compared with the Harrysunshine training rig
 
-This scene is a MuJoCo twin of the arm. The pictures the checkpoint was trained on come from a different simulator. This note records what was copied from that rig, what was measured, and what is still different. The renderer reads `assets/robotstudio_so101/scene_task.xml` and `so101.xml`. `configs/sim.yaml` repeats the camera numbers so they can be read without opening the XML.
+This scene is a MuJoCo twin of the arm. The pictures the checkpoint was trained on come from a different simulator. This note records what was copied from that rig, what was measured, and what is still different. The renderer reads `assets/robotstudio_so101/scene_task.xml` and `so101.xml`. `configs/sim.toml` repeats the camera numbers so they can be read without opening the XML.
 
 The side-by-side frame is `scripted_testing/track/scene-match.png`. Left is episode 484, frame 13, of the training video. Right is this scene at the same recorded joint angles.
 
@@ -91,7 +91,7 @@ A search over 1344 overhead poses peaked at a correlation of 0.46 and was not wr
 - Shoulder lift. Their URDF limit is −110° to +100°. This hinge is ±110°.
 - Wrist-roll range. Their URDF range is about −67° to +253°. This hinge stays at the Menagerie range, about ±160°. Episode 484 stays inside −33° to −2°, so that episode is not clipped.
 - Gripper-link frames are close and not identical. Their fixed fingertip is at (−0.002, 0, −0.092) m in `gripper_link`. This fixed-jaw tip marker is at (−0.0081, 0, −0.101) m in the gripper body.
-- `src/so101_smolvla/task.py` and `configs/sim.yaml` append a period to the task sentence. The dataset and `track.py` do not. The checkpoint path uses the dataset sentence.
+- `src/so101_smolvla/task.py` and `configs/sim.toml` append a period to the task sentence. The dataset and `track.py` do not. The checkpoint path uses the dataset sentence.
 - `load_policy` is unchanged and still serves the base SmolVLA checkpoint.
 
 ## Checkpoint on their own pixels

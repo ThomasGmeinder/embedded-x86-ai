@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import tomllib
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import yaml
 
 from so101_smolvla.grasp_geometry import (
     FINGER_ANGLE_NOTE,
@@ -35,13 +35,13 @@ from so101_smolvla.track import (
 
 ROOT = Path(__file__).resolve().parents[2]
 VLA_TESTING = ROOT / "vla_testing"
-SIM_YAML = ROOT / "configs" / "sim.yaml"
+SIM_SETTINGS = ROOT / "configs" / "sim.toml"
 RANDOM_COUNT = 100
 
 
 def scenarios(path: Path | None = None) -> list[tuple[str, tuple[float, float] | None]]:
-    """Scene default, then each cube position in ``configs/sim.yaml``."""
-    loaded = yaml.safe_load((path or SIM_YAML).read_text(encoding="utf-8"))
+    """Scene default, then each cube position in ``configs/sim.toml``."""
+    loaded = tomllib.loads((path or SIM_SETTINGS).read_text(encoding="utf-8"))
     rows: list[tuple[str, tuple[float, float] | None]] = [("scene", None)]
     for xy in loaded["distinct_cube_positions"]:
         x, y = float(xy[0]), float(xy[1])
