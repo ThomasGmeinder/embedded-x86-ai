@@ -8,8 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
-CONFIG_DIRECTORY = Path(__file__).resolve().parents[2] / "configs"
-CONFIG_PATH = CONFIG_DIRECTORY / "sapien_stack_recording_rig.json"
+WORKSHOP = Path(__file__).resolve().parents[2]
+CONFIG_PATH = WORKSHOP / "configs" / "sapien_stack_recording_rig.json"
 # The arm joints in the order of the robot's state and action numbers.
 ARM_JOINTS = (
     "shoulder_pan",
@@ -112,7 +112,8 @@ def _load_rig() -> RecordingRig:
     wrist = _camera(document, "wrist", "on_optical_frame")
     stiffness, damping = _arm_drives(document)
     table_drop = float(document["table_below_robot_base_m"])
-    picture = CONFIG_DIRECTORY / document["table_picture"]
+    # The picture's place is the measurement file's to name, relative to the workshop.
+    picture = WORKSHOP / document["table_picture"]
     if not np.isfinite(table_drop) or table_drop < 0.0:
         raise RuntimeError(f"invalid table height in {CONFIG_PATH}")
     if not picture.is_file():

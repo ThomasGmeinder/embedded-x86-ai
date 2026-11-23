@@ -26,5 +26,5 @@
     "wrist_roll": {"stiffness_Nm_per_rad": 72.25, "damping_Nms_per_rad": 8.67}
   },
   "table_below_robot_base_m": 0.0045,
-  "table_picture": "sapien_stack_recording_table.png"
+  "table_picture": "assets/sapien_stack_recording_table.png"
 }
