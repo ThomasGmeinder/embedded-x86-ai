@@ -328,6 +328,7 @@ class DemoStack:
         self.log_dir = Path(log_dir)
         self.layouts_per_scene = layouts_per_scene
         self.server = self.client = self.sam3 = self.env = self.scene = self.session = self.listener = None
+        self.warmed: dict[str, float] | None = None  # the seconds of the start's warm-up of SAM 3 and SmolVLA
 
     def start(self, say: Callable[[str], None] = print) -> "DemoStack":
         from so101_smolvla.policy_env import create_policy_environment
@@ -365,6 +366,12 @@ class DemoStack:
         )
         self.scene.start_layout(self.seed, self.seed)
         say(f"SAPIEN scene, layout seed {self.seed}, after {time.perf_counter() - began:.1f} s")
+        # The first run of SAM 3 and of SmolVLA is slow: here, not at the user's first command.
+        warmed = self.warmed = self.scene.warm_up()
+        say(
+            f"SAM 3 warmed up with one outline of both cameras, {warmed['sam3']:.1f} s; "
+            f"SmolVLA with one plan, {warmed['smolvla']:.1f} s"
+        )
         # A typed sentence is its own words: the request ends when Gemma has written the call.
         self.session = DemoSession(
             self.scene, lambda sentence: self.client.parse(sentence, words=False), seed=self.seed

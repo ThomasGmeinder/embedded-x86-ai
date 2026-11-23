@@ -108,3 +108,55 @@ def test_a_command_before_a_layout_and_a_bad_mode_are_refused():
     loop = PickPlaceScene(scene, policy, None, None, pictures="unedited", act=act)
     with pytest.raises(RuntimeError, match="no layout"):
         loop.run_command(command_from_colour("red"))
+    with pytest.raises(RuntimeError, match="no layout"):
+        loop.warm_up()
+
+
+class CountingOutlines:
+    """Stands in for SAM 3 where only the calls count."""
+
+    def __init__(self) -> None:
+        self.layouts = self.outlined = 0
+
+    def start_layout(self) -> None:
+        self.layouts += 1
+
+    def outline(self, observation):
+        self.outlined += 1
+        return observation, {}
+
+
+def test_a_warm_up_runs_each_model_once_and_leaves_the_layout_as_a_fresh_start():
+    acts = []
+
+    def counting_act(policy, pre, post, observation, task_text):
+        acts.append(task_text)
+        return observation.state
+
+    scene, policy, outlines = StandInScene(), StandInPolicy(), CountingOutlines()
+    loop = PickPlaceScene(scene, policy, None, None, pictures="others-painted", sam3=outlines, steps_per_pick=3,
+                          act=counting_act, record=True)
+    first = loop.start_layout(4, 10)
+    seconds = loop.warm_up()
+    assert set(seconds) == {"sam3", "smolvla"} and all(value >= 0.0 for value in seconds.values())
+    # One outline and one plan; the plan's actions are dropped again.
+    assert outlines.outlined == 1 and len(acts) == 1 and policy.resets == 1
+    # The layout was started again: SAM 3's tracking anew, nothing run in it, the same first pictures.
+    assert outlines.layouts == 2 and loop.layout_steps == 0 and loop.record.steps == 0
+    assert loop.record.sequence == [] and scene.targets == [] and loop.record.plan_seconds == []
+    assert (loop.observation.state == first.state).all() and (loop.observation.top == first.top).all()
+
+    # A command after the warm-up runs as it does without one.
+    def targets_of_a_pick(warm: bool):
+        scene, policy = StandInScene(), StandInPolicy()
+        loop = PickPlaceScene(scene, policy, None, None, pictures="others-painted", steps_per_pick=3, act=act, record=True)
+        loop.start_layout(4, 10)
+        if warm:
+            assert set(loop.warm_up()) == {"smolvla"}  # no SAM 3, no outline
+        result = loop.run_command(command_from_colour("green"))
+        # A command of three steps with two actions per plan plans at its steps 0 and 2: the
+        # seconds of each plan are kept, the warm-up's own plan is not among them.
+        assert len(loop.record.plan_seconds) == 2 and all(s >= 0.0 for s in loop.record.plan_seconds)
+        return result, [target.tolist() for target in loop.record.targets], scene.targets
+
+    assert targets_of_a_pick(warm=True) == targets_of_a_pick(warm=False)

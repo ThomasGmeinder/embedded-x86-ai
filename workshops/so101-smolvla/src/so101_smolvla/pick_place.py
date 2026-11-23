@@ -18,6 +18,7 @@ pictures and targets, every plan's tiles); the demo turns that off.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
@@ -218,6 +219,8 @@ class LayoutRecord:
     bin_positions: list = field(default_factory=list)
     # With SAM 3: per plan and camera, what it outlined and how long it took.
     sam3_found: list[dict] = field(default_factory=list)
+    # Per plan: the seconds SmolVLA took to compute its actions.
+    plan_seconds: list[float] = field(default_factory=list)
     picks: list[dict] = field(default_factory=list)
     sequence: list[str | None] = field(default_factory=list)
     translations: list[dict] = field(default_factory=list)
@@ -281,6 +284,7 @@ class PickPlaceScene:
         self.observation: PolicyObservation | None = None
         self.table_height = 0.0
         self.layout_steps = 0  # steps run in this layout, recorded or not
+        self._layout_seeds: tuple[int, int] | None = None  # of the layout in force
 
     def start_layout(self, environment_seed: int, policy_seed: int) -> PolicyObservation:
         """Reset the scene once for a layout of commands; the first observation."""
@@ -298,7 +302,33 @@ class PickPlaceScene:
         self.table_height = float(self.env.facts["table_height"])
         self.observation = observation
         self.layout_steps = 0
+        self._layout_seeds = (environment_seed, policy_seed)
         return observation
+
+    def warm_up(self) -> dict[str, float]:
+        """Run SAM 3 and SmolVLA once on the layout's first pictures; the seconds each took.
+
+        The first run of a model after it is loaded is slow (measured 2026-11-23 in the demo:
+        SAM 3's first outline of both cameras 6.6 s against 0.5 s, SmolVLA's first plan 1.3 s
+        against 0.3 s), and the first command of a session otherwise waits for both. The plan
+        draws from the policy's random numbers and the outline moves SAM 3's tracking on, so
+        the layout is started again with its own seeds afterwards: the scene, the random
+        numbers and the tracking are then as ``start_layout`` leaves them, and the first
+        command runs as it does without a warm-up.
+        """
+        if self.observation is None:
+            raise RuntimeError("no layout was started")
+        seconds: dict[str, float] = {}
+        if self.sam3 is not None:
+            began = time.perf_counter()
+            self.sam3.outline(self.observation)
+            seconds["sam3"] = time.perf_counter() - began
+        began = time.perf_counter()
+        self.act(self.policy, self.pre, self.post, self.observation, self.env.task_text)
+        self.policy.reset()
+        seconds["smolvla"] = time.perf_counter() - began
+        self.start_layout(*self._layout_seeds)
+        return seconds
 
     def run_command(self, pick: PickCommand, observer: Observer | None = None) -> dict:
         """One command in the scene as it stands: the pick's record (``steps`` 0 when refused)."""
@@ -408,7 +438,11 @@ class PickPlaceScene:
                             sam3=found_record,
                         )
                     )
+            began = time.perf_counter()
             target = self.act(policy, self.pre, self.post, shown, env.task_text)
+            if planning:
+                # The step at which SmolVLA computes its next actions from the pictures.
+                record.plan_seconds.append(time.perf_counter() - began)
             outcome = env.step(target)
             observation = outcome.observation
             facts = outcome.facts

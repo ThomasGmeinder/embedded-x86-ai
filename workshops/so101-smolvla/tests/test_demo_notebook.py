@@ -1,13 +1,15 @@
 """notebooks/pick_place_demo.ipynb, run the way a person runs it: its kernel, the real Gemma, SAM 3 and SAPIEN.
 
-Every cell runs in a row, as "Run All" runs them, and after them two cells of this test. Section 1 has to
+Every cell runs in a row, as "Run All" runs them, and after them three cells of this test. Section 1 has to
 bring up every part. Section 3 has to open the microphone: this machine has one, so a microphone that does not
 open fails the test. Section 4 shows its stop button and must stop nothing: on 2026-11-23 it stopped
 everything, "Run All" ended the demo a second after the live cell, and the picture stood on its first frame,
 "no microphone". The test's first cell then checks the microphone in the running demo: frames keep reaching
 the session, the picture keeps being drawn on them, the panel says it is listening, no read overflowed, and
-Gemma's server still answers. Its second cell presses the stop button, which must leave no server on Gemma's
-default port and no utilization table running. (Until 2026-11-23 the notebook also ran one typed command and
+Gemma's server still answers. Its second cell types the session's first command and checks that the warm-up
+of the start worked: the command's first outline and first plan each took less than half of what the
+warm-up's run of that model took. Its third cell presses the stop button, which must leave no server on
+Gemma's default port and no utilization table running. (Until 2026-11-23 the notebook also ran one typed command and
 a new layout from cells, its sections 4 and 5; the user had them removed, so a command now goes through the
 live cell's text box or the microphone only.) Skipped while Gemma, the SAM 3 environment or the SAPIEN twin is
 not set up; anything else that goes wrong fails. Needs a display for the utilization window, a microphone and
@@ -73,7 +75,24 @@ print("MICROPHONE " + json.dumps({
     "gemma_answers": stack.server.answers(), "stop_pressed": stop.done,
 }))
 '''
-# The test's second cell: the stop button pressed, as a person presses it.
+# The test's second cell: the first command of the session, typed as into the text box, run to its end
+# (one bounded wait for the session's own event that it is idle). What the warm-up of the start took and
+# what the command's first plan took are the stack's and the pick loop's own figures.
+FIRST_COMMAND = '''
+import json
+stack.session.submit("put the red cube in the bin")
+_ended = stack.session.wait_idle(300)
+_record = stack.scene.record
+print("WARMUP " + json.dumps({
+    "command_ended": _ended,
+    "cube": stack.session.results[-1]["cube"] if stack.session.results else None,
+    "warm_up_outline_s": stack.warmed["sam3"], "warm_up_plan_s": stack.warmed["smolvla"],
+    "first_command_outline_s": sum(camera["seconds"] for camera in _record.sam3_found[0].values()),
+    "first_command_plan_s": _record.plan_seconds[0],
+    "plans_of_the_command": len(_record.plan_seconds),
+}))
+'''
+# The test's third cell: the stop button pressed, as a person presses it.
 PRESS_STOP = "stop.button.click()\nprint(stop.said)\n"
 
 
@@ -85,7 +104,7 @@ def test_run_all_leaves_the_demo_running_with_a_live_microphone_and_the_button_s
 
     notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
     template = next(c for c in notebook["cells"] if c["cell_type"] == "code")
-    for source in (MICROPHONE_CHECK, PRESS_STOP):
+    for source in (MICROPHONE_CHECK, FIRST_COMMAND, PRESS_STOP):
         cell = copy.deepcopy(template)
         cell.update(source=source, metadata={}, outputs=[], execution_count=None)
         if "id" in cell:
@@ -109,7 +128,8 @@ def test_run_all_leaves_the_demo_running_with_a_live_microphone_and_the_button_s
             assert not _errors(cell), "".join(cell["source"])
 
     started = _printed(_code_after(cells, "## 1."))
-    for part in ("Gemma 4 server at", "SAM 3 worker ready", "SmolVLA", "SAPIEN scene, layout seed 0", "utilization and power table"):
+    for part in ("Gemma 4 server at", "Gemma 4 warmed up", "SAM 3 worker ready", "SmolVLA", "SAPIEN scene, layout seed 0",
+                 "SAM 3 warmed up with one outline of both cameras", "SmolVLA with one plan", "utilization and power table"):
         assert part in started, started
     live = _printed(_code_after(cells, "## 3."))
     assert "listening to the microphone" in live, live  # this machine has a microphone: it has to open
@@ -117,8 +137,17 @@ def test_run_all_leaves_the_demo_running_with_a_live_microphone_and_the_button_s
     shown = _printed(_code_after(cells, "## 4."))
     assert "the demo keeps running" in shown and "stopped" not in shown, shown
 
-    checked, pressed = (_printed(cell) for cell in cells[-2:])
+    checked, commanded, pressed = (_printed(cell) for cell in cells[-3:])
     print(checked.strip())
+    print(commanded.strip())
+    # The warm-up worked: the slow first run of SAM 3 and of SmolVLA was the start's, not the first
+    # command's. Each model's first run in a command took less than half of what its warm-up run took
+    # (measured 2026-11-23: 0.4 s against 6.8 s for SAM 3's two pictures, 0.2 s against 1.3 s for the plan).
+    warm = json.loads(commanded.split("WARMUP ", 1)[1])
+    assert warm["command_ended"] and warm["cube"] == "red", warm
+    assert warm["plans_of_the_command"] >= 1, warm
+    assert 0.0 < warm["first_command_outline_s"] < 0.5 * warm["warm_up_outline_s"], warm
+    assert 0.0 < warm["first_command_plan_s"] < 0.5 * warm["warm_up_plan_s"], warm
     microphone = json.loads(checked.split("MICROPHONE ", 1)[1])
     assert microphone["opened"] and microphone["error"] is None, microphone
     assert microphone["threads_alive"] == [True, True], microphone
