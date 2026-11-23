@@ -2976,3 +2976,14 @@ run folder, outside git) was not needed.
 - **Correction:** The two cells' outputs and execution counts were restored from the committed notebook; every edited source was stored as a list of lines again. Checked by the same comparison.
 - **Prevention:** After editing a notebook with a tool, compare it cell by cell with the committed file (sources, outputs, metadata) before going on.
 - **Status:** corrected
+
+## 2026-11-23 — The demo session could drop a command before the worker had taken it
+
+- **Agent/tool:** Claude Code (Claude Fable 5.1)
+- **Task:** `so101_smolvla.demo.DemoSession`: run commands one at a time, with a newer command replacing the one waiting behind the running one.
+- **Mistake:** Implemented the waiting slot as a bounded queue of one with drop-oldest; a command that the worker thread had not yet taken from the queue counted as "waiting" and was dropped when the next command arrived.
+- **Evidence:** `tests/test_demo.py::test_idle_stays_false_while_a_request_waits_and_a_second_waiting_command_replaces_the_first` failed twice (`/tmp/so101-demo-unit-1.log`, `-2.log`): targets `['red']` instead of `['green', 'red']`.
+- **Cause:** Treated "in the queue" as "waiting behind a running command" without accounting for the worker's wake-up latency.
+- **Correction:** One condition variable guards the running request and the not-yet-claimed ones; a newer request replaces only one that waits behind a running or about-to-run one. 16 of 16 pass, three runs.
+- **Prevention:** For a worker queue with replace semantics, model the states (running, claimed, waiting) explicitly and test the race with a worker held inside its request.
+- **Status:** corrected
