@@ -2955,6 +2955,28 @@ run folder, outside git) was not needed.
 - **Prevention:** A steady-state claim about a run needs the run's real length and at least a minute of samples; a load figure that contradicts a library's known thread default is checked with a capped run before it is written down.
 - **Status:** corrected
 
+## 2026-11-23 — Scrambled the voice notebook by editing cells through ids the notebook does not have
+
+- **Agent/tool:** Claude Code (Claude Fable 5.1)
+- **Task:** Remove sections 4 and 5 from `workshops/so101-smolvla/notebooks/voice_control_test.ipynb` and renumber the rest.
+- **Mistake:** Issued eleven notebook edits (four deletions, seven replacements) addressed by the ids `cell-N` that the Read tool had displayed. The notebook stores no cell ids, so the tool fell back to positions, and each deletion shifted the positions of the edits after it: the four deletions removed the four later section headings instead of sections 4 and 5, and the replacements landed on other cells (a heading written into the cell that stops Gemma, the stop code into the position of the live session).
+- **Evidence:** The cell listing after the edits: 17 cells with the headings of sections 4 to 7 gone, the synthetic-voice cells still present, and a code cell holding only `## 6. Stop Gemma`; the tool had answered "Deleted cell undefined" and "Updated cell undefined" to every call.
+- **Cause:** Took the displayed ids for stored ids and sent all edits at once, so no listing was checked between them.
+- **Correction:** The notebook was restored from the last commit and the change made once, by a script that finds each cell by its heading text; the resulting cell list was checked.
+- **Prevention:** Before editing a notebook by cell id, confirm the file stores ids (`"id"` in its cells); when it does not, edit by heading text in one pass and list the cells afterwards. A tool answer that names "undefined" is a failure and stops the batch.
+- **Status:** corrected
+
+## 2026-11-23 — Removed sections from the wrong notebook
+
+- **Agent/tool:** Claude Code (Claude Fable 5.1)
+- **Task:** "remove chapters 4 and 5 from notebook."
+- **Mistake:** Took "notebook" to mean `voice_control_test.ipynb`, the notebook of the session's own earlier work, and removed its sections 4 and 5 (the synthetic-voice sections), rewrote its test and ran it. The user meant `pick_place_demo.ipynb`, the demo notebook of the other session, whose sections 4 and 5 are "A typed command" and "New layout".
+- **Evidence:** User correction: "I told you to remove ## 4. A typed command and ## 5. New layout !!!". `git status` had shown `pick_place_demo.ipynb` as the one notebook with uncommitted changes, which the user was working on.
+- **Cause:** Two notebooks exist in `notebooks/`; the request named neither, and I picked the one I knew instead of asking or checking which one was open in the user's work.
+- **Correction:** The voice notebook and its test were restored from the last commit with `git checkout`; the ledger entry about the removal was taken out; the sections are removed from the demo notebook instead.
+- **Prevention:** When a request names a kind of file and the repository holds more than one, name the one I take it to mean before changing it, or ask; a file that another session has uncommitted changes in is the likely subject of a request about "the" file.
+- **Status:** corrected
+
 ## 2026-11-22 — The provenance test read the wrong line of `llama-server --version`
 
 - **Agent/tool:** Claude Code (Claude Fable 5.1)

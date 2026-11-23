@@ -1,17 +1,18 @@
 """notebooks/pick_place_demo.ipynb, run the way a person runs it: its kernel, the real Gemma, SAM 3 and SAPIEN.
 
-Every cell runs (none is tagged to be left out: without a microphone the live cell says so and goes on). The
-typed command of section 4 must come back as a pick of the red cube; whether the cube ended in the bin is
-SmolVLA's result and is printed, not required. Section 6 must leave no server on Gemma's default port and no
-utilization table running. Skipped while Gemma, the SAM 3 environment or the SAPIEN twin is not set up;
-anything else that goes wrong fails. Needs a display for the utilization window and nothing answering on the
-Gemma port. Jupyter's data and settings go to a temporary directory, as in the launcher's tests.
+Every cell runs (none is tagged to be left out: without a microphone the live cell says so and goes on).
+Section 1 has to bring up every part, section 3 has to say what it does about the microphone, and section 4
+must leave no server on Gemma's default port and no utilization table running. (Until 2026-11-23 the notebook
+also ran one typed command and a new layout from cells, its sections 4 and 5; the user had them removed, so a
+command now goes through the live cell's text box or the microphone only.) Skipped while Gemma, the SAM 3
+environment or the SAPIEN twin is not set up; anything else that goes wrong fails. Needs a display for the
+utilization window and nothing answering on the Gemma port. Jupyter's data and settings go to a temporary
+directory, as in the launcher's tests.
 """
 from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from test_notebooks_launcher import KERNEL, LAUNCHER, NOTEBOOKS, VENV, WORKSHOP,
 from test_voice_notebook import _code_after, _errors, _gemma_answers, _printed
 
 NOTEBOOK = NOTEBOOKS / "pick_place_demo.ipynb"
-RUN_LIMIT_S = 900  # the stack loads (about 1 min), one command (about 30 s), a new layout, the closes
+RUN_LIMIT_S = 900  # the stack loads (about 1 min), the live picture, the closes
 
 SETTINGS = json.loads((WORKSHOP / "configs" / "sam3_reference.json").read_text())
 SAM3_READY = (WORKSHOP / ".venv-sam3" / "bin" / "python").is_file() and (
@@ -41,7 +42,7 @@ pytestmark = [
 ]
 
 
-def test_the_demo_notebook_runs_a_typed_command_through_gemma_sam3_and_the_scene_and_stops_everything(tmp_path):
+def test_the_demo_notebook_starts_every_part_shows_the_live_picture_and_stops_everything(tmp_path):
     assert os.environ.get("DISPLAY"), "the utilization window needs a display"
     assert not _gemma_answers(), "something already answers on the Gemma port; stop it before this test"
     env = _environment(tmp_path)
@@ -66,10 +67,5 @@ def test_the_demo_notebook_runs_a_typed_command_through_gemma_sam3_and_the_scene
         assert part in started, started
     live = _printed(_code_after(cells, "## 3."))
     assert "microphone" in live, live
-    typed = _printed(_code_after(cells, "## 4."))
-    assert re.search(r"^cube: red \| in the bin at the end: (True|False) \| the rule first held at step: (\d+|None)$", typed, flags=re.M), typed
-    print(typed.strip())
-    layout = _printed(_code_after(cells, "## 5."))
-    assert layout.startswith("layout seed 1"), layout
-    stopped = _printed(_code_after(cells, "## 6."))
+    stopped = _printed(_code_after(cells, "## 4."))
     assert "table closed" in stopped and "stopped" in stopped, stopped
