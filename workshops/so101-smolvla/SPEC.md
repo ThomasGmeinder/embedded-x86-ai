@@ -69,9 +69,14 @@ Terms used throughout:
 - **VLA (vision-language-action model):** one neural network that takes
   camera pictures and a sentence and gives robot commands. Here it is the
   SmolVLA checkpoint `Harrysunshine/so101-smolvla-sim-real-10task`.
-- **Gemma 4 E4B:** the language model, run on this machine's integrated
-  graphics through the program `llama-server` of llama.cpp, which
+- **Gemma 4 E4B:** the language model, run on one of two backends chosen in
+  `configs/models.toml`: on this machine's NPU through FastFlowLM (`flm
+  serve`, the default since 2026-11-23), or on the integrated graphics
+  through the program `llama-server` of llama.cpp, which
   `scripts/setup_voice.sh` builds under `third_party/`.
+- **FastFlowLM (`flm`):** a program that runs language models on the AMD
+  XDNA NPU and serves them over the OpenAI chat API; the models are its own
+  4-bit builds, pulled into `~/.config/flm/models`.
 - **SAM 3 (Segment Anything Model 3):** a model that outlines every
   object named by a text phrase in a picture and follows each outline
   through a stream of pictures.
@@ -141,7 +146,7 @@ Terms used throughout:
   (15:03). Until 2026-11-22 not set in the client's copied
   `config/pipeline.yaml`, which kept the branch's one slot and 2,048;
   the notebook passed the two values when it started the server. Since
-  then they are the settings in `configs/voice.json`.
+  then they are the settings in `configs/voice.toml`.
 - 2026-11-22, late evening (the user: "I do not want a dependency on
   vvla-pipeline"; models go to global caches): the workshop stands on
   its own. The client is this workshop's package
@@ -153,6 +158,46 @@ Terms used throughout:
   borrowed the other workshop's NPU runtime, goes. The rule of 16:01
   holds for what the model sees and hears (section 5.1); where the code
   lives and how it is run is this workshop's.
+- 2026-11-23 (the user: Gemma 4 on the NPU, with `~/GitHub/voice_intent`
+  as the working reference; then, on the measured latency, "keep both
+  options for gemma4: iGPU and NPU"): Gemma runs on the backend named in
+  the settings (since the afternoon of that day `configs/models.toml`), `npu` (FastFlowLM, the default) or `igpu`
+  (`llama-server`, as before). The request to FastFlowLM holds the
+  answer to a JSON schema built from the commands (section 5.1,
+  departure 4), the request to `llama-server` to the grammar as before.
+  FastFlowLM 1.0.10 or later is required: 1.0.7 took the schema and did
+  not hold the answer to it (TESTING_LEDGER.md, the probe of 2026-11-23).
+- 2026-11-23, afternoon (the user, on the settings file: its Gemma
+  section described the integrated graphics only; and JSON has no
+  comments): the settings are `configs/voice.toml` (TOML, read with
+  Python's built-in `tomllib`), until then `configs/voice.json`. The
+  key `backend` chooses one of two sections of the same build,
+  `backends.npu` and `backends.igpu`, which name the same things the
+  same way (`model`, `context`, `ready_timeout_s`); the llama.cpp build
+  and its graphics override are `backends.igpu.build`. What both
+  backends share is in `server` (host and ports) and `request`
+  (temperature, answer length, time limit). A result's recorded server
+  settings carry the new names: `context` (before: `ctx_size`,
+  `ctx_len`) and `model` (before: `model_tag`). The file alone decides
+  where Gemma runs (the user: "make gemma on npu the default and the
+  toml the SOT"): no switch or environment variable beside it in the
+  demo, the runner or the notebooks. The README's diagram, stage table
+  and compute placement table show the NPU, the file's value in git;
+  the integrated graphics is described in its section "Configuration".
+- 2026-11-23, later that afternoon (the user: one file for which model
+  runs where): `configs/models.toml` names the three models and their
+  processors. Its section `command` is Gemma (`backend`, and
+  `command.npu`, `command.igpu`, `command.igpu.build`, the sections
+  called `backends.*` in the entry above), `outlines` is SAM 3 (the
+  four keys that were `configs/sam3_reference.json`), `motion` is
+  SmolVLA (the checkpoint, until then a constant of `track.py`).
+  `device` of `outlines` and `motion` states the integrated graphics
+  and is checked, not chosen: another value is refused when the file is
+  read. `configs/voice.toml` keeps what is about the voice path and not
+  about the model: `server`, `request`, `listening`,
+  `synthetic_voice`. The one Python reader is
+  `src/so101_smolvla/models.py`; the voice settings take Gemma's part
+  from it.
 
 <a id="s-3-the-principle"></a>
 ## 3. The principle
@@ -395,7 +440,7 @@ pick ends in the bin; a cube named as the place is the stacking case,
 decision 9, tested on its own on the user's word). The client
 (`so101_smolvla.voice.commands.VoiceCommands`) runs in the main process
 and starts its own Gemma server on the runner's port of
-`configs/voice.json` (8083), so a server the user runs on the default
+`configs/voice.toml` (8083), so a server the user runs on the default
 port (8082, the notebook's) is left alone; until 2026-11-22 it ran as a
 worker process in the other workshop's environment. The runner's
 switches are `--sentences
@@ -455,7 +500,7 @@ Each fact has one owner. No part keeps a copy of another part's fact.
 
 | Part | Owns | Runs where |
 |---|---|---|
-| Voice | The spoken command as fields: what to do, which object (kind, colour), size word, place word; and the transcript, the words Gemma understood. One Gemma request per speech window, constrained by a grammar file, as today | Gemma server (`llama-server`), Silero speech detection on the processor |
+| Voice | The spoken command as fields: what to do, which object (kind, colour), size word, place word; and the transcript, the words Gemma understood. One Gemma request per speech window, held to one shape: the grammar file for `llama-server`, the same shape as a JSON schema for FastFlowLM | Gemma server (FastFlowLM `flm serve` on the NPU, or `llama-server` on the integrated graphics; `backend` in `configs/voice.toml`), Silero speech detection on the processor |
 | SAM 3 service | The outlines, per camera, with numbers that persist | `sam3-tracker-rocm` in its container |
 | Scene facts | For each outline: kind (the phrase SAM 3 found it by), colour (hue inside the outline), size class (outline area with the camera's calibration), place on the table | A program in this workshop |
 | Task state | The command being carried out, the chosen outline number, the remembered stack, the list of moves and which one is current | A program in this workshop, in memory |
@@ -507,7 +552,7 @@ flowchart LR
 - Where the client is since 2026-11-22 (the user: no dependency on
   `vvla-pipeline`; large models in global caches): the package
   `src/so101_smolvla/voice/`, run in the workshop's `.venv`, with its
-  settings in `configs/voice.json`. What came from where: `intents.py`
+  settings in `configs/voice.toml`. What came from where: `intents.py`
   from `vla_pipeline/llm/intents.py` (the commands, the instructions,
   one answer; the keyword stand-in and the handler registry, unused
   here, left out); `intent.gbnf` as it was; `server.py` and `client.py`
@@ -517,7 +562,7 @@ flowchart LR
   `voice.py` and `audio/gemma_listen.py` (the listening loop, Silero,
   the windows and the filter; the request thread now ends on a queue
   sentinel instead of polling its queue); `speech.py` and `examples.py`
-  from `notebook_tools.py`; `settings.py` and `configs/voice.json` from
+  from `notebook_tools.py`; `settings.py` and `configs/voice.toml` from
   `utils/config.py` and the `gemma4-e4b-it` section of
   `pipeline.yaml`. Not in git: `llama-server`, built by
   `scripts/setup_voice.sh` from llama.cpp commit `781dbc5ac` for
@@ -560,6 +605,38 @@ flowchart LR
      a typed or spoken "stop robot" then takes one Gemma request (0.41
      to 0.74 s in the four requests of section 4.5, an idle server).
      Measurement M6.
+  4. A second backend for the model, 2026-11-23, on the user's request
+     ("move gemma 4 to run on the NPU", the reference
+     `~/GitHub/voice_intent`) and the user's later word to keep both:
+     FastFlowLM's `flm serve` on the NPU beside `llama-server` on the
+     integrated graphics, chosen by `backend` in `configs/models.toml`.
+     What the model sees and hears is the branch's on both: the
+     instructions, the clip, the two user messages, the listening
+     parameters, the filter. What differs in the request to FastFlowLM:
+     the answer is held to a JSON schema (`intents.response_schema`,
+     built from the commands of `Intent`, the grammar's shape rule for
+     rule) through the OpenAI field `response_format`, which is way 3
+     under "Tool calls" below, since FastFlowLM takes no grammar file;
+     thinking is turned off through FastFlowLM's own field `think`
+     instead of the chat template's flag (a request with thinking on
+     spoils FastFlowLM's pinned instructions for every later request,
+     measured on 1.0.7); the model is named by its FastFlowLM tag
+     (`gemma4e-flash:e4b`: the same weights as `gemma4-it:e4b`, 4-bit
+     Q4_1, the instructions pinned and prefilled once, a context of
+     1,024 tokens, one turn). The server is started the same way (a
+     child process, one bounded wait on its readiness line `WebServer
+     started on port`, `/v1/models` as the health address, no graphics
+     override). The reference `voice_intent` holds its three-label
+     answer by an allowlist and no schema; the schema is this
+     workshop's, so the answer's shape is held as it is on
+     `llama-server`. Measured side by side in TESTING_LEDGER.md
+     (2026-11-23): the NPU answers in about three times the seconds of
+     the integrated graphics, decoding at 13 tokens per second.
+  5. The `stop` entry of the instructions, 2026-11-23, on the user's
+     word: reworded so that "stop" and "stop robot" in their forms are
+     `stop`, the only line of the instructions that differs from the
+     branch's. The bullet "Since 2026-11-23" below has the wording and
+     the measurement.
 - The grammar file today allows ten commands and an object of at most
   two words (`config/intent.gbnf`). Draft 1 of this spec extended it to
   more fields: command (pick, stack, learn the stack, rebuild the
@@ -593,11 +670,33 @@ flowchart LR
 - A new command is three changes, as the branch's own notes say
   (`vla_pipeline/llm/intents.py:13-17`): its name in the list of
   commands, one line in the instructions to the model, its name in the
-  grammar file.
+  grammar file. The JSON schema of the FastFlowLM request (departure 4)
+  is built from the list of commands and needs no change of its own.
 - "stop robot" stays the only spoken stop. Gemma makes the command
   `stop` of it, by the entry for `stop` in the instructions
   (`vla_pipeline/llm/intents.py:188-189` on the branch); the branch's
   match of the phrase by a program is not taken over (departure 3).
+  That was the state until 2026-11-23.
+- Since 2026-11-23 (the user: "can you improve the prompt for gemma4 to
+  handle 'stop' or 'stop robot' more reliably"): the `stop` entry of the
+  instructions is reworded, the one departure from the branch's
+  instruction text (departure 5). An order to stop, with or without the
+  robot named ("stop", "stop robot", "robot stop", "stop the robot",
+  "stop now"), is `stop`, with a tie-break towards `stop`; talk about
+  stopping that is no order to the robot ("stop talking", "don't stop",
+  "why did it stop") is `unknown`. Chosen among four wordings by
+  measurement on both backends, typed and spoken (TESTING_LEDGER.md,
+  2026-11-23, "the stop entry"): the branch's wording was borderline on
+  both (the named forms 5 to 47 % `stop` typed on the NPU, 60 % for
+  "robot stop" on the integrated graphics, and the spoken "stop talking"
+  a `stop` there); with the new wording every typed order is `stop` at
+  more than 99.9 % and every typed non-order `unknown` at 97 % or more on
+  both. Held by `examples.STOP_ORDERS` and its three sister lists in the
+  Gemma test. Not gained: a lone spoken "stop" of half a second in the
+  synthetic voice, which the model does not make out as a word (asked
+  only to write the words down it writes "Ah."); "stop it", "halt" and a
+  quoted "he said stop robot" are `stop` now (the first two were
+  `unknown` by the branch's text; the quote was `stop` before as well).
 
 **What the user is shown (requirement of 2026-11-21, 15:57).** For every
 command, spoken or typed, the user sees:
@@ -679,7 +778,9 @@ way 3 is not:
    the arguments are not held by a grammar in this server build.
 3. **A schema in the request instead of the grammar file.** The server
    makes the grammar from the schema (`gemma4.cpp:213-218`). The same
-   answer as way 1, with a changed request.
+   answer as way 1, with a changed request. Since 2026-11-23 this is the
+   way of the FastFlowLM backend (5.1, departure 4), which takes no
+   grammar file; the `llama-server` backend keeps way 1.
 
 What section 4.5 says about ways 1 and 2: both give the call with the
 right object and place for the pick sentences, typed (8 of 8 each) and
@@ -916,7 +1017,29 @@ section 5.2. Pass counts are still the user's (decision 4). Detail:
   the spoken test) asserts that no sentence moves a cube it does not
   name and so stays red, on the user's word, until the audio path is
   fixed; the audio request is the branch's (5.1) and a change to it
-  needs the user's word. Section 4.7.
+  needs the user's word. Section 4.7. On the NPU (5.1, departure 4) the
+  same two sentences and no other give the red cube, 34 of 37 as on the
+  integrated graphics (TESTING_LEDGER.md, 2026-11-23): the weak point is
+  the model's hearing, not the server.
+- On the NPU the typed "stop robot" is `unknown`, not `stop`, with and
+  without the schema and on both FastFlowLM tags; spoken, the same
+  sentence is `stop` there (3 of 3 in the synthetic voice); on
+  `llama-server` it is `stop` typed and spoken. Measured (TESTING_LEDGER.md,
+  2026-11-23, "Why"): FastFlowLM's build gives `stop` 18 % and `unknown`
+  82 % typed, 59 to 41 spoken; llama-server's Q4_0 and Q4_K_M files give
+  `stop` 92 and 95 % typed. Template, schema, request shape and 4-bit
+  weights as such are ruled out; the shift is FastFlowLM's arithmetic on
+  an entry the instructions make borderline (six stop-like phrases listed
+  as `unknown`). The voice notebook's test
+  (4.6) was red on the NPU backend for this sentence. Closed on
+  2026-11-23 by the user's word and the reworded `stop` entry (5.1).
+- A lone spoken "stop" (half a second in the synthetic voice) and "stop
+  now" are not made out as words by the model on either backend and so
+  give `unknown`; "please stop", "stop robot", "robot stop" and "stop the
+  robot" are heard and give `stop`. Whether a person's voice does better
+  with the lone word is not measured. The command `stop` is recognised
+  and shown; nothing in this workshop's pick loop interrupts a running
+  pick on it.
 - With "stop robot" going through Gemma only (5.1, departure 3), a stop
   depends on Gemma hearing it and takes one Gemma request. How long
   that is while the arm moves and the other models run is not measured
@@ -924,7 +1047,7 @@ section 5.2. Pass counts are still the user's (decision 4). Detail:
 - A command that takes longer to say than one hop of the live voice
   session can lose what is said last. The session sends the last 6 s
   of sound to Gemma every 2 s in which it hears speech (`hop_s` and
-  `window_s` in `configs/voice.json`; `HopWindows.feed` in
+  `window_s` in `configs/voice.toml`; `HopWindows.feed` in
   `src/so101_smolvla/voice/microphone.py`), so the first window with
   speech can hold only the beginning of a sentence. Once Gemma has made
   a command of a window, the same command is refused from every later

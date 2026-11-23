@@ -2956,3 +2956,291 @@ A frame of the demo picture from the stand-in scene was drawn and looked at
 transcript, the gripper bar, the layout line. One flaw seen and fixed: lines
 longer than the panel were cut, which dropped the seconds of a call; they
 wrap now.
+
+<a id="t-2026-11-23-gemma-npu"></a>
+## 2026-11-23 — Gemma 4 on the NPU: the FastFlowLM probes, the upgrade to 1.0.13, both backends through the Gemma tests, the notebooks, the three-cube test, the full suite
+
+What was tested: FastFlowLM's `flm serve` with Gemma 4 E4B on the XDNA 2 NPU
+as the second backend of the voice path, beside `llama-server` on the
+integrated graphics (`DEVELOPMENT_LEDGER.md`,
+[the entry of this day](DEVELOPMENT_LEDGER.md#d-2026-11-23-npu-what-the-user-asked-for)).
+Every long job ran in a tmux session of its own with an exit file and a
+completion event; the probe scripts and their JSON reports are under
+`/tmp/flm-probe/` (not in git).
+
+**The probes, FastFlowLM 1.0.7 (as installed), before any edit.**
+
+| Job | Clock, exit | What | Result |
+|---|---|---|---|
+| `probe-103939` | 10:39 to 10:43, exit 0 | `probe.py`: `flm serve gemma4e-flash:e4b` as a child with a pipe; `/v1/models`; 5 typed sentences with the schema; the schema narrowed; audio; the context; 37 typed sentences with the meters sampled; a second server on 8082; SIGTERM; `--quiet` | The readiness line `WebServer started on port 8083` arrived through the pipe **10.08 s** after the start (cold file cache), `/v1/models` answered at once. The 5 typed sentences gave the right JSON (prompt 670 to 678 tokens, 661 of them the pinned instructions). **The schema was not held**: the enum narrowed to `unknown` still gave `pick_place`, the object pattern `^x$` still gave `ball`. A request with `think: true` (the probe's own, for contrast) gave the right JSON with a reasoning trace, and **every request after it replayed its text**: the audio requests answered a thinking trace about "pick up the ball" (never heard), the 37 typed rows that followed were not JSON, and the server on 8083 answered `pick up the ball` to a different sentence while a fresh server on 8082 answered right. A prompt over the context: HTTP 400 `Max length reached!`. A second server on 8082 started in 4.9 s beside the first and both answered. SIGTERM ended the server at once; `--quiet` kept the readiness line. NPU meter with the model held: every column 97 to 99 %, 2.2 W, idle or busy. |
+| `probe2-104429` | 10:44 to 10:47, exit 0 | `probe2.py`: fresh servers; audio in the reference's request shape (streaming, short instructions, then ours), audio without and with the schema, typed after each; the standard tag with `-c 2048` | **Audio works** on a fresh server in every shape: `heard` is the sentence, the fields right, prompt **828 tokens** (661 pinned, 10 text, about 157 audio), 3.5 to 3.7 s. The schema narrowed on the standard tag: not held either. Standard tag's prefill 1.8 s typed, 2.3 s spoken (no pinned prefix on 1.0.7). So the first probe's audio failure was the thinking request's doing. |
+| the release notes | | `github.com/ROCm/FastFlowLM/releases` | Constrained decoding (`response_format` and `tool_choice` held while the model generates) came with **v1.0.10** (2026-10-22); 1.0.7 is of 2026-09-30. The user chose the upgrade to 1.0.13 (2026-11-13) and installed `fastflowlm_1.0.13_ubuntu24.04_amd64.deb` (55 MB) with `sudo apt install`; `flm version -j` then `1.0.13`. |
+
+**FastFlowLM 1.0.13.**
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `probe3-110427` | 11:04 to 11:08, exit 0 | `probe3.py`: both tags: the schema narrowed, audio with the schema, a thinking request then typed and audio, 37 typed sentences | **The schema is held on both tags**: the enum narrowed to `unknown` gave `{"command": "unknown", ...}`, the object pattern `^x$` gave `"object": "x"`. Audio with the schema right. **The pinned prefix survives a thinking request** (the typed and audio requests after it right). Flash: start 4.4 s warm; 37 typed rows all JSON, **2.24 / 3.09 / 3.40 s** (least, middle, most), prefill to the first token 0.38 s, decoding 13.5 tokens/s. Standard with `-c 2048`: start 3.8 s; 2.39 / 3.19 / 4.10 s, first token 0.54 s (the prefix cache took in some requests, not all), 14.2 tokens/s. |
+| unit tests, foreground | 10:5x, 13.13 s | `pytest tests/test_voice_commands.py tests/test_notebooks_launcher.py tests/test_cube_commands.py tests/test_three_cube_rollout.py tests/test_demo.py` (`/tmp/so101-npu-unit-1.log`) | **49 passed, 1 skipped** (the NPU command-line test, skipped while FastFlowLM was 1.0.7 with the minimum at 1.0.10). `scripts/setup_voice.sh --check`: named the version for `npu`, `done` for `--backend igpu`; after the upgrade `done` for `npu`. |
+| `gemma-igpu-105816` | 10:58 to 10:59, exit 1, 77.72 s | `pytest tests/test_gemma_cube_commands_integration.py -rA -s` (`/tmp/so101-gemma-igpu.log`), before the upgrade | The `igpu` half of the parametrized module, unchanged by the refactor: **typed 37 of 37**, 0.64 / 0.93 / 1.47 s; **spoken 34 of 37**, 0.82 / 1.06 / 1.24 s, the question and the negation gave the red cube (red on the user's word). The `npu` half skipped with the version message. |
+| `gemma-both-110948` | 11:09:48 to 11:15, exit 1, 336.31 s | the same, after the upgrade (`/tmp/so101-gemma-both.log`) | **igpu**: typed 37 of 37, 0.65 / 0.93 / 1.49 s; spoken 34 of 37, 0.81 / 1.07 / 1.26 s. **npu** (`gemma4e-flash:e4b`): provenance test passed (FastFlowLM 1.0.13, `Gemma4-E4B-IT-NPU2`, Q4_1, context 1,024, the schema's checksum); **typed 37 of 37**, **2.27 / 3.13 / 6.03 s**; **spoken 34 of 37**, **2.91 / 3.76 / 4.15 s**, the same two sentences and no other gave the red cube. Last answers' usage: typed prompt 669, answer 25 tokens, prefill 21 tokens/s on the 8 unpinned tokens, decoding 13.4 tokens/s; spoken prompt 828, prefill 164 tokens/s, decoding 13.6 tokens/s. The two spoken tests red on the user's word. |
+| `npu-chain-111800` A | 11:18:00 to 11:22:18, exit 1, 256.74 s | `pytest tests/test_gemma_cube_commands_integration.py -k npu -rA -s` with `model_tag` set to `gemma4-it:e4b` for the run and restored after (`/tmp/so101-npu-chain-A-standard-tag.log`) | Standard tag: **typed 37 of 37**, 2.40 / 3.20 / 5.07 s; **spoken 34 of 37**, 2.87 / 3.65 / 3.97 s, the same two misses; decoding 14.4 tokens/s. No gain over the flash tag; the flash tag stays the default. |
+| `npu-chain` B | 11:22:18 to 11:25:34, exit 1, 196.11 s | `pytest tests/test_voice_notebook.py -rA -s` (`/tmp/so101-npu-chain-B-voice-notebook.log`), backend `npu` | The second-start, no-microphone and stop cells passed. **The table test failed: typed 29 of 30 right** (1.96 / 2.42 / 3.43 s), spoken 24 of 30 (2.46 / 3.13 / 4.13 s); the test asks every typed sentence right, as the integrated graphics gives (30 of 30 on 2026-11-22). The one typed miss, found by running the notebook's list through the client (`/tmp/so101-nb-sentences-npu.log`): **"stop robot" gives `unknown`** on the NPU, with and without the schema, on both tags (`/tmp/so101-stop-robot.log`); `llama-server`'s Q4_0 file gives `stop`. The model's own answer under FastFlowLM's Q4_1 build; the instructions are the measured text and not changed without the user's word. **Red on the NPU backend until decided.** |
+| `npu-chain` C | 11:25:34 to 11:26:28, exit 0, 52.99 s | `pytest tests/test_demo_notebook.py -rA -s --basetemp=/tmp/so101-demo-nb` | **Passed**: the stack came up with `Gemma 4 server at http://127.0.0.1:8082 after 3.9 s; log logs/flm-server.log` (that line is now the notebook's saved output), the typed command ran, the new layout came up, everything stopped. |
+| `npu-chain` D | 11:26:28 to 11:27:29, exit 0, 60.45 s | `pytest tests/test_gemma_three_cubes_integration.py -rA -s` | **Passed** on the NPU: the three sentences of layout 0 from seed 7 read as their cubes through FastFlowLM, the arm held; `summary.json` carries `backend: npu` and the FastFlowLM provenance; `flm-server.log` in the batch folder. |
+| `npu-chain` E | 11:27:29 to 11:39:01, exit 1, 690.25 s | `pytest tests -v --tb=short -rA --ignore=tests/test_voice_notebook.py --ignore=tests/test_demo_notebook.py` (`/tmp/so101-npu-chain-E-suite.log`) | **2 failed, 246 passed, 1 expected failure.** The two failures are the spoken Gemma test on `igpu` and on `npu`, red on the user's word. Against the suite of this morning (239 passed): the Gemma integration module runs twice now (one per backend) and the voice unit tests grew by four. The suite took 690 s against 417 s: the NPU's Gemma requests. |
+
+**Side by side, the same 37 sentences (30 picks and 7 to refuse), seconds per
+request least / middle / most.**
+
+| | iGPU, `llama-server`, Q4_0 | NPU, FastFlowLM `gemma4e-flash:e4b`, Q4_1 | NPU, `gemma4-it:e4b` `-c 2048` |
+|---|---|---|---|
+| typed: gave the cube or refused as they should | 37 of 37 | 37 of 37 | 37 of 37 |
+| typed: seconds | 0.65 / 0.93 / 1.49 | 2.27 / 3.13 / 6.03 | 2.40 / 3.20 / 5.07 |
+| spoken: as they should | 34 of 37 (the question, the negation) | 34 of 37 (the same two) | 34 of 37 (the same two) |
+| spoken: seconds | 0.81 / 1.07 / 1.26 | 2.91 / 3.76 / 4.15 | 2.87 / 3.65 / 3.97 |
+| first token after the prompt | not reported by the server | 0.38 s typed, 1.0 s spoken | 0.54 s typed, 1.0 s spoken |
+| decoding | not reported | 13.4 to 13.6 tokens/s | 14.2 to 14.5 tokens/s |
+| server start to readiness | about 2 s (the notebook's saved line of 2026-11-23 morning) | 10.1 s cold, 3.9 to 5.0 s warm | 3.8 s warm |
+| the voice notebook's 30 typed sentences | 30 of 30 | 29 of 30 ("stop robot" is `unknown`) | not run |
+
+Where the NPU's seconds go: the answer is 25 to 39 tokens and decodes at
+13 to 14 tokens per second (1.9 to 2.9 s), after 0.4 s of prefill typed or
+1.0 s spoken; the integrated graphics decodes the same answer in under a
+second. The `heard` field is about half of the answer.
+
+"stop robot" in both forms on both backends, three requests each
+(`/tmp/so101-stop-both.log`, on the user's question whether the text is
+taken and only the voice fails): it is the other way round. NPU typed:
+`unknown` 3 of 3, heard "stop robot"; NPU spoken (synthetic voice): `stop`
+3 of 3, heard "stop robot"; iGPU typed and spoken: `stop` 6 of 6. So on the
+NPU the sentence is understood when spoken and refused when typed; the
+notebook's test fails on the typed column only.
+
+**Why (the user: "very weird. investigate").** Two scripts,
+`/tmp/flm-probe/stop_robot_why.py` (both backends through `GemmaServer`,
+the servers' token probabilities asked for with `logprobs`, the model's own
+reasoning with thinking on, eight variants of the request; report
+`report_why.json`) and `stop_robot_q4km.py` (llama-server with a second
+4-bit file, unsloth's `gemma-4-E4B-it-Q4_K_M.gguf` from the Hugging Face
+cache, typed only; `/tmp/so101-q4km.log`).
+
+The probability the model gives the command token, "stop robot", the
+instructions as they are:
+
+| | `stop` | `unknown` | next |
+|---|---|---|---|
+| NPU, FastFlowLM Q4_1, typed | 18 % (log −1.70) | **82 %** (−0.20) | `stopping` (−11.3) |
+| NPU, FastFlowLM Q4_1, typed, no schema | 24 % (−1.41) | **75 %** (−0.28) | `stopping` (−10.9) |
+| NPU, FastFlowLM Q4_1, spoken | **59 %** (−0.52) | 41 % (−0.90) | `stopping` (−11.2) |
+| iGPU, llama-server Q4_0, typed | **92 %** (−0.08) | 7 % (−2.64) | `home` (−5.8) |
+| iGPU, llama-server Q4_0, typed, no grammar | **89 %** (−0.11) | 10 % (−2.27) | `home` (−6.1) |
+| iGPU, llama-server Q4_0, spoken | **90 %** (−0.11) | 10 % (−2.31) | `home` (−7.4) |
+| iGPU, llama-server Q4_K_M (unsloth), typed | **95 %** (−0.05) | 5 % (−2.97) | `home` (−7.5) |
+
+What is ruled out: the chat template (FastFlowLM's `chat_template.jinja`
+and the GGUF's are the same text but for a header comment, and every
+variant rendered to the same number of prompt tokens on both servers: 668
+typed, 828 spoken, 664 with the instructions folded into the user turn, 681
+with the audio instruction in front); the schema (the same answer and
+nearly the same probabilities without it); the request's shape (the typed
+text as a content part, or the instructions without a system role, give
+`unknown` on the NPU too); 4-bit weights as such (Q4_0 and Q4_K_M on the
+same llama.cpp kernels agree, 92 and 95 % for `stop`).
+
+What is left: FastFlowLM's own build of the model (its Q4_1 `model.q4nx`
+and the NPU kernels, `libgemma4e_flash.so`) gives this instruction set
+logits shifted by about 2.4 nats towards `unknown` for the stop family of
+sentences, on both its tags, with and without the schema. The instructions
+make that family borderline by design: the `stop` entry lists six stop-like
+phrases that are `unknown`, and with thinking on the NPU model first reads
+the entry as "unknown unless exactly 'stop robot'", then re-reads it and
+answers `stop`; without thinking it stays with `unknown`. The spoken form
+carries a stronger pull towards `stop` on both servers (90 % on the iGPU
+against 92 % typed; 59 % on the NPU against 18 %), enough to survive the
+shift. Typed variants on the NPU: "stop robot." (a full stop) is `stop`;
+"Stop robot", "stop, robot", "robot stop", "stop the robot", "stop robot
+now" are `unknown`; "go home" and "wave hello" are right. On llama-server
+(both files) all of these are `stop` except "robot stop" on Q4_K_M. Not
+measurable from outside: which part of FastFlowLM's arithmetic (the Q4_1
+blocks, the per-layer input embeddings, bf16 accumulation) carries the
+shift; its Gemma 4E engine source is public (`-DFLM_BUILD_GEMMA4E=ON`,
+release 1.0.8) and was not read.
+
+<a id="t-2026-11-23-stop-entry"></a>
+### Addition, after 12:00: the stop entry of the instructions reworded, four wordings measured on both backends
+
+On the user's word ("can you improve the prompt for gemma4 to handle 'stop'
+or 'stop robot' more reliably"). Only the `stop` entry of the instructions
+differs between the wordings; each sentence was asked with the server's
+token probabilities (`/tmp/flm-probe/stop_prompt_candidates.py`, report
+`report_stop_candidates.json`; `stop_prompt_round2.py`, `/tmp/so101-stop2.log`).
+
+Sentences: 8 typed orders that name the robot ("stop robot", "Stop robot",
+"stop robot.", "stop, robot", "robot stop", "stop the robot", "stop robot
+now", "robot, stop!"), 4 typed bare orders ("stop", "Stop!", "stop now",
+"please stop"), 6 typed sentences that are no order ("stop talking", "why
+did the robot stop", "don't stop", "do not stop the robot", "the bus stop
+is over there", "I can't stop laughing"), 5 other commands, and 8 clips in
+the synthetic voice (3 named, 2 bare, 3 no order).
+
+| Wording of the entry | NPU: lowest `stop` among typed orders that name the robot | NPU typed, wrong | iGPU: the same lowest | iGPU typed, wrong | Spoken, wrong |
+|---|---|---|---|---|---|
+| the branch's ("the speaker says 'stop robot'"; six stop-like phrases `unknown`) | 5 % ("robot stop"); "stop robot" 18 % | all 8 named orders `unknown` | 60 % ("robot stop") | "Stop!", "stop now", "please stop" are `stop` at 60 % against the text | iGPU: "stop talking" is `stop` (60 %) |
+| A: named only, positive first, with a tie-break | over 99.9 % | "Stop!" and "stop now" are `stop` against the text | over 99.9 % | the same two | none |
+| **B: "stop" and "stop robot", with a tie-break (taken)** | over 99.9 % | none; every non-order `unknown` at over 99.9 % | over 99.9 % | none; every non-order `unknown` at 97 % or more | a lone "stop" and "stop now" `unknown` on both, heard as nothing |
+| C: as B without the tie-break | over 99.9 % | none | over 99.9 % | none ("stop talking" 14 % `stop`) | the same two; iGPU "stop talking" 26 % `stop` |
+
+The lone spoken "stop" (0.48 s of sound) and "stop now" (0.85 s): asked only
+to write down the words of the clip, with no instructions, both backends
+write "Ah." and "Ciao"; "stop stop" (0.91 s), "please stop", "stop robot"
+and "robot stop now" are written right (the NPU wrote "robot start now" for
+the last and still answered `stop` under the instructions). A sentence
+added to B ("the one word 'stop' alone is enough") changed nothing. So this
+is the model's hearing of a half-second synthetic word, not the wording;
+a person's voice is not measured. Side effects of B, not scored: "stop it"
+is `stop` on both (was `unknown`), "halt" is `stop` (71 % NPU, 94 % iGPU),
+"abort" is `stop` on the iGPU (70 %) and `unknown` on the NPU, "freeze" is
+`unknown` on both; a quoted "he said stop robot" is `stop` on both, as it
+was under the branch's wording.
+
+B is in `voice/intents.py`; `examples.STOP_ORDERS`, `NOT_STOP_ORDERS`,
+`SPOKEN_STOP_ORDERS`, `SPOKEN_NOT_STOP_ORDERS` hold it in two new tests of
+the Gemma module.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `stop-chain-122017` A | 12:20:17 to 12:27:06, exit 1, 407.53 s | `pytest tests/test_gemma_cube_commands_integration.py -v --tb=short -rA -s` (`/tmp/so101-stop-chain-A-gemma.log`) | **8 passed, 2 failed.** The two new stop tests passed on both backends (typed: 12 orders `stop`, 6 non-orders `unknown`; spoken: 5 and 3). Unchanged by the new entry: igpu typed 37 of 37 (0.63 / 0.93 / 1.48 s), spoken 34 of 37; npu typed 37 of 37 (2.26 / 3.10 / 5.96 s), spoken 34 of 37. The two failures are the spoken test on each backend, the question and the negation, red on the user's word. |
+| `stop-chain` B | 12:27:06 to 12:30:24, exit 0, 198.22 s | `pytest tests/test_voice_notebook.py -rA -s`, backend `npu` | **2 passed. Typed 30 of 30 right** on the NPU (29 of 30 before the new entry: "stop robot"); spoken 24 of 30 (reported, not required), 2.46 / 3.16 / 4.10 s. |
+| `stop-chain` C | 12:30:24 to 12:31:19, exit 0, 53.59 s | `pytest tests/test_demo_notebook.py -rA -s` | **passed.** |
+| `stop-chain` D | 12:31:19 to 12:37:18, exit 1, 357.83 s | `pytest tests -v --tb=short -rA` without the two notebook tests and the Gemma module (run in A to C) (`/tmp/so101-stop-chain-D-suite.log`) | **Void for the voice unit tests: 7 failed, 235 passed, 1 expected failure.** All seven are `tests/test_voice_commands.py` with "No such file or directory: configs/voice.json": another session working in the same tree replaced `configs/voice.json` by `configs/voice.toml` at 12:35 while this run was under way (its edits to `settings.py`, `server.py`, `client.py`, `commands.py`, `setup_voice.sh` and that test file carry times from 12:36 to 12:37). The same file's 13 tests had passed at 12:20 before the chain. The 235 others passed. **The full suite has to be run again once that session's change is complete**; it was not rerun here so as not to start servers under the other session's work. |
+
+## 2026-11-23 — The settings as `configs/voice.toml`, one section per Gemma backend: the setup script's check, the unit tests, the full suite on both backends
+
+What was tested: the move of the voice settings from `configs/voice.json`
+to `configs/voice.toml` (sections `server`, `request`, `backends.npu`,
+`backends.igpu` with `backends.igpu.build`, `listening`,
+`synthetic_voice`), and every reader of it. Environment of every test
+command: `env PYTHONPATH=src .venv/bin/python -m pytest`, run in the
+workshop directory. This run is also the full suite the entry above asks
+for after the stop wording.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| setup check, foreground | 12:40, exit 0 twice | `bash scripts/setup_voice.sh --check --backend npu` and `--backend igpu` | **Both: every piece present**, read from the new file (flm 1.0.13, the NPU device, `gemma4e-flash:e4b`; llama-server at commit `781dbc5ac`, the two Gemma files in the Hugging Face cache). Without `--backend` the script reads `backend: npu`. |
+| unit tests, first launch | 12:41, exit 2, 0.12 s | `.venv/bin/python -m pytest tests/test_voice_commands.py -v --tb=short` | **Setup failure, no test ran:** launched without `PYTHONPATH=src` (`ModuleNotFoundError: No module named 'so101_smolvla'`). Not a result (`AGENT_MISTAKES.md`). |
+| unit tests, foreground | 12:41, exit 0, 2.67 s | `pytest tests/test_voice_commands.py -v --tb=short` (`/tmp/claude-voice-toml/unit.log`) | **14 passed** (13 before; new: a settings file with an unknown backend or without a `backends` section is refused). |
+| `voice-toml-1305` | 12:43:09 to 13:00:04, exit 1, 1013.67 s | `pytest tests -v --tb=short -rA -s` (`/tmp/so101-voice-toml-1305.log`, exit file `/tmp/so101-voice-toml-1305.exit`) | **253 passed, 3 failed, 1 expected failure.** Gemma module: igpu typed 37 of 37 (0.63 / 0.91 / 1.46 s), spoken 34 of 37 (0.78 / 1.03 / 1.19 s); npu typed 37 of 37 (2.24 / 3.10 / 5.96 s), spoken 34 of 37 (2.93 / 3.74 / 4.06 s); the four stop tests passed. Voice notebook on `npu`: typed 30 of 30, spoken 24 of 30 (2.46 / 3.16 / 4.10 s). Two of the failures are the spoken test on each backend, the question and the negation, red on the user's word, as before. The third is `tests/test_notebooks_launcher.py::test_launcher_serves_the_notebooks_directory`: connection refused on the address JupyterLab had just printed (below). |
+| launcher tests alone, foreground | 13:02, exit 0, 3.81 s | `pytest tests/test_notebooks_launcher.py -v --tb=short` (`/tmp/claude-voice-toml/launcher.log`) | **3 passed.** |
+
+Why the launcher test failed, read in Jupyter Server 2.21.1
+(`.venv/lib/python3.12/site-packages/jupyter_server/serverapp.py`): the
+server prints "is running at" with its address in `start_app` (line 3129)
+before its event loop starts (`start_ioloop`, line 3231), and it begins to
+listen only inside that loop (`init_httpserver`, line 2670, schedules
+`_bind_http_server`; the port search before it, `_find_http_port`, closes
+its sockets again, lines 2727 to 2732). The test takes the address line as
+"the server listens" and connects at once; when it is faster than the
+loop's first callback, the connection is refused. The test does not read
+the voice settings; the same failure is recorded on 2026-11-23, 08:20,
+before this change. Not changed here: what the test should wait for
+instead is the user's decision.
+
+### Addition, 13:05 to 13:42: the launcher test waits for a line that says the server listens; the SAM 3 and MuJoCo settings as TOML; the full suite
+
+Decided by the user ("look for an event Jupyter emits once it really
+listens and make the test wait on that"). Jupyter Server logs nothing of
+its own once it listens; the one thing it runs at that moment is an
+extension's start hook, inside its event loop, after the callback that
+begins to listen. `src/so101_smolvla/notebook_server.py` logs "The
+notebooks' server listens on port N" from that hook;
+`notebooks/run_notebooks.sh` enables it; the test waits for the line.
+Also in these runs: `configs/sam3_reference.json` as
+`configs/sam3_reference.toml`, `configs/sim.yaml` as `configs/sim.toml`
+(each loaded beside the file it replaces before that was removed: the
+same content), and the three-cube Gemma test reading the runner's port
+from the settings. Same environment as above.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| launcher tests, three times, foreground | 13:08, exit 0 each, 3.85 / 3.45 / 3.44 s | `pytest tests/test_notebooks_launcher.py -v --tb=short` (`/tmp/claude-voice-toml/launcher-1.log` to `-3.log`) | **3 passed, three times.** JupyterLab's output has the new line 3 ms after the address lines (13:09:13.751 and .754 in a run by hand). |
+| `voice-toml-1320` | 13:11:55 to 13:17:36, exit 0, 340.30 s | `pytest tests/test_notebooks_launcher.py tests/test_voice_commands.py tests/test_gemma_three_cubes_integration.py tests/test_voice_notebook.py tests/test_demo_notebook.py -v --tb=short -rA -s` (`/tmp/so101-voice-toml-1320.log`) | **21 passed.** Voice notebook on `npu`: typed 30 of 30, spoken 24 of 30 (2.46 / 3.17 / 4.12 s). |
+| unit tests after the two conversions, foreground | 13:24, exit 0, 8.62 s | `pytest tests/test_sam3_reference_env.py tests/test_vla_test.py tests/test_voice_commands.py -v --tb=short` (`/tmp/claude-voice-toml/unit-2.log`) | **30 passed.** `scripts/run_sam3_reference.sh --print checkout` and `--print compiled_dir` give the paths of the new file. |
+| `voice-toml-1335` | 13:25:17 to 13:42:22, exit 1, 1024.32 s | `pytest tests -v --tb=short -rA -s` (`/tmp/so101-voice-toml-1335.log`, exit file `/tmp/so101-voice-toml-1335.exit`) | **254 passed, 2 failed, 1 expected failure.** The launcher test passed. Gemma module: igpu typed 37 of 37 (0.62 / 0.92 / 1.51 s), spoken 34 of 37 (0.77 / 1.02 / 1.18 s); npu typed 37 of 37 (2.24 / 3.10 / 5.93 s), spoken 34 of 37 (2.94 / 3.71 / 4.09 s). Voice notebook on `npu`: typed 30 of 30, spoken 24 of 30 (2.46 / 3.15 / 4.11 s). The two failures are the spoken test on each backend, the question and the negation, red on the user's word. |
+
+Seen and not changed in these runs: `src/so101_smolvla/export_episodes.py`
+asks the MuJoCo settings for `cube_positions`; the file's key is
+`distinct_cube_positions`. No test runs that script.
+
+<a id="t-2026-11-23-table-picture-move"></a>
+### Addition, 13:43: the stacking twin's table picture moved from `configs/` to `assets/`
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `table-move-134344` | 13:43:44 to 13:45, exit 0, 104.18 s | `PYTHONPATH=src MUJOCO_GL=egl .venv/bin/python -m pytest tests/test_sapien_stacking.py tests/test_sapien_env_integration.py tests/test_table_view.py -v --tb=short -rA` (`/tmp/so101-table-move.log`) | **44 passed, 1 expected failure.** The rig loads the picture from `assets/sapien_stack_recording_table.png` (named in `configs/sapien_stack_recording_rig.json`), the real SAPIEN stacking scene shows it behind the arm (`test_real_sapien_recording_rig_shows_and_drives_the_measured_rig`), and a rig file that names an absent picture is still refused ("is missing"). Run after the other session's suite had ended and while it edited no existing source file. |
+
+<a id="t-2026-11-23-models-toml"></a>
+## 2026-11-23 — One file for which model runs where, `configs/models.toml`: its reader's tests, the setup scripts, the full suite on both backends
+
+What was tested: `configs/models.toml` (sections `command` for Gemma,
+`outlines` for SAM 3, `motion` for SmolVLA) and its one Python reader
+`src/so101_smolvla/models.py`; the voice settings taking the backend
+and its two sections from it; `scripts/setup_voice.sh` and
+`scripts/sam3_reference_settings.sh` reading it; `track.CHECKPOINT` read
+from it; and `export_episodes.py` with the key that exists. Environment
+of every test command: `env PYTHONPATH=src .venv/bin/python -m pytest`,
+run in the workshop directory.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| the new file against the old ones, foreground | 13:47, exit 0 | a load of `models.toml` beside `voice.toml` and `sam3_reference.toml` as they were | **The same values:** the backend, `command.npu` and `command.igpu` against `backends.npu` and `backends.igpu`, `outlines` (without `device`) against the four SAM 3 keys. |
+| unit tests, first run | 13:50, exit 1, 11.55 s | `pytest tests/test_models.py tests/test_voice_commands.py tests/test_sam3_reference_env.py tests/test_vla_test.py -v --tb=short` (`/tmp/claude-voice-toml/unit-3.log`) | **38 passed, 1 failed.** The failure was the new test's own: it removed the header `[command.igpu]` and left `[command.igpu.build]`, which still makes the section (`AGENT_MISTAKES.md`). The reader was right. |
+| `tests/test_models.py` after the test's correction | 13:51, exit 0, 4.16 s | `pytest tests/test_models.py -v --tb=short` | **8 passed:** the three sections; the checkpoint of `track.py` is the file's; the voice settings and both shell readers give the file's values; a file with an unknown backend, without `command.igpu`, without `motion`, or with another `device` for SAM 3 or SmolVLA is refused with what is wrong. |
+| `voice-toml-1410` | 13:51:52 to 14:08:44, exit 1, 1010.70 s | `pytest tests -v --tb=short -rA -s` (`/tmp/so101-voice-toml-1410.log`, exit file `/tmp/so101-voice-toml-1410.exit`) | **263 passed, 2 failed, 1 expected failure** (9 tests more than the run before: 8 of `test_models.py`, 1 of the SAM 3 launcher refusing another device). Gemma module: igpu typed 37 of 37 (0.62 / 0.91 / 1.48 s), spoken 34 of 37 (0.77 / 1.02 / 1.17 s); npu typed 37 of 37 (2.24 / 3.11 / 5.97 s), spoken 34 of 37 (2.93 / 3.75 / 4.08 s). Both notebook tests passed; voice notebook on `npu`: typed 30 of 30, spoken 24 of 30 (2.47 / 3.17 / 4.06 s). The two failures are the spoken test on each backend, the question and the negation, red on the user's word. |
+
+During this run, at about 14:06, the user ran the demo notebook by hand
+and its first cell stopped with "something already answers at
+http://127.0.0.1:8082": the voice notebook test of this run held the
+default port then (its `flm serve`, started 14:05:30, a child of the
+run's `pytest`). The notebook refused as it is built to; the test that
+held the port passed. Not tested by any test: `export_episodes.py`.
+
+<a id="t-2026-11-23-call-first"></a>
+## 2026-11-23 — Gemma's answer read as it is written: the call acted on before the words; FastFlowLM's power modes; the full suite
+
+What was tested: the client reading the answer as a stream and handing
+the call (command, object, place) over the moment it is complete; the
+microphone session and the demo acting on it; the demo's two events
+(`command received`, `transcript received`) and their immediate draw;
+`pmode = "turbo"`; the warm-up request. Environment of every test
+command: `env PYTHONPATH=src .venv/bin/python -m pytest`, in the workshop
+directory. The probe is `/tmp/claude-voice-toml/probe_stream.py` (not in
+the repository): the project's server starter, instructions and schema,
+five typed and five spoken sentences per power mode, `stream: true`.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| probe, `performance` then `turbo`, foreground | 14:33, exit 0 | `probe_stream.py performance` and `turbo` on port 8083 (`/tmp/claude-voice-toml/probe-performance.log`, `probe-turbo.log`) | **FastFlowLM streams token by token while held to the schema** (33 to 38 pieces for 34 to 39 tokens). **`turbo` is not faster than `performance`:** decoding 13.4 to 13.7 against 13.3 to 13.7 tokens per second, every time within 0.05 s of the other mode's. Typed pick sentences: first piece after 0.40 s, the call after 1.95 s, the end after 3.2 to 3.35 s; spoken: 1.05 s, 2.6 s, 3.6 to 4.0 s; "stop robot" typed 1.40 and 2.0 s, spoken 2.0 and 2.7 s. The first request after a server start: first piece after 3.1 s, the call after 4.6 s. |
+| unit tests, first run | 14:28, exit 1, 22.96 s | `pytest tests/test_voice_commands.py tests/test_demo.py tests/test_models.py tests/test_three_cube_rollout.py tests/test_pick_place.py -v --tb=short` (`/tmp/claude-voice-toml/unit-4.log`) | **58 passed, 2 failed.** One failure was a real defect of the new client: the library's 512-byte read buffer held the end of the call back until the server wrote more (the stand-in server was released by its 10 s bound, not by the callback). The other was a miscounted text in the test. Both in `AGENT_MISTAKES.md`. |
+| unit tests after the fix | 14:29, exit 0, 12.85 s | the same command (`unit-5.log`) | **60 passed.** |
+| one draw of the demo picture | 14:36 | `compose` and `jpeg` of a 640 by 480 two-camera picture, 30 times | **8.9 ms median** (8.6 to 30.6). |
+| unit tests with the two events and the immediate draw | 14:41, exit 0, 17.94 s | `pytest tests/test_demo.py tests/test_voice_commands.py tests/test_demo_console.py tests/test_pick_place.py tests/test_three_cube_rollout.py tests/test_models.py -v --tb=short` (`unit-7.log`) | **66 passed.** |
+| the real servers, the hand-over test | 14:46, exit 0, 27.83 s | `pytest tests/test_gemma_cube_commands_integration.py -k handed_over -v --tb=short -rA -s` (`handed-over-2.log`) | **2 passed** (a run before it failed on the test's own demand that two clock readings be equal, `demo-nb-2.log`). iGPU: the call after 1.09 s, the whole answer after 1.39 s (first request); the call only 0.50 s; warm-up 0.40 s. NPU: first request 4.62 s to the call; the call only 1.94 s; the request after a closed one 2.35 s to its call (usual 1.95 s); warm-up 1.40 s. |
+| `stream-suite-1` | 14:48:40 to 15:05:58, exit 1, 1037.14 s | `pytest tests -v --tb=short -rA -s` (`/tmp/so101-stream-suite-1.log`, exit file `/tmp/so101-stream-suite-1.exit`) | **272 passed, 2 failed, 1 expected failure.** Both notebook tests passed; the demo notebook's start cell prints "Gemma 4 warmed up with one request". The two failures are the spoken test on each backend, the question and the negation, red on the user's word. Seconds below. |
+
+Seconds per request over the 37 sentences of the Gemma module, min /
+median / max, from `stream-suite-1`:
+
+| Backend, how | To the complete call | To the end of the answer | Right |
+|---|---|---|---|
+| iGPU, typed | 0.38 / 0.54 / 0.60 | 0.62 / 0.91 / 0.99 | 37 of 37 |
+| iGPU, synthetic voice | 0.56 / 0.68 / 0.78 | 0.77 / 1.03 / 1.17 | 34 of 37 |
+| NPU, typed | 1.40 / 1.94 / 2.02 | 2.25 / 3.10 / 3.41 | 37 of 37 |
+| NPU, synthetic voice | 2.22 / 2.61 / 2.68 | 2.92 / 3.75 / 4.11 | 34 of 37 |
+
+Voice notebook on `npu`: typed 30 of 30, spoken 24 of 30 (2.43 / 3.19 /
+4.10 s to the end of the answer).
+
+Not measured: the time from the end of a spoken sentence to the first
+event in the live session (the microphone session sends a window every
+2 s of speech, `hop_s`).

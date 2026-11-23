@@ -6714,3 +6714,447 @@ for step. Numbers in `TESTING_LEDGER.md`
   cause is not known. The test now keeps JupyterLab's whole output on failure.
 - The scene's horizon is set for several commands; a very long session
   reaches the simulator's truncation flag, which the loop ignores.
+
+## 2026-11-23 — Gemma 4 on the NPU: FastFlowLM beside llama-server, chosen in the settings; the answer held to a JSON schema there, to the grammar here
+
+Result in one line: `configs/voice.json` names where Gemma 4 E4B runs,
+`npu` (FastFlowLM's `flm serve` on the XDNA 2 NPU, the default) or `igpu`
+(`llama-server` on the integrated graphics, as before); the same client,
+instructions, clip and listening loop ask either; FastFlowLM holds the
+answer to a JSON schema built from the commands, `llama-server` to the
+grammar file. Numbers in `TESTING_LEDGER.md`
+([the section of this day](TESTING_LEDGER.md#t-2026-11-23-gemma-npu)).
+
+<a id="d-2026-11-23-npu-what-the-user-asked-for"></a>
+### What the user asked for and decided
+
+- "I want to move gemma 4 to run on the NPU. Use this as a working
+  reference ~/GitHub/voice_intent and make a plan." The reference runs
+  `flm serve gemma4e-flash:e4b` and asks it over the OpenAI chat API with
+  the clip as `input_audio` and FastFlowLM's field `think: false`; it holds
+  its three-label answer by an allowlist, no grammar, no schema.
+- Question form 1 (before the plan): FastFlowLM takes no grammar file, only
+  an OpenAI `response_format` JSON schema. The user chose to replace
+  `llama-server` and the flash tag `gemma4e-flash:e4b` as the default.
+- Question form 2 (after the probe measured the NPU at about three times
+  the seconds of the integrated graphics per request): the user chose to
+  upgrade FastFlowLM from 1.0.7 to 1.0.13 first, and revised the first
+  decision: "keep both options for gemma4: iGPU and NPU". The user
+  installed the .deb (`sudo apt install`, 1.0.13 for Ubuntu 24.04).
+- Not taken over from the reference: its allowlist in place of a held
+  shape (this workshop's answer has four fields, held by the schema as by
+  the grammar); its `urllib` streaming client (the request here stays one
+  non-streaming call through `requests`, as measured); the server left for
+  the user to start in another terminal (the server stays a child of the
+  Python process, as `llama-server` is).
+
+<a id="d-2026-11-23-npu-what-was-built"></a>
+### What was built
+
+- `configs/voice.json`: `backend` (`npu`), and the section `flm` (`binary`,
+  `min_version` 1.0.10, `model_tag` `gemma4e-flash:e4b`, `pmode`
+  `performance`, `ctx_len` null, `ready_timeout_s` 60, from the measured
+  10.1 s cold and 5 s warm start). The `llama_cpp`, `gemma` and `server`
+  sections stay; `server.ready_timeout_s` is `llama-server`'s.
+- `voice/settings.py`: `Settings.backend` and `.flm`; `flm_binary`,
+  `flm_version` (`flm version -j`, at or above the minimum), `flm_model`
+  (`flm list -j`, the tag's entry with `installed`), `npu_device`
+  (`/dev/accel/accel0`); `check_ready(settings, backend)` names what the
+  chosen backend misses. `gemma_file` and `grammar` stay for `igpu`.
+- `voice/intents.py`: `response_schema()` from `Intent`, the grammar's shape
+  rule for rule (`command` an enum of the values; `object` empty or one to
+  three lowercase words of up to 16 letters; `place` empty or one or two;
+  `heard` letters, digits and `' , . ? ! -` and spaces); `response_format()`
+  and `schema_text()` for the checksum. The instructions and `intent.gbnf`
+  are untouched. A new command stays three changes; the schema follows.
+- `voice/client.py`: one `GemmaClient` for both; the backend's fields are
+  one method: `grammar` and the template's thinking flag for `igpu`;
+  `model`, `think: false` and `response_format` for `npu`. The last answer's
+  `usage` is kept; a non-200 answer raises with the status and the body.
+- `voice/server.py`: one `GemmaServer`; a `Runtime` row per backend (the
+  readiness line `listening on http://` or `WebServer started on port`, the
+  health address `/health` or `/v1/models`, the log name, the recorded
+  settings); the command line and the environment per backend (the graphics
+  override for `llama-server` only). The start is the same one bounded wait
+  on the readiness line.
+- `voice/commands.py`: `VoiceCommands(..., backend=)`; the provenance names
+  the backend and, for `npu`, FastFlowLM's version, the tag, the model's
+  name (`Gemma4-E4B-IT-NPU2`), quantization (Q4_1), context length and the
+  schema's checksum; for `igpu` what it named before.
+- `scripts/setup_voice.sh`: the packages, then the backend's own steps
+  (`--backend igpu|npu` for the other one): for `npu`, FastFlowLM at or
+  above the minimum and the NPU device are checked and named (system
+  installs the script does not make), the model is pulled with `flm pull`.
+- Tests: `test_voice_commands.py` (the schema and the grammar agree on every
+  command; the three patterns accept and reject the grammar's examples;
+  readiness per backend; the port refusal per backend; each backend's
+  command line and recorded settings), `test_gemma_cube_commands_integration.py`
+  (the module runs once per backend that is set up, skipping the other with
+  its reason), the three-cube test and the notebook test read the backend's
+  log name and health address. README, SPEC.md (section 2, 5.1 departure 4,
+  the tool-call ways), both notebooks' texts.
+- Probes, not in the repository (`/tmp/flm-probe/probe.py`, `probe2.py`,
+  `probe3.py`, reports beside them): see the testing ledger.
+
+<a id="d-2026-11-23-npu-what-it-means"></a>
+### What it means
+
+- FastFlowLM 1.0.7, the version on this machine, took `response_format` and
+  did not hold the answer to it (an enum narrowed to `unknown` still gave
+  `pick_place`); constrained decoding came with 1.0.10 (2026-10-22). On
+  1.0.13 the schema is held on both tags. Without the upgrade the NPU path
+  would have been the reference's: the shape by the instructions alone.
+- On 1.0.7 a request with thinking on spoiled FastFlowLM's pinned
+  instructions: every later answer, typed or spoken, replayed that request's
+  text. The first probe's audio failure was this, caused by the probe's own
+  thinking request, not by the audio. On 1.0.13 the pinned prefix survives
+  a thinking request. The client sends `think: false` always.
+- The NPU answers in about three times the seconds of the integrated
+  graphics: prefill is quick (0.4 s typed, 1.0 s for a 6 s clip, the
+  instructions pinned) and decoding runs at 13 to 14 tokens per second for
+  the 27 to 39 tokens of an answer, of which the `heard` field is about
+  half. The integrated graphics decodes the same answer in under a second.
+  That is why both backends stay.
+- The flash tag's 1,024-token context holds a spoken request: 661 tokens of
+  instructions pinned, 10 of text, about 157 of audio, up to 96 of answer.
+- The NPU's busy columns read 97 to 99 % and 2.2 W whenever FastFlowLM holds
+  the model, between requests as well; the utilization table shows the held
+  context, not the work.
+- Two FastFlowLM servers share the NPU (the notebook's port beside the
+  tests' port), so the notebook and a test can run on the same day as they
+  did with `llama-server`.
+
+<a id="d-2026-11-23-npu-where-this-leaves-the-work"></a>
+### Where this leaves the work
+
+- The default is the NPU. `backend: igpu` in `configs/voice.json` gives the
+  former path; the setup script sets up either.
+- Not done: a shorter answer (without the `heard` echo) would cut the NPU's
+  decoding time about in half; it changes the measured answer shape and
+  needs the user's word (SPEC.md section 5.1).
+- Not done: `pmode turbo` for `flm serve`; `performance` is FastFlowLM's
+  default and the measured one.
+- The NPU load test of the utilization meters stays unwritten: Gemma's held
+  context would satisfy it without any work being done.
+- The spoken Gemma test stays red on the user's word on both backends: the
+  NPU gives the same 34 of 37, the question and the negation.
+- One typed difference between the two builds of the same weights: "stop
+  robot" typed is `stop` on `llama-server` (Q4_0) and `unknown` on
+  FastFlowLM (Q4_1), with and without the schema, on both tags; spoken in
+  the synthetic voice it is `stop` on both backends (3 of 3 each). The
+  voice notebook's test asks every typed sentence right and is red on the
+  NPU backend for this one sentence (29 of 30). The instructions are the
+  measured text; changing them (or the test) needs the user's word.
+  Investigated on the user's word (the testing ledger, "Why"): the
+  template, the schema, the request's shape and 4-bit weights as such are
+  ruled out; FastFlowLM's build of the model shifts the command's logits
+  about 2.4 nats towards `unknown` for the stop family, which the
+  instructions make borderline (six stop-like phrases listed as
+  `unknown`); the spoken form's stronger pull towards `stop` survives the
+  shift, the typed form's does not. A full stop after the words
+  ("stop robot.") flips the typed answer to `stop`.
+
+<a id="d-2026-11-23-stop-entry"></a>
+### Addition, after 12:00: the stop entry of the instructions, reworded on the user's word
+
+- The user: "can you improve the prompt for gemma4 to handle 'stop' or
+  'stop robot' more reliably ?" Read as: both are to be `stop`; until now
+  a bare "stop" was `unknown` by the branch's text.
+- Built: the `stop` entry of `INTENT_SYSTEM_PROMPT` (`voice/intents.py`),
+  the only line of the instructions that differs from the branch's: an
+  order to stop, with or without the robot named, is `stop`, with a
+  tie-break towards `stop`; talk about stopping that is no order to the
+  robot is `unknown`. `voice/examples.py`: `STOP_ORDERS`,
+  `NOT_STOP_ORDERS`, `SPOKEN_STOP_ORDERS`, `SPOKEN_NOT_STOP_ORDERS`; two
+  tests on them in `tests/test_gemma_cube_commands_integration.py`, run on
+  each backend. SPEC.md 5.1 (departure 5 and the dated bullet) and
+  section 10. The instructions' checksum in a run's provenance changes
+  with this.
+- Chosen among four wordings by the servers' own token probabilities
+  (`TESTING_LEDGER.md`,
+  [the stop entry](TESTING_LEDGER.md#t-2026-11-23-stop-entry)). What it
+  means: the branch's wording was borderline on both backends, not only
+  on the NPU (60 % for "robot stop" on the integrated graphics, and a
+  spoken "stop talking" was a `stop` there); the new one is decisive on
+  both, typed (orders over 99.9 % `stop`, non-orders 97 % or more
+  `unknown`) and for the spoken orders that are heard. The voice
+  notebook's typed column is 30 of 30 on the NPU again.
+- Not gained: a lone spoken "stop" of half a second in the synthetic
+  voice, which the model writes down as "Ah." with no instructions at
+  all; "please stop", "stop robot", "robot stop" are heard. To be tried
+  with a person's voice. Looser than before: "stop it" and "halt" are
+  `stop` now.
+- Seen on the way: `stop` is recognised and shown, but nothing in this
+  workshop's pick loop interrupts a running pick on it (a non-pick command
+  is refused and moves nothing). Not changed; not asked.
+- Open: the full suite after this change was crossed by another session
+  replacing `configs/voice.json` by `configs/voice.toml` (seven voice unit
+  tests failed on the missing file); it has to be run again when that
+  change is complete. The Gemma module on both backends and both notebook
+  tests ran before the crossing and are as the testing ledger has them.
+  Closed at 13:00: the other session's full suite on the finished tree
+  (`/tmp/so101-voice-toml-1305.log`, read here): 253 passed, 3 failed, 1
+  expected failure; the two stop tests passed on both backends, the voice
+  unit tests passed, the notebook's typed column 30 of 30 on the NPU. The
+  three failures: the spoken test on each backend (red on the user's
+  word) and the launcher's `test_launcher_serves_the_notebooks_directory`
+  (connection refused right after JupyterLab's address line, the known
+  flake of this morning's entry). That session's own section, at the end
+  of this file, has the run.
+
+<a id="d-2026-11-23-voice-toml"></a>
+## 2026-11-23 — The voice settings as `configs/voice.toml`: one section per Gemma backend, comments instead of note keys
+
+Result in one line: `configs/voice.toml` replaces `configs/voice.json`;
+`backend` chooses `backends.npu` or `backends.igpu`, which name the same
+things the same way; the full suite is as before on both backends
+(253 passed, the two spoken tests red on the user's word, one launcher
+test failed on a start-up race of its own).
+
+Why (the user, on reviewing the file): the section `gemma` described the
+integrated graphics only while the NPU's model sat under `flm`; and JSON
+has no comments, so the notes were `_`-prefixed keys that the reader
+stripped again.
+
+What the old file had wrong, beyond that:
+
+- `server` mixed what both backends use (host, ports, temperature, answer
+  length, time limit) with llama-server's own options.
+- `ready_timeout_s` existed twice; the NPU's won because `server.py`
+  copied the whole `flm` section over `server`.
+- The context length had two names (`ctx_size`, `ctx_len`); the graphics
+  workaround was in two sections (`gfx_target`, `hsa_override_gfx_version`).
+
+What changed:
+
+- `configs/voice.toml`: `backend`; `server` (host, port, runner_port);
+  `request` (temperature, max_tokens, timeout_s); `backends.npu` (model,
+  binary, min_version, pmode, ready_timeout_s); `backends.igpu` (repo,
+  model, mmproj, context, n_gpu_layers, parallel, no_warmup,
+  ready_timeout_s); `backends.igpu.build` (repository, commit, checkout,
+  server_bin, gfx_target, hsa_override_gfx_version); `listening` and
+  `synthetic_voice` as they were. The notes are comments. TOML has no
+  null: the NPU's `context` and `listening.mic_device` are left out of the
+  file and read as None, filled in by `load_settings` alone.
+- `voice/settings.py`: reads the file with `tomllib`; `Settings` has
+  `server`, `request`, `backends`, `listening`, `synthetic_voice` and the
+  properties `npu`, `igpu`, `build`; a file without one of the two backend
+  sections is a `SetupFailure`. Removed: `SECTIONS`, `sections`,
+  `_without_notes`.
+- `voice/server.py`: each server reads its own section (`options`); the
+  merge of two sections is gone. Recorded settings: `context` (before
+  `ctx_size`, `ctx_len`) and `model` (before `model_tag`).
+- `voice/client.py`, `voice/commands.py`: the request's values from
+  `request`, the models from `npu` and `igpu`.
+- `scripts/setup_voice.sh`: one reader, `setting <dotted.key>`, on the
+  system Python's `tomllib` (3.12.3 here); `top` is gone.
+- Tests: `tests/test_voice_commands.py` (the new layout, both backends'
+  recorded settings in full, a refused settings file) and one test of
+  `tests/test_gemma_cube_commands_integration.py` (the lookups).
+- The file's name in `README.md`, `SPEC.md` (with a dated entry in
+  section 2), both notebooks and the docstrings. In the notebooks the
+  name was replaced as text by a command, because the Edit tool refuses
+  notebooks and the notebook tool clears saved outputs; checked against a
+  copy: nothing else differs. Earlier entries of the ledgers keep the old
+  name.
+
+Open:
+
+- `tests/test_notebooks_launcher.py::test_launcher_serves_the_notebooks_directory`
+  fails now and then: it connects as soon as JupyterLab prints its
+  address, and Jupyter Server prints it before it listens (the testing
+  ledger, same date). What the test should wait for instead needs the
+  user's word.
+
+<a id="d-2026-11-23-voice-toml-additions"></a>
+### Addition, 13:05 to 13:42: the launcher's listening line, the README on the NPU with a Configuration section, two more settings files as TOML
+
+Result in one line: the launcher test no longer races JupyterLab's
+start; the README shows Gemma on the NPU and explains the settings in a
+section of its own; the SAM 3 and MuJoCo settings are TOML; the full
+suite is 254 passed with the two spoken tests red on the user's word.
+
+- The launcher test (the user: wait on an event Jupyter emits once it
+  listens). Jupyter Server has no log line of its own for that. New:
+  `src/so101_smolvla/notebook_server.py`, a server extension whose start
+  hook, run inside the server's event loop after the listen, logs "The
+  notebooks' server listens on port N". `notebooks/run_notebooks.sh`
+  enables it (and puts `src` on the server's path for it);
+  `tests/test_notebooks_launcher.py` waits for the address and then for
+  that line. No retry, no sleep.
+- The settings file alone decides where Gemma runs (the user: "make
+  gemma on npu the default and the toml the SOT"). No flag was added to
+  the demo. `tests/test_gemma_three_cubes_integration.py` reads the
+  runner's port from the settings instead of naming 8083.
+- `README.md`: the use-case diagram, the stage table, the compute
+  placement paragraph and table name the NPU for Gemma; the integrated
+  graphics and the side-by-side seconds moved into the new section
+  "Configuration", which describes `configs/voice.toml` section by
+  section, how to change the backend, who reads the file, and the other
+  settings files.
+- `configs/sam3_reference.json` is `configs/sam3_reference.toml`
+  (reader: `scripts/sam3_reference_settings.sh`, on `tomllib`; the three
+  SAM 3 and demo tests and the demo notebook's readiness cell load it
+  the same way); `configs/sim.yaml` is `configs/sim.toml` (`vla_test.py`,
+  `record.py`, `export_episodes.py`). `configs/contract.yaml` stays: it
+  is written by `scripts/write_contract.py`. The two `sapien_stack_*`
+  JSON files stay: measured data that programs write.
+
+Next, on the user's go: one `configs/models.toml` for the three models
+(Gemma's backend and its two sections, SAM 3's four keys, SmolVLA's
+checkpoint), and the wrong key in `export_episodes.py`.
+
+<a id="d-2026-11-23-table-picture-move"></a>
+### Addition, 13:43: the stacking twin's table picture is in `assets/`, not in `configs/`
+
+- The user, on seeing `configs/sapien_stack_recording_table.png`: what is
+  it doing there; then "yes move it to assets". It is the picture of the
+  real table the stacking twin shows behind the arm (the per-pixel median
+  of 104 top pictures of one recording, commit `e9f453c` of 2026-11-20),
+  a measured picture and no setting.
+- Done: `git mv` to `assets/sapien_stack_recording_table.png`;
+  `configs/sapien_stack_recording_rig.json` names it by that path,
+  relative to the workshop, and stays the one place that names it;
+  `stack_recording_rig.py` resolves the name against the workshop
+  (`WORKSHOP`, in place of `CONFIG_DIRECTORY`); one sentence in the
+  README's row for the rig file. Earlier ledger entries name the old
+  place and stay as they are.
+- Tested: `TESTING_LEDGER.md`,
+  [the move](TESTING_LEDGER.md#t-2026-11-23-table-picture-move): 44
+  passed, 1 expected failure.
+
+<a id="d-2026-11-23-models-toml"></a>
+## 2026-11-23 — One file for which model runs where: `configs/models.toml`
+
+Result in one line: `configs/models.toml` names the three models of the
+use case and the processor of each; the voice settings, the SAM 3
+scripts and the checkpoint loader read it; the full suite is 263 passed
+with the two spoken tests red on the user's word.
+
+Why (the user's first question of this work: is there a configuration
+file that determines which models are used and where they run; then
+"go" on the layout proposed): until now Gemma's choice was in
+`voice.toml`, SAM 3's files in `sam3_reference.toml`, and the SmolVLA
+checkpoint a constant of `track.py`.
+
+What changed:
+
+- `configs/models.toml`: `[command]` (`backend`, as in git `npu`),
+  `[command.npu]`, `[command.igpu]`, `[command.igpu.build]` (the
+  sections that were `backends.*` of `voice.toml`); `[outlines]` (the
+  four keys of `sam3_reference.toml`, which is removed, and `device`);
+  `[motion]` (`checkpoint`, `device`).
+- `device` of `outlines` and `motion` is `igpu` and is checked, not
+  chosen: neither model runs on the NPU today. `load_models` refuses
+  another value; so does `scripts/run_sam3_reference.sh`.
+- `src/so101_smolvla/models.py`: `load_models`, the one Python reader,
+  `motion_checkpoint`, and `SetupFailure` (moved here from
+  `voice/settings.py`, which hands it on under the same name).
+- `voice/settings.py`: `load_settings` reads `configs/voice.toml` for
+  `server`, `request`, `listening`, `synthetic_voice` and takes the
+  backend and its two sections from `load_models`. `configs/voice.toml`
+  no longer names a backend or a model.
+- `track.py`: `CHECKPOINT` is the file's `motion.checkpoint`.
+- `scripts/setup_voice.sh` reads `command.*`;
+  `scripts/sam3_reference_settings.sh` reads `outlines.*` and has the
+  device check.
+- `export_episodes.py` reads `distinct_cube_positions`; it asked for
+  `cube_positions`, a key the settings never had. No test runs that
+  script.
+- Tests: new `tests/test_models.py`; the SAM 3 and demo tests take
+  SAM 3's section through `load_models`; the SAM 3 launcher's test has
+  a case for another device.
+- `README.md` (section "Configuration"), `SPEC.md` (a dated entry in
+  section 2), both notebooks (six text lines, replaced as text by a
+  command and checked: no stored output changed).
+
+Seen on the way: while a full suite runs, its two notebook tests hold
+Gemma's default port, 8082, for some minutes each, and the demo
+notebook started by hand in that time stops with "something already
+answers". That is the notebook's own refusal; the user was not told
+that the port was taken.
+
+Not done: nothing is committed. A split into five commits is proposed
+to the user (the launcher's line; the MuJoCo settings; the table
+picture; Gemma on the NPU with the models file; the documents).
+
+<a id="d-2026-11-23-call-first"></a>
+## 2026-11-23 — The call is acted on while Gemma still writes the words; two events for the picture
+
+Result in one line: on the NPU a command is known 1.94 s after a typed
+request and 2.61 s after a spoken one (median of 37), instead of 3.10
+and 3.75 s for the whole answer; the demo starts the pick and updates
+its picture at that moment and again when the words arrive; `turbo`
+changes nothing.
+
+Why (the user, on the demo by hand: the NPU's latency "at least 3 times
+as long as on iGPU"; then: optimise on the NPU, `pmode` to turbo,
+stream the response tokens to the logic that interprets the tool call,
+the tool call first and then the transcript; minimise buffering; clear
+events for the command and for the transcript, the picture updated on
+them).
+
+What was found first:
+
+- The answer already has the call first: the instructions, the grammar
+  and the schema write `command`, `object`, `place`, then `heard`. No
+  word of the instructions was changed.
+- Nothing streamed: the client waited for the whole answer.
+- FastFlowLM writes 13.3 to 13.7 tokens per second in `performance` and
+  in `turbo` alike. `pmode = "turbo"` is set on the user's word; it is
+  not where the time is.
+
+What changed:
+
+- `voice/intents.py`: `call_from_partial` (the call, once the text so
+  far holds all of it: the comma after the place completes it) and
+  `heard_from_partial`, beside the reader of a whole answer.
+- `voice/client.py`: every request is `stream: true`, read line by line
+  as the bytes arrive (`iter_lines(chunk_size=1)`; the library's default
+  of 512 bytes held the end of the call back). `on_call(call, seconds)`
+  runs the moment the call is complete. `parse(..., words=False)` and an
+  `on_call` that returns False end the request there and close the
+  connection. `warm_up()` is one request thrown away. `last_call_s` and
+  `last_total_s` time the last request. An answer cut off inside its
+  words now still gives its call (before: `unknown`).
+- `voice/microphone.py`: `Listener.start(on_command, ..., on_call)`.
+  The repeat filter is asked at the call; a call it lets through goes to
+  `on_call` at once and its whole answer to `on_command` at the end; the
+  words of a call it drops (no command, a repeat) are not read, so the
+  next window is asked sooner.
+- `voice/commands.py`: `CommandFields.call_seconds`, in the record of a
+  result beside `seconds`.
+- `demo.py`: two named events, `command received`
+  (`DemoSession.command_received`, was `on_spoken`) and `transcript
+  received` (`transcript_received`); each is logged, kept in
+  `session.events`, written into the transcript with its seconds, and
+  sets `urgent`. A spoken command's call is shown on the listener's
+  thread when it arrives, also while another pick runs; the worker no
+  longer writes it. A typed sentence is shown before Gemma is asked and
+  its request ends at the call. `DemoStack.start` warms Gemma up.
+- `demo_view.py`: the frame pause after a draw is one wait on `urgent`,
+  so the two events are drawn when they happen (one draw: 9 ms) and the
+  camera pictures and the voice meter stay at 10 a second.
+- `configs/models.toml`: `pmode = "turbo"`.
+- Tests: `tests/test_voice_commands.py` (the call from growing text;
+  the server's events; a stand-in server that writes the words only
+  after the client's callback; the listener's order of reports),
+  `tests/test_demo.py` (the events while the worker is held; the draw
+  inside a 30 s frame pause), the Gemma module (the hand-over on both
+  real servers; seconds to the call).
+
+Measured (the testing ledger, [the same date](TESTING_LEDGER.md#t-2026-11-23-call-first)):
+closing a request at its call ends it 1.3 s sooner on the NPU and makes
+the next request's call 0.4 s later.
+
+Open, each needs the user's word:
+
+- `hop_s` of 2 s: a window is sent every 2 s of speech, so up to 2 s
+  pass before a spoken sentence is asked at all. Not measured end to
+  end. The reference `~/GitHub/voice_intent` uses 1 s.
+- The call is about 21 tokens, 1.55 s on the NPU, much of it the JSON's
+  keys and punctuation. A shorter shape would cut it and changes the
+  measured answer shape (grammar, schema, instructions).
+- The demo notebook's introduction still says "Gemma about 1 s per
+  sentence", the integrated graphics' figure.
+- Nothing is committed.

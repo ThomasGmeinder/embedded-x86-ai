@@ -40,7 +40,7 @@ flowchart TD
   UV(["🎤 User voice: 'put the green cube in the bin'"]):::input
   UT(["⌨️ User text: 'put the green cube in the bin'"]):::input
   subgraph S1 ["1. Command to fields"]
-    G["Gemma 4 E4B, llama-server"]:::model --> F["fields: pick_place, object green cube, place bin"]
+    G["Gemma 4 E4B, FastFlowLM on the NPU"]:::model --> F["fields: pick_place, object green cube, place bin"]
   end
   UV --> G
   UT --> G
@@ -76,7 +76,7 @@ between them.
 
 | Stage | Input | What happens | Model or program |
 |---|---|---|---|
-| 1. Understand the command | The sentence, spoken (one 6 s clip) or typed | Gemma 4 answers under a grammar with the command and its fields: `pick_place`, the object words, the place words, and what it heard. | Gemma 4 E4B, run by `llama-server` through this workshop's voice client, `src/so101_smolvla/voice/` |
+| 1. Understand the command | The sentence, spoken (one 6 s clip) or typed | Gemma 4 answers in one fixed shape with the command and its fields: `pick_place`, the object words, the place words, and what it heard. The shape is held by a JSON schema in the request. | Gemma 4 E4B, run by FastFlowLM on the NPU (the neural processing unit), through this workshop's voice client, `src/so101_smolvla/voice/`. The integrated graphics is the other choice: [Configuration](#configuration) |
 | 2. Choose the cube | Gemma's fields | The one colour in the object field selects the cube. "The cube", "red ball", two colours, a question or another command are refused and nothing moves. The place is recorded but not used, because a pick always ends in the bin. | `src/so101_smolvla/cube_commands.py` |
 | 3. Outline the cubes | Both camera pictures, each time SmolVLA plans (every 50 steps) | SAM 3 outlines everything that matches the phrase "cube"; the colour inside an outline tells which cube it is. | SAM 3, `sam3-tracker-rocm` compiled with MIGraphX, in `.venv-sam3` |
 | 4. Hide the other cubes | The chosen cube and SAM 3's outlines | The two cubes the command does not name are painted over with the empty table and bin, in the top and the wrist picture. | `src/so101_smolvla/picture_editor.py` |
@@ -160,13 +160,20 @@ Gemma, SAM 3 and SAPIEN.
 ## Compute placement
 
 A run is four processes: the main one (`.venv`: the runner, the Gemma client,
-the picture editing and SmolVLA), `llama-server`, the SAM 3 worker
-(`.venv-sam3`) and the SAPIEN worker (`.venv-sapien`). The three models share
-the integrated graphics processor; the simulator, the picture editing and the
-video encoding are on the processor cores. The machine
-(AMD Ryzen AI Max+ PRO 395) has 16 cores with two threads each, so 32 logical
-processors, in two L3 cache complexes: processors 0 to 15 and 16 to 31. The
-NPU is not used by this workshop; the utilization table shows it idle.
+the picture editing and SmolVLA), the Gemma server (FastFlowLM's `flm serve`),
+the SAM 3 worker (`.venv-sam3`) and the SAPIEN worker (`.venv-sapien`). Gemma
+runs on the NPU (the neural processing unit); SAM 3 and SmolVLA share the
+integrated graphics processor (iGPU). The simulator, the picture editing and
+the video encoding are on the processor cores. The machine (AMD Ryzen AI Max+
+PRO 395) has 16 cores with two threads each, so 32 logical processors, in two
+L3 cache complexes: processors 0 to 15 and 16 to 31, and an XDNA 2 NPU. The
+utilization table shows the NPU held at 97 to 99 % and about 2.2 W for as long
+as the server holds the model, between requests as well as during one; it does
+not show the requests themselves.
+
+This is the placement of the settings as they are in git: `backend = "npu"` in
+`configs/models.toml`. Gemma can run on the integrated graphics instead, beside
+SAM 3 and SmolVLA; that is one line of that file ([Configuration](#configuration)).
 
 The launchers pin nothing yet: every process may use all 32 processors.
 Measured on one full layout (`TESTING_LEDGER.md`,
@@ -184,7 +191,7 @@ worth of work. The column "Dedicated CPUs" is that measured placement.
 </thead>
 <tbody>
 <tr><td rowspan="3" valign="middle" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: middle; border: 1px solid rgba(128, 128, 128, 0.4)">Voice command</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Microphone and VAD: 20 ms frames, Silero speech detection (ONNX Runtime on the CPU) gates each frame; every 2 s with speech the last 6 s go to Gemma (the demo and the voice notebook)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">hears the room, decides which sound is speech</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Python, the microphone thread of the main process (<code>so101_smolvla.voice.microphone</code>)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">0 to 9, with the run; a fraction of one processor</td></tr>
-<tr><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Gemma 4 E4B (Q4_0) with its audio projector</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">understands user intent and produces robot commands</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">iGPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)"><code>llama.cpp</code> <code>llama-server</code> (HIP, built by <code>scripts/setup_voice.sh</code>), a child of the main process, port 8083</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">0 to 9, with the run; at most two threads busy</td></tr>
+<tr><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Gemma 4 E4B with its audio encoder</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">understands user intent and produces robot commands</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">NPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">FastFlowLM <code>flm serve gemma4e-flash:e4b</code> (Q4_1, XDNA 2 through the <code>amdxdna</code> driver and XRT), a child of the main process, on the runner's port of <code>configs/voice.toml</code>. The answer is read as it is written, and the call (command, object, place) comes first in it: the pick starts when the call is complete, the words Gemma heard follow. Seconds over 37 sentences, median (<a href="TESTING_LEDGER.md#t-2026-11-23-call-first">the ledger</a>): to the call 1.94 typed, 2.61 spoken; to the end of the answer 3.10 and 3.75. The NPU decodes at 13 to 14 tokens per second; the answer is 25 to 39 tokens</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">0 to 9, with the run; at most two threads busy</td></tr>
 <tr><td style="border: 1px solid rgba(128, 128, 128, 0.4)">espeak-ng (the test's synthetic voice) and the Gemma client</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">speaks a test sentence, sends text or speech to Gemma</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Python, the main process (<code>so101_smolvla.voice</code>, <code>.venv</code>)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">0 to 9, with the run</td></tr>
 <tr><td valign="middle" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: middle; border: 1px solid rgba(128, 128, 128, 0.4)">Choosing the cube</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">a program, <code>cube_commands.py</code></td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">picks the cube the command names; refuses a command that names no single cube</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Python, the main process</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">0 to 9, with the run</td></tr>
 <tr><td valign="middle" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: middle; border: 1px solid rgba(128, 128, 128, 0.4)">Outlines</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">SAM 3 (<code>sam3-tracker-rocm</code>, 504 px, compiled with MIGraphX; mask decoder and memory encoder in PyTorch)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">finds every cube in both camera pictures</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">iGPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">ONNX Runtime MIGraphX EP and torch (ROCm), the SAM 3 worker (<code>.venv-sam3</code>)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">0 to 9; a quarter of one processor</td></tr>
@@ -208,6 +215,75 @@ free for the desktop, your own Gemma server and anything else. One layout
 cannot claim the 12 s gain, which is within the spread between layouts; the
 drop in processor load is certain. To apply it: `taskset -c 0-9` and
 `OMP_NUM_THREADS=4` in `scripts/run_sapien_rollout.sh`, then a ten-layout run.
+
+## Configuration
+
+Which model does what, and on which processor, is set in one file:
+`configs/models.toml`. It is TOML (the format of `pyproject.toml`), with the
+reason for each value as a comment beside it. Nothing else decides it: there
+is no command-line switch and no environment variable for it in the demo, the
+runner or the notebooks.
+
+```toml
+[command]                # Gemma 4 E4B: the sentence, spoken or typed, to fields
+backend = "npu"          # "npu" or "igpu": which of the two sections below is used
+
+[command.npu]            # FastFlowLM (flm serve) on the NPU
+model = "gemma4e-flash:e4b"
+
+[command.igpu]           # llama-server (llama.cpp) on the integrated graphics
+repo = "ggml-org/gemma-4-E4B-it-GGUF"
+model = "gemma-4-E4B-it-Q4_0.gguf"
+
+[outlines]               # SAM 3: the cubes in both camera pictures
+device = "igpu"
+checkout = "~/GitHub/sam3-tracker-rocm-v0.4.0-rc1"
+
+[motion]                 # SmolVLA: the arm
+device = "igpu"
+checkpoint = "Harrysunshine/so101-smolvla-sim-real-10task"
+```
+
+| Section of `configs/models.toml` | What it sets |
+|---|---|
+| `[command]` `backend` | where Gemma 4 E4B runs: `npu` (as in git) or `igpu` |
+| `[command.npu]` | FastFlowLM: the model tag, the program, the lowest version that works, the power mode, how long a start may take |
+| `[command.igpu]` | `llama-server`: the Hugging Face repository and the two model files, the context length, the request slots, how long a start may take |
+| `[command.igpu.build]` | the llama.cpp build of `scripts/setup_voice.sh`: repository, commit, the graphics target and the override the server runs under |
+| `[outlines]` | SAM 3: the checkout of `sam3-tracker-rocm`, its commit, the model directory, the compiled model files; `device` |
+| `[motion]` | SmolVLA: the checkpoint; `device` |
+
+Gemma is the one model with a choice of processor. To move it to the
+integrated graphics: set `backend = "igpu"`, then run
+`./scripts/setup_voice.sh` once (it builds `llama-server` and downloads the two
+model files if they are not there). The two sections use the same names for
+the same things (`model`, `context`, `ready_timeout_s`). Measured side by side
+over the same 37 sentences
+([the ledger](TESTING_LEDGER.md#t-2026-11-23-gemma-npu)): the NPU answers a
+typed sentence in 3.13 s (median) and a spoken one in 3.76 s; the integrated
+graphics in 0.93 s and 1.07 s, while sharing it with SAM 3 and SmolVLA.
+
+`device` of `[outlines]` and `[motion]` states where SAM 3 and SmolVLA run,
+the integrated graphics. It is not a switch: neither runs on the NPU today,
+and another value is refused when the file is read.
+
+Who reads the file: `src/so101_smolvla/models.py` (`load_models`, the only
+reader in Python: the voice settings, the checkpoint loader, the tests and
+through them the demo, the batch runner and the notebooks),
+`scripts/setup_voice.sh` and `scripts/sam3_reference_settings.sh` (one
+`setting` function each). `./scripts/setup_voice.sh --check` says whether
+everything the chosen backend needs is on the machine; `--backend igpu|npu`
+sets up or checks the other one without changing the file.
+
+The other settings of the workshop:
+
+| File | What it holds | Read by |
+|---|---|---|
+| `configs/voice.toml` | the voice path around the model: the Gemma server's address and ports (`[server]`), one request's temperature, answer length and time limit (`[request]`), the microphone session (`[listening]`), the test's espeak-ng voice (`[synthetic_voice]`) | `src/so101_smolvla/voice/settings.py` (`load_settings`) |
+| `configs/sim.toml` | the MuJoCo twin: the two cameras, the task sentence, cube places | `vla_test.py`, `record.py`, `export_episodes.py` |
+| `configs/contract.yaml` | a record, not a setting: what `scripts/write_contract.py` measured of the SmolVLA base checkpoint | written by that script |
+| `configs/sapien_stack_recording_rig.json`, `configs/sapien_stack_initial_states.json` | measured data of the stacking scene: the recording rig's cameras and joint zero points, the start states of the recordings. The rig file names the picture of the real table the stacking twin shows behind the arm, `assets/sapien_stack_recording_table.png` | `stack_recording_rig.py`, `stack_initial_states.py` |
+| `src/so101_smolvla/sapien_config.py` | the SAPIEN twin: the pinned commit, the tasks, picture sizes | the SAPIEN worker and client |
 
 ## Environment
 
@@ -239,12 +315,17 @@ uv pip install --python .venv/bin/python "lerobot[smolvla,training]"
 # The utilization and power table (section below) draws with Qt 6.
 uv pip install --python .venv/bin/python "PySide6-Essentials==6.12.0"
 
-# The Gemma 4 voice path (src/so101_smolvla/voice, settings in configs/voice.json): the
+# The Gemma 4 voice path (src/so101_smolvla/voice; the model and where it runs in
+# configs/models.toml, the rest of its settings in configs/voice.toml): the
 # packages into .venv (requests, scipy, sounddevice, onnxruntime, silero-vad with its model,
-# huggingface_hub; ipykernel, jupyterlab and nbconvert for the notebooks), llama.cpp built
-# with HIP under third_party/, the two Gemma files into the Hugging Face cache
-# (~/.cache/huggingface). No model is stored in the workshop. Runs again without redoing
-# what is done; --check only says what is missing.
+# huggingface_hub; ipykernel, jupyterlab and nbconvert for the notebooks), then the backend
+# of the settings. npu (the default): FastFlowLM 1.0.10 or later must be installed first
+# (the Ubuntu 24.04 .deb of https://github.com/ROCm/FastFlowLM/releases) with the NPU driver
+# (workshops/ryzen-ai-always-on/README.md, the XRT section); the script pulls the Gemma 4
+# model into FastFlowLM's store (~/.config/flm/models). igpu: llama.cpp built with HIP under
+# third_party/, the two Gemma files into the Hugging Face cache (~/.cache/huggingface).
+# No model is stored in the workshop. Runs again without redoing what is done; --check only
+# says what is missing; --backend igpu|npu sets up the other backend.
 ./scripts/setup_voice.sh
 ```
 
@@ -272,9 +353,13 @@ The firmware values come from the platform firmware's metrics table, which the
 - Every value is filtered by the firmware over about one second, so the table
   lags a load by that much. "100 % busy" means the engine was never idle in
   the interval, not that it was saturated.
-- The table cannot tell which program loads the graphics. With Gemma, SAM 3
-  and SmolVLA on the graphics together, each one's share has to come from
-  timing its stage.
+- The table cannot tell which program loads the graphics. With SAM 3 and
+  SmolVLA on the graphics together (and Gemma too, on the `igpu` backend),
+  each one's share has to come from timing its stage.
+- The NPU row reads 97 to 99 % busy and about 2.2 W whenever FastFlowLM holds
+  the Gemma model (the `npu` backend), whether a request runs or not: the
+  firmware's busy values follow the held NPU context, not the work. A request
+  shows as the seconds the transcript prints, not in this table.
 
 ```bash
 ./scripts/run_utilization_meters.sh                       # the table on this screen
