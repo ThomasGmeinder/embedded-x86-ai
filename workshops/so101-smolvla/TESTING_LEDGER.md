@@ -3394,3 +3394,75 @@ Changed (the development ledger has the what and why), then tested:
 
 Not run after this change: the full suite. The change is in `demo_console.py`,
 `demo_view.py`, the notebook's stop section and the three test files above.
+
+<a id="t-2026-11-23-first-command-and-plan-pause"></a>
+### Addition, 19:52 to 22:39: the wait after Gemma's call. The first command of a session; the pause at every plan
+
+The user: after Gemma produces the command there is a long delay before the
+next activity. Measured in the real demo stack (`DemoStack`, 60 steps per
+command), a spoken command handed to the session the way the `Listener` hands
+it over, every stage of the pick loop timed by wrapping the stack's own
+objects in the probe's process (`/tmp/flm-probe/demo_delay.py`; no file of
+the repository changed for the measurement).
+
+**Before the change** (`demo-delay-195259`, `/tmp/so101-demo-delay.log`),
+seconds from Gemma's call to the arm's first step:
+
+| Stage | 1st command (spoken) | 2nd (spoken) | 3rd (typed) |
+|---|---|---|---|
+| SAM 3 outline, both cameras | 6.601 | 0.511 | 0.490 |
+| SmolVLA plan | 1.293 | 0.296 | 0.289 |
+| scene set-up, picture editing, first simulator step | 0.04 | 0.07 | 0.05 |
+| from the call to the first step shown | **7.9** | **0.9** | **0.8** |
+
+Gemma's call came 2.06, 2.10 and 1.30 s after its request began; the pick
+started on the call, while Gemma still wrote the words. So the wait is the
+first run of SAM 3 and of SmolVLA after they are loaded, once per session.
+Within a pick: SAM 3 0.49 to 0.73 s at the plan of step 50, then SmolVLA's
+plan.
+
+**After the change** (the scene's `warm_up`, called by the demo's start):
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| unit tests, foreground | 22:30, 13.15 s | `PYTHONPATH=src MUJOCO_GL=egl .venv/bin/python -m pytest tests/test_pick_place.py tests/test_demo.py tests/test_three_cube_rollout.py -q --tb=short` | **39 passed**, one new: a warm-up runs each model once and leaves the layout as a fresh start, and a command after it runs as without it (stand-in scene). |
+| `warm-check-223122`, first half | 22:31 to 22:33, exit 0 | `demo_delay.py` again (`/tmp/so101-warm-delay.log`) | At the start: "SAM 3 warmed up with one outline of both cameras, 6.8 s; SmolVLA with one plan, 1.3 s". **First command: 0.64 s from the call to the first step shown** (SAM 3 0.411 s, SmolVLA 0.177 s); second 0.82 s; third (typed) about 0.7 s. |
+| `warm-check-223122`, second half | 22:33 to 22:35, exit 0 | `/tmp/flm-probe/warm_equivalence.py` (`/tmp/so101-warm-equiv.log`): the first command of a session, 110 steps (plans at 0, 50, 100), in the real stack with the warm-up and with it switched off in the probe's process | **The joint targets are identical in every number of all 110 steps.** The warm-up does not change what the arm does. |
+| `demo-nb-warm-223809` | 22:38:09 to 22:39, exit 0, 63.09 s | `PYTHONPATH=src .venv/bin/python -m pytest tests/test_demo_notebook.py -v --tb=short -rA -s`, `DISPLAY=:0` (`/tmp/so101-demo-nb-warm.log`) | **1 passed** (54 s before the warm-up): the start cell prints the two warm-up lines; the microphone check as before (opened, 0 overflows, 10 of 10 draws, "listening"). |
+
+**The pause at every plan** (the user: can the 0.5 s every 50 steps be
+hidden; SAM 3 was 0.25 s). SAM 3 takes 0.27 s per camera picture and a
+plan outlines two, one after the other. Tried: both at the same time, in a
+copy of the worker under `/tmp` with two threads
+(`/tmp/flm-probe/sam3_parallel.py`, `sam3-par-223528`, 12 plans of a real
+layout, three runs of the worker):
+
+| Worker | Per plan, both cameras: min / median / max | Inside SAM 3, median per camera |
+|---|---|---|
+| one after the other (as it is) | 0.501 / 0.575 / 0.694 s | top 0.268, wrist 0.279 s |
+| both at the same time (two threads) | 0.405 / 0.528 / 0.546 s | top 0.461, wrist 0.511 s |
+| one after the other, again | 0.470 / 0.578 / 0.693 s | top 0.269, wrist 0.296 s |
+
+The outlines were identical in all three runs. At the same time each
+picture takes nearly twice as long: the two share one graphics processor,
+and the plan gains 0.05 s. Not taken. With SmolVLA's plan (0.18 to 0.30 s)
+the arm stands for about 0.8 s at every plan and moves for about 2.2 s
+(50 steps of about 45 ms). The user's word on it: leave it.
+
+**The warm-up checked by the notebook test** (the user: "add a check to
+validate the warmup works in the notebook test"). The test's new second
+cell types the session's first command, "put the red cube in the bin", into
+the session as the text box does, waits once for the session's own event
+that it is idle, and prints the stack's and the pick loop's own figures:
+what the warm-up's run of each model took (`DemoStack.warmed`), and what
+the command's first outline (`record.sam3_found[0]`, SAM 3's own seconds
+for both cameras) and first plan (`record.plan_seconds[0]`, new) took. The
+test requires each model's first run in the command to take less than half
+of what its warm-up run took.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| unit tests, foreground | 22:47, 13.40 s | `PYTHONPATH=src MUJOCO_GL=egl .venv/bin/python -m pytest tests/test_pick_place.py tests/test_demo.py tests/test_three_cube_rollout.py -q --tb=short` | **39 passed.** The warm-up test also holds that the seconds of each plan of a command are kept (two for a command of three steps with two actions per plan) and that the warm-up's own plan is not among them. |
+| `demo-nb-warmcheck-224734` | 22:47:34 to 22:48:55, exit 0, 81.02 s | `PYTHONPATH=src .venv/bin/python -m pytest tests/test_demo_notebook.py -v --tb=short -rA -s`, `DISPLAY=:0` (`/tmp/so101-demo-nb-warmcheck.log`) | **1 passed.** Warm-up at the start: SAM 3's outline of both cameras 6.59 s, SmolVLA's plan 1.22 s. The first command: red cube, run to its end (400 steps, 8 plans); its first outline **0.386 s**, its first plan **0.183 s**. The microphone check before it as before (opened, 0 overflows, 10 of 10 draws, "listening"); the stop button after it left nothing on port 8082. The test takes 81 s against 63 s: the one command. |
+
+Not run after these changes: the full suite.

@@ -7372,3 +7372,50 @@ Open, each needs the user's word:
   kernel's end to stop Gemma's server; not tested here whether the
   server process ends with it. The full suite was not run after this
   change. Nothing of it is committed.
+
+<a id="d-2026-11-23-warm-up-all-models"></a>
+### Addition, 22:39: SAM 3 and SmolVLA are warmed up when the demo starts; the pause at every plan measured
+
+- The user: after Gemma's command there is a long delay (investigate, read
+  only); then "yes warm up all models. and find a way to hide the 0.5s
+  every 50 steps if at all possible. IIRC sam3 inference time was 0.25s".
+- Found (`TESTING_LEDGER.md`,
+  [the measurement](TESTING_LEDGER.md#t-2026-11-23-first-command-and-plan-pause)):
+  the first command of a session waited 7.9 s between Gemma's call and
+  the arm's first step, 6.6 s of it SAM 3's first outline and 1.3 s
+  SmolVLA's first plan; later commands 0.8 to 0.9 s. Gemma was warmed up
+  at the start already, the other two were not.
+- Built: `PickPlaceScene.warm_up()`: one outline of both cameras and one
+  plan on the layout's first pictures, then the layout is started again
+  with its own seeds, because the plan draws from the policy's random
+  numbers and the outline moves SAM 3's tracking on. `DemoStack.start`
+  calls it and says the seconds. The batch runner does not call it. One
+  unit test; the notebook test asks for the two lines.
+- What it means: the first command now starts 0.64 s after the call; the
+  demo's start takes about 8 s longer. The arm does the same with and
+  without the warm-up, number for number over 110 steps.
+- The pause at every plan: 0.5 to 0.6 s of SAM 3 (0.27 s per camera
+  picture, two pictures, one after the other) and 0.2 to 0.3 s of
+  SmolVLA's plan. Both pictures at the same time gain 0.05 s (one graphics
+  processor) and were not taken. What is left is a decision for the user:
+  the arm does stand while the next plan is made, as an arm with
+  LeRobot's plain (synchronous) control stands; the picture could show
+  the steps at an even pace and hide it, which the twin's rule
+  (`.cursor/rules/so101-digital-twin.mdc`: "A difference that only makes
+  a video look smoother is not allowed") speaks against unless the user
+  says the demo's picture is outside it.
+- The user's answer to the question form (an even pace in the picture;
+  planning ahead while the arm moves; a cheaper SAM 3; leave it): "Leave
+  it". The pause stays visible; nothing is built for it.
+- The warm-up is checked by the notebook test (the user: "add a check to
+  validate the warmup works in the notebook test"). Built for it:
+  `DemoStack.warmed` keeps the seconds the start's warm-up took per
+  model; the pick loop keeps the seconds of every plan of SmolVLA
+  (`LayoutRecord.plan_seconds`, beside SAM 3's seconds, which it kept
+  already); the notebook test's new cell runs the session's first
+  command and requires its first outline and its first plan to take
+  less than half of the warm-up's run of that model. A warm-up that is
+  dropped, or one that no longer runs a model, fails the test: the
+  command's first run is then the slow one. Measured in the test: 0.39 s
+  against 6.59 s for the outline, 0.18 s against 1.22 s for the plan.
+- Nothing of this is committed. The full suite was not run after it.
