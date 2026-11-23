@@ -37,31 +37,41 @@ on 2026-11-22; the design is `SPEC.md`, sections 3, 4.7 and 6.
 
 ```mermaid
 flowchart TD
-  subgraph S1 ["1. Command to fields: Gemma 4 E4B"]
-    U(["User, spoken or typed: 'put the green cube in the bin'"]) --> G["Gemma 4 E4B, llama-server"]
-    G --> F["fields: pick_place, object green cube, place bin"]
+  UV(["🎤 User voice: 'put the green cube in the bin'"]):::input
+  UT(["⌨️ User text: 'put the green cube in the bin'"]):::input
+  subgraph S1 ["1. Command to fields"]
+    G["Gemma 4 E4B, llama-server"]:::model --> F["fields: pick_place, object green cube, place bin"]
   end
-  subgraph S2 ["2. Which cube: a program"]
-    F --> C["cube_commands.py: the green cube"]
+  UV --> G
+  UT --> G
+  subgraph S2 ["2. Which cube"]
+    F --> C["cube_commands.py: the green cube"]:::program
   end
-  T(["📷 top camera"])
-  W(["📷 wrist camera"])
-  subgraph S3 ["3. Outlines: SAM 3"]
-    M["SAM 3, sam3-tracker-rocm"] --> O["outlines of red, green and blue"]
+  T(["📷 top camera"]):::input
+  W(["📷 wrist camera"]):::input
+  subgraph S3 ["3. Outlines"]
+    M["SAM 3, sam3-tracker-rocm"]:::model --> O["outlines of red, green and blue"]
   end
   T --> M
   W --> M
-  subgraph S4 ["4. Editing: a program"]
-    C --> E["picture_editor.py"]
+  subgraph S4 ["4. Editing"]
+    C --> E["picture_editor.py"]:::program
     O --> E
     E --> P["pictures with the green cube only"]
   end
-  subgraph S5 ["5. Motion: SmolVLA"]
-    P --> V["SmolVLA, so101-smolvla-sim-real-10task"]
-    X["sentence: Pick up a cube and place in the bin"] --> V
-    V --> J["50 joint targets per plan"] --> A(["arm: green cube into the bin"])
+  subgraph S5 ["5. Motion"]
+    P --> VLA["SmolVLA, so101-smolvla-sim-real-10task"]:::model
+    X["sentence: Pick up a cube and place in the bin"] --> VLA
+    VLA --> J["50 joint targets per plan"] --> A(["arm: green cube into the bin"]):::input
   end
+  classDef model fill:#efdcff,stroke:#7b3fa0,stroke-width:2px,color:#000
+  classDef program fill:#dff0df,stroke:#3b7a3b,stroke-width:2px,color:#000
+  classDef input fill:#fffbe6,stroke:#8a7a2a,color:#000
 ```
+
+Purple boxes are the three AI models, green boxes the two programs, yellow
+rounded boxes the inputs and the output; the plain boxes are what passes
+between them.
 
 | Stage | Input | What happens | Model or program |
 |---|---|---|---|
