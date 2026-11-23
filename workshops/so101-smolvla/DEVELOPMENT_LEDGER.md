@@ -7335,3 +7335,40 @@ Open, each needs the user's word:
 - No source file changed. Left for the user's word: `SPOKEN_STOP_ORDERS`
   could take "stop now" in; a lone "stop" would need another sound than
   the test voice's own to be a fair test.
+
+<a id="d-2026-11-23-run-all-and-microphone-check"></a>
+### Addition, 19:11: "Run All" no longer stops the demo; a stopped picture says so; the notebook test checks the microphone
+
+- The user: the demo says "VOICE no microphone"; then, of two fixes
+  offered, "Both"; then "add mic testing to the notebook test and run it".
+- The cause (`TESTING_LEDGER.md`,
+  [the checks](TESTING_LEDGER.md#t-2026-11-23-run-all-and-microphone-check)):
+  the notebook's cells were run in a row, the stop cell stopped
+  everything a second after the live cell, and the closed picture kept a
+  frame from before the microphone's first frame. The notebook was built
+  so that all of it runs headless for its test; nobody had run it that
+  way with a browser.
+- Built:
+  - `demo_view.StopControl`: a button, "stop everything". The notebook's
+    stop cell shows it and prints "the demo keeps running"; the stopping
+    (the picture, the stack, the utilization window) runs once, on the
+    first press, and its two lines appear under the button.
+  - `DemoView.close()` draws one last frame with `stopped=True`;
+    `demo_console.voice_state`, `panel` and `compose` take that flag: the
+    voice line reads "stopped; run the live cell again", no voice bar, the
+    command line "the picture is stopped". A second `close()` does nothing.
+  - `tests/test_demo_notebook.py`: the notebook's cells in a row, then a
+    cell that checks the microphone in the running demo (opened, both
+    threads alive, no overflow, a later frame arrived, ten awaited draws,
+    the panel's line, Gemma answering, the button not pressed), then a
+    cell that presses the button. A microphone that does not open now
+    fails the test; before, the test only asked that the live cell said
+    something about the microphone.
+- What it means: a first frame that says "no microphone" is still drawn
+  for the moment before the microphone opens; it can no longer be the
+  frame left standing. The demo's parts now run until the button is
+  pressed or the kernel ends.
+- Open: a kernel that is shut down without the button leaves it to the
+  kernel's end to stop Gemma's server; not tested here whether the
+  server process ends with it. The full suite was not run after this
+  change. Nothing of it is committed.

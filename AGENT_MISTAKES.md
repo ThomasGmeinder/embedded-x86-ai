@@ -3133,3 +3133,14 @@ decorators back; the line was removed (`tests/test_voice_commands.py`).
 - **Correction:** The recommendation is withdrawn in the reply to the user. My own spoken comparisons of this day (the stop wordings, the two backends) each used one set of clips made once per process and compared like with like; their absolute counts were on order-dependent clips and are confirmed by the suite with the fixed voice (the stop tests pass, 34 of 37 on both backends).
 - **Prevention:** One differing item between two runs is a question, not a finding: before naming a cause, check that the inputs of the two runs were the same bytes, and say "not verified" when relaying another session's result.
 - **Status:** corrected
+
+## 2026-11-23 — The demo notebook's stop cell stopped everything when the cells were run in a row
+
+- **Agent/tool:** Claude Code (the session that built the demo notebook, 2026-11-23 morning); found and repaired by Claude Fable 5.2, session `gemma4-npu-fastflowlm`
+- **Task:** `notebooks/pick_place_demo.ipynb`: a live demo whose cells also run headless for its test.
+- **Mistake:** The live cell returns at once (by design) and the next code cell stopped the picture, the stack and the utilization window unconditionally. "Run All" therefore ended the demo a second after it began, and the closed picture kept a frame drawn before the microphone's first frame: "VOICE no microphone". The notebook's test ran exactly that sequence and passed, because it only asked that each cell printed its words.
+- **Evidence:** The user's report; in the user's kernel of the 18:49 run the picture had been drawn twice and the last microphone frame had arrived at 18:50:14.989, the second the microphone was opened; the saved notebook's cells carry execution counts 1, 2, 3 in a row (`workshops/so101-smolvla/TESTING_LEDGER.md`, `t-2026-11-23-run-all-and-microphone-check`).
+- **Cause:** The notebook was shaped for its headless test (every cell runs, the last one cleans up) and never tried the way a person may run it; the test checked printed text, not that the demo was alive after its cells.
+- **Correction:** The stop cell shows a button and stops nothing until it is pressed; a closed picture says "stopped"; the test runs the cells in a row and then checks the live microphone, the picture's draws and Gemma's server before it presses the button. 16 unit tests and the notebook test pass.
+- **Prevention:** A notebook cell that tears things down must not run by being reached: make it an explicit action. A notebook test must assert the state the user is meant to be left in after "Run All", not only what the cells printed.
+- **Status:** corrected

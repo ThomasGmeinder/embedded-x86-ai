@@ -3363,3 +3363,34 @@ model's hearing of that sound and not the backend, the answer's shape or
 the instructions. The statement of noon that the model does not make out a
 lone "stop" was measured on that one sound and was too wide. Not measured:
 a person's voice.
+
+<a id="t-2026-11-23-run-all-and-microphone-check"></a>
+### Addition, 18:44 to 19:11: "VOICE no microphone" in the demo: the stop cell ran right after the live cell; the notebook test checks the microphone
+
+The user: the demo's panel says "VOICE no microphone". What was looked at,
+in order, and what each showed:
+
+| Check | Result |
+|---|---|
+| The microphone from the workshop's `.venv` (`sounddevice`, 16 kHz, the session's own `OffsetRemover`, Silero, level) | Opens and reads: 600 frames in 12.02 s, longest wait for a frame 33 ms, no overflow. Not muted anywhere (the sound service's source at 100 %, ALSA capture on, the mute LED off). |
+| The session's real `Listener` against a Gemma server on 8083, 8 s | Opened, no error, 400 of 400 frames, no overflow. |
+| The real `DemoSession` with the `Listener` wired as `DemoStack.listen` wires it, and a sentence played through the speakers (`/tmp/flm-probe/demo_voice_panel.py`) | The panel's line went "listening", "hearing you", "asking Gemma...", "listening". |
+| The picture drawn for every voice state, in a shell and inside the user's kernel with the stopped run's own snapshot | Drawn every time; no exception. |
+| The notebook's start and live cells in a fresh kernel of the notebooks' kind, no browser (`/tmp/flm-probe/demo_in_kernel.py`, `/tmp/so101-demo-kernel.log`) | "listening"; the picture drawn 10 times a second; no thread raised. |
+| The user's still-running kernel of the 18:49 run, asked through its connection file (read-only) | The picture had been drawn **2** times; the session's last microphone frame had arrived at **18:50:14.989**, the second in which the microphone was opened (the sound driver logs each open: 18:50:14); the stack was closed. A microphone read in that kernel, from its main thread and from a thread, worked (99 and 100 frames in 2 s); five pushes to the picture widget from a thread took 0.1 to 0.4 ms. |
+| The notebook file as saved at 18:51:28 | Its code cells carry the execution counts 1, 2, 3 in a row: start, live, **stop**. In the run saved at 18:14, which worked, the stop cell had not been run. |
+
+So the cells were run in a row ("Run All"); the stop cell closed everything
+within a second of the live cell; a closed view kept its last frame, and
+that was a frame drawn before the first microphone frame: "no microphone;
+type a command". The microphone, the listener and the kernel were sound.
+
+Changed (the development ledger has the what and why), then tested:
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| unit tests, foreground | 19:09, 7.87 s | `PYTHONPATH=src MUJOCO_GL=egl .venv/bin/python -m pytest tests/test_demo_console.py tests/test_demo.py -v --tb=short` | **16 passed**, three of them new: a stopped picture says "stopped; run the live cell again" whatever the microphone last reported; a closed view shows that picture, not its last frame; the stop control stops nothing when shown and once when pressed. |
+| `demo-nb-mic-190953` | 19:09:53 to 19:10:50, exit 0, 54.00 s | `PYTHONPATH=src .venv/bin/python -m pytest tests/test_demo_notebook.py -v --tb=short -rA -s` with `DISPLAY=:0` (`/tmp/so101-demo-nb-mic.log`) | **1 passed.** Every cell of the notebook in a row, then the test's two cells. The live cell: "listening to the microphone". The stop cell: "the demo keeps running", nothing stopped. The microphone in the running demo: opened, no error, both of its threads alive, 0 overflows, a later frame arrived, 10 of 10 awaited draws of the picture, the panel "listening", Gemma's server answering, the stop button not pressed. Then the button pressed: "table closed", "Gemma, SAM 3 and the scene stopped.", nothing left on port 8082. |
+
+Not run after this change: the full suite. The change is in `demo_console.py`,
+`demo_view.py`, the notebook's stop section and the three test files above.
