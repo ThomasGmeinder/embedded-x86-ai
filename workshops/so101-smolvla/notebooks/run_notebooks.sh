@@ -95,6 +95,12 @@ fi
 # "404 ... No such file or directory"), and this directory's tabs replace theirs.
 WORKSPACES="$("$VENV/bin/jupyter" --config-dir)/lab/workspaces-$KERNEL_NAME"
 echo "Starting JupyterLab in $HERE (kernel: $KERNEL_DISPLAY)"
+# JupyterLab prints its address before it listens. The workshop's own server
+# extension (so101_smolvla.notebook_server) logs one line once it does:
+# "The notebooks' server listens on port N". A program that connects waits
+# for that line. The extension is found on the workshop's package path.
+export PYTHONPATH="$WORKSHOP/src${PYTHONPATH:+:$PYTHONPATH}"
 exec "$VENV/bin/jupyter" lab --ServerApp.root_dir="$HERE" --port "$PORT" \
   --MultiKernelManager.default_kernel_name="$KERNEL_NAME" \
-  --LabApp.workspaces_dir="$WORKSPACES" "${LAB_ARGS[@]}"
+  --LabApp.workspaces_dir="$WORKSPACES" \
+  --ServerApp.jpserver_extensions="{'so101_smolvla.notebook_server': True}" "${LAB_ARGS[@]}"

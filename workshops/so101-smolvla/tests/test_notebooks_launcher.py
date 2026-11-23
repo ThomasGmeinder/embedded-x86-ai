@@ -13,7 +13,9 @@ import threading
 import urllib.request
 from pathlib import Path
 
-WORKSHOP = Path(__file__).resolve().parents[1]
+from so101_smolvla.notebook_server import LISTENING
+
+WORKSHOP =Path(__file__).resolve().parents[1]
 NOTEBOOKS = WORKSHOP / "notebooks"
 LAUNCHER = NOTEBOOKS / "run_notebooks.sh"
 VENV = WORKSHOP / ".venv"
@@ -66,18 +68,22 @@ def test_launcher_serves_the_notebooks_directory(tmp_path):
         port = sock.getsockname()[1]
     server = subprocess.Popen([str(LAUNCHER), "--no-browser", "--port", str(port)], env=_environment(tmp_path),
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    # The address line is awaited on the server's own output. If it does not come within 60 s the server is
-    # ended, its output ends, and the test fails on the missing address.
+    # Two lines are awaited on the server's own output: its address, and then the line of the workshop's server
+    # extension that says it listens. JupyterLab prints the address before it listens, so the address alone is
+    # not the moment to connect. If the lines do not come within 60 s the server is ended, its output ends, and
+    # the test fails on the missing line.
     limit = threading.Timer(60, server.terminate)
     limit.start()
-    address, lines = None, []
+    address, listens, lines = None, False, []
     try:
         for line in server.stdout:
             lines.append(line)
-            address = re.search(r"(http://127\.0\.0\.1:%d)/lab\?token=(\w+)" % port, line)
-            if address:
+            address = address or re.search(r"(http://127\.0\.0\.1:%d)/lab\?token=(\w+)" % port, line)
+            if f"{LISTENING} {port}" in line:
+                listens = True
                 break
         assert address, "no address line from JupyterLab:\n" + "".join(lines)
+        assert listens, f"JupyterLab did not say {LISTENING!r}:\n" + "".join(lines)
         base, token = address.groups()
         # Keep reading the server's output, so a server that ends after its address line explains itself.
         threading.Thread(target=lambda: lines.extend(server.stdout), daemon=True).start()
