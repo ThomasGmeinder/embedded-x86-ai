@@ -3086,3 +3086,50 @@ run folder, outside git) was not needed.
 - **Correction:** (1) the listener test waits on a semaphore the stand-in client releases when it is given a window; the view test asserts the events the session recorded instead of an absence. (2) the slice is computed from the text. (3) the assertion is `>=`. All pass.
 - **Prevention:** A test waits only on an event raised by the code under test; a literal that depends on a length is computed; two clock readings are compared with an order, never with equality.
 - **Status:** corrected
+
+Amendment, 2026-11-23, 15:46, to the entry above: the second of its three
+lines happened again in the same session. The new test of `Utterances`
+expected 14 frames for an utterance that begins right after the one before
+it, counting two frames of earlier sound that cannot be there; the code gave
+12 and was right (`/tmp/claude-voice-toml/unit-8.log`, `assert [12] == [14]`).
+The expectation is corrected with the reason beside it. No new entry: the
+same mistake, a number worked out in the head instead of from the rule the
+code follows.
+
+## 2026-11-23 — Told the user the list shape cost a sentence before finding what made the sentence wrong
+
+- **Agent/tool:** Claude Code (Claude Fable 5.2)
+- **Task:** Report the Gemma tests after one answer became a JSON list (`workshops/so101-smolvla/src/so101_smolvla/voice/intents.py`).
+- **Mistake:** Reported "the cost of the list shape: the NPU mishears one synthetic-voice sentence it used to get right" and put the choice between the two shapes to the user on it. The sentence was wrong because the test's synthetic voice made another clip of it than in a fresh process; with the same clip every time the list shape hears it right.
+- **Evidence:** `/tmp/claude-voice-toml/probe-misheard-1.log`, `probe-history-1.log`, `bisect-1.log`: right 13 of 13 outside the full suite; the synthesiser asked twice for the sentence gives clips that differ in 45,347 of 96,000 samples; `/tmp/so101-capture-suite-1.log`: with one clip per sentence the item is gone, NPU spoken 34 of 37.
+- **Cause:** Took two identical suite results for a property of the change and did not ask first whether the test's input was the same as in the run compared with: the two suites were compared with each other, the clip was never compared with itself.
+- **Correction:** The cause is found and removed (`voice/espeak_once.py`: a process per sentence); both ledgers carry it; the user was told.
+- **Prevention:** Before reporting that a change made a result worse, rerun the one failing case alone; when it then passes, the difference is in the test's input or order, and that is looked for before anything is put to the user.
+- **Status:** corrected
+
+## 2026-11-23 — Gave the user the demo's latency without checking who else was using its Gemma server
+
+- **Agent/tool:** Claude Code (Claude Fable 5.2)
+- **Task:** Shorten the time from a spoken command to its tool call in `workshops/so101-smolvla/notebooks/pick_place_demo.ipynb` and tell the user what to expect.
+- **Mistake:** Told the user to expect the call about 1.9 s after a spoken sentence, from tests and probes that had the server to themselves. In the user's notebook the call came after 8.83 s. At the start of the session a list of listening ports had shown a kernel process from 22 November (pid 3037255) with a defunct `llama-server` child; it was not looked into.
+- **Evidence:** The user's report ("in the notebook the tool is called after 8.83 s"). `notebooks/logs/flm-server.log`: between the demo's requests, requests with a `grammar`, the old instructions (661 cached tokens) and a 6 s clip, 3.3 s each, and `NPU busy, request queued`. `ss -tnp`: pid 3037255 connected to `127.0.0.1:8082`; its parent `systemd --user`, started 2026-11-22 01:57, the sound device open.
+- **Cause:** Measured the parts in isolation and reported their sum as what the user would see, without looking at the live system the user runs: which processes hold the microphone and the Gemma port.
+- **Correction:** The orphaned kernel was stopped on the user's word; nothing else is connected to the port. The check is written down for later sessions.
+- **Prevention:** Before giving the user a figure for the live demo, list the clients of the Gemma port and the kernels on the machine, and read the server's log of a live run; a process seen at the start of a session that should not be there is looked into then.
+- **Status:** corrected
+
+Also in this round, repaired before any run: an edit that put a new test in
+front of `test_the_server_refuses_a_port_something_already_answers_on` left
+that test's `parametrize` line on top of the new one. Found by reading the
+decorators back; the line was removed (`tests/test_voice_commands.py`).
+
+## 2026-11-23 — Recommended against the list answer shape on another session's unverified finding
+
+- **Agent/tool:** Claude Code (Claude Fable 5.2), session `gemma4-npu-fastflowlm`
+- **Task:** Report to the user on the other session's suite run, in which the NPU heard a spoken "green cube" as "blue cube" with the list shape of Gemma's answer.
+- **Mistake:** Told the user that "the list shape buys decoding time on the NPU at the cost of a wrong cube in at least one spoken sentence" and recommended not keeping it, as a conclusion, from one item of one run relayed in a message, without a measurement of my own and without asking whether the clip was the same in both runs.
+- **Evidence:** `workshops/so101-smolvla/TESTING_LEDGER.md`, section `t-2026-11-23-misheard-and-capture`: the sentence was heard right in every probe; the synthetic voice (espeak-ng) kept state between sentences, so the same sentence gave different clips depending on what was said before (45,347 of 96,000 samples differ); with one clip per sentence the "blue cube" item is gone and the list shape gives the same 34 of 37 on both backends.
+- **Cause:** Read a single differing item as an effect of the one change I knew of (the shape), with the test voice assumed to be the same every time.
+- **Correction:** The recommendation is withdrawn in the reply to the user. My own spoken comparisons of this day (the stop wordings, the two backends) each used one set of clips made once per process and compared like with like; their absolute counts were on order-dependent clips and are confirmed by the suite with the fixed voice (the stop tests pass, 34 of 37 on both backends).
+- **Prevention:** One differing item between two runs is a question, not a finding: before naming a cause, check that the inputs of the two runs were the same bytes, and say "not verified" when relaying another session's result.
+- **Status:** corrected

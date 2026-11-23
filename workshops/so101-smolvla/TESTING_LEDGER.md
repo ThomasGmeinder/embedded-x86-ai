@@ -3244,3 +3244,122 @@ Voice notebook on `npu`: typed 30 of 30, spoken 24 of 30 (2.43 / 3.19 /
 Not measured: the time from the end of a spoken sentence to the first
 event in the live session (the microphone session sends a window every
 2 s of speech, `hop_s`).
+
+<a id="t-2026-11-23-utterances-and-list"></a>
+## 2026-11-23 — The microphone session cuts utterances; the answer as a JSON list: the shape probes, the live probe, both real servers, the full suite
+
+What was tested: (1) shorter shapes of Gemma's answer on FastFlowLM;
+(2) the live session from the end of a spoken sentence to the call, the
+committed listener (a 6 s window on a 2 s grid) against the new one (an
+utterance sent when the speaker has been silent for `end_silence_ms`);
+(3) the list shape on both real servers; (4) the full suite. Environment
+of every test command: `env PYTHONPATH=src .venv/bin/python -m pytest`, in
+the workshop directory. The probes are in `/tmp/claude-voice-toml/` (not in
+the repository) and use the project's server starter, instructions, schema,
+detector and listener.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| shape probe, key names | 15:22 to 15:35, exit 0 | `probe_shape.py`, typed, 76 sentences per shape (the 30 pick sentences, the 7 refused, the 18 stop sentences, the 21 of `examples.CASES`), NPU (`probe-shape.log`) | **Shorter key names save nothing.** `command/object/place/heard`, `c/o/p/h` and `cmd/obj/place/heard`: 21 pieces to the complete call in each, 1.94 s median (34 pick sentences), 76 of 76 right in each. A key is one token whatever its length. |
+| shape probe, a list | 15:36 to 15:41, exit 0 | `probe_array.py`, the same 76 sentences, the answer as a JSON list of four strings (`probe-array-1.log`) | **12 pieces to the call, 1.25 s median** (1.09 to 1.33), the whole answer 2.17 s. FastFlowLM holds the answer to the list schema (`prefixItems`). 75 of 76 right: "fetch the cube" is `fetch_block` with the object "cube" where the instructions ask for "". |
+| live probe | 15:41 to 15:45, exit 0 | `probe_live.py old` then `new`: eight sentences of the synthetic voice played in real time by a stand-in microphone into the real `Listener`, Silero and Gemma on the NPU (`probe-live-1.log`); answers still in the object shape | Table below. |
+| unit tests | 15:46, exit 0, 17.94 s | `pytest tests/test_voice_commands.py tests/test_demo.py tests/test_models.py tests/test_three_cube_rollout.py tests/test_pick_place.py tests/test_demo_console.py -v --tb=short` (`unit-10.log`) | **67 passed** (a run before it: 1 failed on a frame count the test itself had wrong, `unit-8.log`). |
+| `list-gemma-1` | 15:47:04 to 15:52:00, exit 1, 295.39 s | `pytest tests/test_gemma_cube_commands_integration.py -v --tb=short -rA -s` (`/tmp/so101-list-gemma-1.log`) | **10 passed, 2 failed** (the spoken test on each backend). Seconds as in the suite below. |
+| `utter-suite-1` | 15:53:13 to 16:07:22, exit 1, 848.52 s | `pytest tests -v --tb=short -rA -s` (`/tmp/so101-utter-suite-1.log`, exit file `/tmp/so101-utter-suite-1.exit`) | **273 passed, 2 failed, 1 expected failure.** Both notebook tests passed; voice notebook on `npu`: typed 30 of 30, spoken 25 of 30 (1.72 / 2.25 / 3.17 s). The two failures are the spoken test on each backend, red on the user's word; **on the NPU it has one item more than before** (below). |
+
+The live probe, from the end of the speech to the call (eight sentences):
+
+| Listener | min / median / max | What else |
+|---|---|---|
+| committed: a 6 s window on a 2 s grid, the repeat filter | 0.85 / 3.89 / 13.10 s | "grab the red one and drop it in the box" was answered 0.85 s after its end from a window that held half of it, as "red ball"; "put the red cube in the bin" got no call of its own (13.10 s is the next sentence's); two calls with "marine cube". |
+| new: an utterance, sent after 400 ms of silence | 2.23 / 2.89 / 2.98 s | Every sentence got its call. Two were misheard from the synthetic voice ("red cube" for "green cube", "blue wine" for "blue one"). The request itself took 2.47 to 2.57 s to the call (1.95 s for the two stop sentences): the shorter clip did not shorten it (a 6 s clip: 2.61 s). |
+
+The list shape against the object shape, seconds over the 37 sentences of
+the Gemma module, median (`utter-suite-1` against `stream-suite-1`):
+
+| Backend, how | To the call, object | To the call, list | To the end, object | To the end, list | Right, object | Right, list |
+|---|---|---|---|---|---|---|
+| NPU, typed | 1.94 | 1.24 | 3.10 | 2.17 | 37 of 37 | 37 of 37 |
+| NPU, synthetic voice | 2.61 | 1.90 | 3.75 | 2.76 | 34 of 37 | **33 of 37** |
+| iGPU, typed | 0.54 | 0.33 | 0.91 | 0.61 | 37 of 37 | 37 of 37 |
+| iGPU, synthetic voice | 0.68 | 0.47 | 1.03 | 0.72 | 34 of 37 | 34 of 37 |
+
+**New with the list shape, NPU, synthetic voice:** "robot, please place the
+green cube into the container" is heard as "please place the blue cube into
+the container" and gives the blue cube; with the object shape the NPU heard
+"green" (`/tmp/so101-stream-suite-1.log`, line 233). Typed and on the
+integrated graphics the sentence is right in both shapes. It is the third
+item of `test_no_spoken_sentence_moves_a_cube_it_does_not_name[npu]`, beside
+the question and the negation. Whether the list shape stays is put to the
+user.
+
+Not measured: the live session with a person's voice; `end_silence_ms` at
+another value than 400; the live probe with the list shape.
+
+<a id="t-2026-11-23-misheard-and-capture"></a>
+## 2026-11-23 — Why the NPU heard "blue": the test voice was not the same twice. The microphone's offset and level. The full suite
+
+What was tested: (1) why "robot, please place the green cube into the
+container" was heard as "blue cube" on the NPU in the two suite runs with
+the list shape; (2) the microphone as the session opens it, and the
+user's own recorded clip; (3) the capture changes and the test voice made
+the same every time, in the unit tests, on the real Gemma and in the full
+suite. Environment of every test command: `env PYTHONPATH=src
+.venv/bin/python -m pytest`, in the workshop directory. Probes in
+`/tmp/claude-voice-toml/`, not in the repository.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| the two suites' transcripts side by side | 17:17 | the spoken rows of `/tmp/so101-stream-suite-1.log` (object shape) against `/tmp/so101-utter-suite-1.log` (list shape) | NPU: 14 of 34 pick sentences transcribed differently, in both directions (object shape: "bin" as "bed", "the red block" without "red"; list shape: "green" as "blue", "red block" as "black block"). iGPU: 14 differ, in capitals and a dropped "robot," only. |
+| the sentence as the clip is varied | 17:18 to 17:23, exit 0 | `probe_misheard.py`, NPU, four sentences, ten clips each (`probe-misheard-1.log`) | **The sentence was heard right** as the test sends it, twice. Wrong only at a tenth of the level (peak 0.05: "my blue cube"). Without sound before the speech ("no lead", "only the speech") two of the four sentences lost their first words; with 0.3 s before and 0.4 s after all four were right. |
+| the suite's order of requests | 17:24 to 17:28, exit 0 | `probe_history.py`: all 37 sentences typed, then spoken, then the sentence repeated in several orders and on a fresh server (`probe-history-1.log`) | **Right all 11 times.** The order of the requests is not it. |
+| the NPU half of the module, with and without the hand-over test | 17:28 to 17:35, exit 1 twice (the spoken test) | `pytest tests/test_gemma_cube_commands_integration.py -k "npu and (handed_over or typed_sentence or spoken_sentence)"` and the same without `handed_over` (`bisect-1.log`) | **Right in both, spoken 34 of 37.** Requests closed at their call are not it. |
+| the synthesiser asked twice | 17:36 | `SyntheticVoice.clip` of the sentence: fresh, again, after the 45 sentences of the iGPU half, from a second voice object | **Four different clips.** The same sentence asked for twice differs in 45,347 of 96,000 samples, from the first sample of the speech. In three separate processes: the same clip when it is the first thing said (`951039bbd44b` twice), another after one other sentence. `espeak_Terminate` and a new `espeak_Initialize` in one process did not return (stopped after 120 s). |
+| the microphone, 4 s per latency setting, then 30 s | 17:20, 17:21 | `sounddevice.RawInputStream` at 16 kHz, 20 ms blocks, the default device (ALSA on PipeWire, the built-in microphone at 48 kHz) | Latency "low" 20.0 ms, "high" 40.0 ms. **No overflow** in 1,900 reads; after 30 s of sound the clock was at 30.00 s (within 0.02 s throughout). **The samples' mean is +1028**: that alone is -30.1 dBFS; without it the room is -59.8 dBFS. Silero's probability in the quiet room: median 0.001, never over 0.013. |
+| the user's recorded clip (voice notebook, section 6) | 17:22, 17:23 | the stored 6 s clip "Pick up the blue cube", frame by frame through the offset remover, Silero and `Utterances` | Its mean is +1198 (and -12,852 in its first 20 ms: the microphone settling). Speech frames (62 by Silero): -55.8 / -51.2 / -43.1 / -34.2 / -28.5 dBFS at the 5th / 25th / 50th / 75th / 95th percentile; the other frames -61.3 to -48.4. A gate at -35 would let 17 of the 62 speech frames through, at -45 34, at -55 57. One utterance is cut, 1.94 s long. |
+| the user's clip to the real Gemma | 17:41, exit 0 | `probe_user_clip.py`: as recorded (6 s, the offset in); through the new path; and raised to the test voice's level; twice each, NPU then iGPU (`probe-user-1.log`) | **"pick up the blue cube", `pick_place(blue cube)`, all 12 times.** NPU: the call after 1.77 s (6 s clip) and 1.65 s (utterance); iGPU 0.26 and 0.25 s. |
+| unit tests | 17:40, exit 0, 15.04 s | `pytest tests/test_voice_commands.py tests/test_demo.py tests/test_three_cube_rollout.py -v --tb=short` (`unit-12.log`) | **52 passed.** |
+| `capture-suite-1` | 17:41:59 to 17:55:57, exit 1, 836.72 s | `pytest tests -v --tb=short -rA -s` (`/tmp/so101-capture-suite-1.log`, exit file `/tmp/so101-capture-suite-1.exit`) | **276 passed, 2 failed, 1 expected failure.** The two failures are the spoken test on each backend with the question and the negation only, red on the user's word: **the "blue cube" item is gone.** Seconds below. Voice notebook on `npu`: typed 30 of 30, spoken 23 of 30 (1.73 / 2.24 / 3.19 s; 25 in the run before, with the other clips; reported, not required). |
+
+`capture-suite-1`, the Gemma module, the list shape, the test voice the
+same every time, seconds min / median / max over 37 sentences:
+
+| Backend, how | To the complete call | To the end of the answer | Right |
+|---|---|---|---|
+| iGPU, typed | 0.17 / 0.33 / 0.39 | 0.34 / 0.62 / 0.70 | 37 of 37 |
+| iGPU, synthetic voice | 0.34 / 0.45 / 0.57 | 0.48 / 0.71 / 0.91 | 34 of 37 |
+| NPU, typed | 0.70 / 1.25 / 1.32 | 1.32 / 2.17 / 2.33 | 37 of 37 |
+| NPU, synthetic voice | 1.55 / 1.91 / 2.01 | 2.02 / 2.76 / 3.08 | 34 of 37 |
+
+Not measured: the capture changes with a person at the microphone, beyond
+the one stored clip, which was heard right before and after; whether the
+level raise helps a sentence that is heard wrong without it.
+
+<a id="t-2026-11-23-lone-stop-recheck"></a>
+### Addition, 18:03 to 18:08: the stop problems checked again on the newest tree (the user: "check if this problem is now fixed")
+
+The tree as it stood at 18:00 (`5cc2751` plus the uncommitted list shape,
+utterances, capture changes and the test voice made the same every time).
+From the newest suite (`/tmp/so101-capture-suite-1.log`, 17:55, 276 passed,
+2 failed, 1 expected failure): the two stop tests pass on both backends;
+on the NPU all 12 typed orders are `stop` (among them "stop robot" and the
+bare "stop"), all 6 typed non-orders `unknown`, the 5 spoken orders `stop`
+and the 3 spoken non-orders `unknown`; the voice notebook's typed column is
+30 of 30 on the NPU.
+
+Measured here, each run in tmux with an exit file and a completion event, a
+second FastFlowLM server on port 8083 beside the user's demo server on 8082:
+
+| Job | Clock, exit | What | Result |
+|---|---|---|---|
+| `lone-stop-180305` | 18:03 to 18:05, exit 0 | `/tmp/flm-probe/lone_stop_now.py` (`/tmp/so101-lone-stop.log`): eight short sentences in the test voice, each sent two ways, as the test's 6 s clip and as the utterance the live session's own parts cut from it (`OffsetRemover`, Silero and the level gate, `Utterances`, `at_level`); the workshop's client, and the words written down when the model is only asked to transcribe; both backends | The session cuts one utterance per sentence (1.10 s for the 0.48 s "stop", 1.44 to 1.62 s for the others). **"stop now" is `stop` now on both backends, both ways** (it was `unknown` at noon, on a clip that depended on what the voice had said before). "stop stop", "stop robot", "please stop" `stop`; "stop talking", "don't stop" `unknown`. **The lone "stop" and "Stop!" are still `unknown` on both backends, both ways**, heard as nothing and written down as "Ah." (NPU once in Devanagari). Curious beside it: the plain transcription writes "Ciao" for "stop now" and "Clean start" for "please stop" as an utterance, while the command request gives `stop` for both. |
+| `lone-voices-180538` | 18:05 to 18:08, exit 0 | `/tmp/flm-probe/lone_stop_voices.py` (`/tmp/so101-lone-voices.log`): the lone word "stop" as the test's clip in three espeak-ng voices (`en-us`, `en-us+f3`, `en-gb-x-rp`; `en-gb` does not exist here) at 100, 130, 150 and 175 words per minute | **9 of 12 give `stop`, the same nine on both backends.** `unknown`, heard as nothing: `en-us` at 100 and at 150 (the test voice's own setting), `en-gb-x-rp` at 130. `en-us` at 130 and 175 and all four of `en-us+f3` are `stop`. |
+
+What it says: the typed "stop robot" on the NPU, the typed and the named
+spoken orders, and "stop now" are fixed. A lone spoken "stop" is understood
+for most sounds of the word and not for some, among them the one the
+tests' voice makes; which, is the same on both backends, so it is the
+model's hearing of that sound and not the backend, the answer's shape or
+the instructions. The statement of noon that the model does not make out a
+lone "stop" was measured on that one sound and was too wide. Not measured:
+a person's voice.

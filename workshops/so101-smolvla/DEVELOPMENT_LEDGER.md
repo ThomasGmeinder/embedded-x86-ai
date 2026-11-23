@@ -7158,3 +7158,180 @@ Open, each needs the user's word:
 - The demo notebook's introduction still says "Gemma about 1 s per
   sentence", the integrated graphics' figure.
 - Nothing is committed.
+
+Committed and pushed on the user's word at 15:20, with the demo
+notebook's stored outputs cleared: `20462ab..5cc2751` on
+`origin/so101-smolvla`, five commits (the launcher's line; `sim.toml`;
+the table picture; Gemma on the NPU with the models file and the
+streamed answer; the documents).
+
+<a id="d-2026-11-23-utterances-and-list"></a>
+## 2026-11-23 — A sentence is sent when the speaker stops; the answer is a JSON list
+
+Result in one line: the live session sends one clip per sentence the
+moment the speech detector has seen 400 ms of silence, 2.23 to 2.98 s
+from the end of the speech to the call where the grid took 0.85 to
+13.10 s; the answer as a list brings the call on the NPU from 1.94 to
+1.24 s typed and from 2.61 to 1.90 s spoken, and costs one sentence of
+the synthetic voice on the NPU.
+
+Why (the user: proceed with the two speed options, a window every
+second and a shorter JSON; then, while that was measured: "once the VAD
+detected voice it should be sent to the gemma4 without delay", "review
+the entire audio input mechanism").
+
+The review of `voice/microphone.py` as it was:
+
+- `HopWindows.feed` sent only when its frame count reached a multiple
+  of `hop_s`, counted from the opening of the microphone: up to 2 s
+  after a sentence before it was sent.
+- A grid point inside a sentence sent half of it; that request kept
+  Gemma busy and could give a call of its own (seen: "red ball").
+- Always 6 s of sound; a queue of one window; a filter that refused the
+  same command's name for 5 s, there because the windows overlap, which
+  also refused a second pick said within 5 s of the first.
+- The stream was opened with the sound library's "high" latency (34.8
+  ms on this device against 8.7 ms).
+- What cannot change: Gemma takes one whole clip per request, so the
+  end of the speech is the earliest moment a sentence can be sent.
+
+What changed:
+
+- `voice/microphone.py`: `Utterances` in place of `HopWindows`. An
+  utterance begins at the first frame that counts as speech, with
+  `pre_roll_ms` of the sound before it; the frame on which
+  `end_silence_ms` of silence is complete returns it, and it is sent;
+  at `window_s` it is sent as it is; less than `min_voice_ms` of speech
+  is dropped. `CommandFilter` is removed: utterances do not overlap, a
+  call that is `unknown` is dropped and its words are not read. The
+  queue holds four utterances (each is a sentence of its own), the
+  oldest goes. The stream is opened with `latency="low"`.
+- `configs/voice.toml`, `[listening]`: `end_silence_ms = 400`,
+  `pre_roll_ms = 300`; `hop_s` and `cooldown_s` are gone; each key has
+  its note.
+- The setting the user named, `hop_s` to 1, was not made: the grid it
+  belongs to is gone.
+- `voice/intents.py`, `voice/intent.gbnf`: one answer is the list
+  `["<command>", "<object>", "<place>", "<words heard>"]`. The schema is
+  an array of four strings (`prefixItems`), the grammar's root rule the
+  same, `command_from_json`, `call_from_partial` and
+  `heard_from_partial` read it, `FIELDS` names the positions. In the
+  instructions one sentence changed, the one that shows the shape; the
+  lines on "object", "place" and "heard" and every command's entry are
+  as they were.
+- Tests: `Utterances` frame by frame; the listener's reports for a
+  command, for no command and for the same command again; the list in
+  the schema, the grammar, the instructions and the readers.
+- `README.md`, `SPEC.md` (section 10: the weak point of the windows is
+  closed), both notebooks' texts.
+
+What the measurements say (the testing ledger,
+[the same date](TESTING_LEDGER.md#t-2026-11-23-utterances-and-list)):
+
+- Shorter key names save nothing: a key is one token. The tokens are
+  the punctuation around the keys, which the list does without: 12
+  pieces to the call instead of 21.
+- The utterance did not shorten the request against a 6 s clip.
+- With the list, the NPU hears "…the green cube…" of the synthetic
+  voice as "blue cube" in one of 37 sentences that it heard right
+  before; typed and on the integrated graphics nothing changed.
+
+Open, each needs the user's word:
+
+- Whether the list shape stays, given that one sentence.
+- `end_silence_ms`: 400 is a first value, not tried with a person.
+- Nothing of this section is committed.
+
+<a id="d-2026-11-23-misheard-and-capture"></a>
+## 2026-11-23 — The misheard sentence was the test voice; the microphone's offset and level
+
+Result in one line: the list shape stays (the user: "0.7s faster is
+important"); the sentence it seemed to cost was a test clip that came out
+differently each time it was made; the microphone's samples carry a
+constant offset that had kept the level gate open and went into every
+clip; the full suite is 276 passed with the two spoken tests red on the
+user's word, on the question and the negation only.
+
+Why (the user: "debug the addtional misheard sentence. review vad and
+audio capture").
+
+The misheard sentence, what was ruled out and what it was (the testing
+ledger, [the same date](TESTING_LEDGER.md#t-2026-11-23-misheard-and-capture)):
+
+- Ruled out by a run each: the clip as such (heard right alone), the
+  order of the requests (right in the suite's order), requests closed
+  at their call (right with and without them), a second request or a
+  fresh server.
+- What it was: espeak-ng keeps state from one sentence to the next. In
+  the full suite the NPU tests come after the iGPU tests have made
+  about 45 clips, and the clip of that sentence was another one than in
+  a fresh process: one the NPU model hears at the edge, "green" in the
+  object shape and "blue" in the list shape. On the same clips the two
+  shapes differ on such sentences in both directions.
+- `voice/speech.py`, `voice/espeak_once.py`: each sentence is made in a
+  process of its own (35 ms; the standard library only) and kept per
+  voice, so a sentence is the same clip whatever was said before it. A
+  restart of espeak-ng inside one process is not possible: it does not
+  come back from `espeak_Terminate` (libespeak-ng 1.51).
+- With that, the NPU hears 34 of 37 spoken sentences in the list shape,
+  as in the object shape, and the test's list is the question and the
+  negation.
+
+The review of the capture and the speech detection:
+
+- A defect: the built-in microphone's samples lie around +1028, not 0.
+  `dbfs` then reads about -30 for every frame, so the gate `min_dbfs`
+  of -35 never closed, the voice meter stood at half in silence, and the
+  offset was in every clip. `OffsetRemover` (a first-order high-pass,
+  corner near 13 Hz, started settled on the first sample) takes it out
+  right after the read; the level, the detector and Gemma get the sound.
+- The gate: with the offset out, a person's speech frames on this
+  microphone are -56 to -28 dBFS and the room -61 to -48. A gate at -35
+  would now hold back three speech frames in four. `min_dbfs` is -60:
+  the detector decides.
+- The microphone is quiet and Gemma hears quiet sound worse (a tenth of
+  the test voice's level turned "green" into "blue"). `at_level` raises
+  an utterance so that its loud samples are at `sent_peak` (0.5, the
+  test voice's), by `most_gain` (20) at most, before it is sent.
+- Gemma needs sound before the speech. `Utterances` keeps the end of an
+  utterance as the sound in front of the next one, so a sentence that
+  follows another directly has it too.
+- No change needed: the stream keeps real time and did not overflow
+  (overflows are now counted and logged); Silero reads 0.001 in the
+  quiet room and marks the user's clip where the speech is.
+- Not changed, found: the voice notebook's section 6 records its one
+  clip with `sounddevice.rec` and sends it as it is, past the offset
+  remover and the level raise. Its cell holds the user's own recorded
+  output.
+
+The user's own stored clip is heard right through the old and the new
+path on both backends; it is one clear sentence, so it shows that the
+changes cost nothing there, not that they gain.
+
+Open, each needs the user's word:
+
+- The voice notebook's one-clip section through the same cleaning.
+- `end_silence_ms`, `sent_peak` and `most_gain` are first values, not
+  tried with a person at the microphone.
+- Nothing since `5cc2751` is committed.
+
+<a id="d-2026-11-23-lone-stop-recheck"></a>
+### Addition, 18:08: the stop problems on the newest tree (session `gemma4-npu-fastflowlm`, nothing built)
+
+- The user: "look at the latest changes and test results and check if
+  this problem is now fixed." Checked against the newest suite and two
+  probes (`TESTING_LEDGER.md`,
+  [the recheck](TESTING_LEDGER.md#t-2026-11-23-lone-stop-recheck)).
+- Fixed and held by tests on both backends: the typed "stop robot" on the
+  NPU, every typed order and non-order of the stop lists, the spoken
+  orders that name the robot or say "please". Fixed since noon and not
+  held by a test: the spoken "stop now".
+- Not fixed in the tests' voice: a lone spoken "stop". It is `stop` for 9
+  of 12 synthetic sounds of the word (three voices, four speaking rates)
+  and `unknown` for three, the same three on both backends; one of the
+  three is the sound the tests' voice makes. My statement of noon that
+  the model does not make out a lone "stop" was too wide: it was one
+  sound. A person's voice is not measured.
+- No source file changed. Left for the user's word: `SPOKEN_STOP_ORDERS`
+  could take "stop now" in; a lone "stop" would need another sound than
+  the test voice's own to be a fair test.

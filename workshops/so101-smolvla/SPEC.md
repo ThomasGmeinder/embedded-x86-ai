@@ -198,6 +198,22 @@ Terms used throughout:
   `synthetic_voice`. The one Python reader is
   `src/so101_smolvla/models.py`; the voice settings take Gemma's part
   from it.
+- 2026-11-23, late afternoon (the user: the NPU's latency by hand "at
+  least 3 times as long"; stream the answer to the logic that reads the
+  call; clear events for the command and the transcript; a shorter
+  answer; a sentence sent to Gemma without delay once the detector has
+  it): three departures from the measured client of section 5.1, each
+  measured (TESTING_LEDGER.md, the same date). (1) The answer is read as
+  it is written and the call is acted on before the words heard are
+  complete; the demo has the events `command received` and `transcript
+  received`. (2) One answer is a JSON list of four strings, command,
+  object, place, words heard, where it was an object with those four
+  keys; one sentence of the instructions, the grammar and the schema
+  changed with it. (3) The live session sends an utterance when the
+  speaker has been silent for `end_silence_ms`, where it sent a 6 s
+  window every 2 s (section 10). Where sections 4 and 5 below give the
+  shape as `{"command", "object", "place", "heard"}` or the session's
+  windows, this entry is what holds now.
 
 <a id="s-3-the-principle"></a>
 ## 3. The principle
@@ -1037,7 +1053,13 @@ section 5.2. Pass counts are still the user's (decision 4). Detail:
   now" are not made out as words by the model on either backend and so
   give `unknown`; "please stop", "stop robot", "robot stop" and "stop the
   robot" are heard and give `stop`. Whether a person's voice does better
-  with the lone word is not measured. The command `stop` is recognised
+  with the lone word is not measured. Measured again at 18:05 on the
+  test voice made the same every time: "stop now" is `stop` on both
+  backends; the lone "stop" is `stop` for 9 of 12 synthetic sounds of the
+  word (three voices, four rates) and `unknown` for three, the same on
+  both backends, one of them the test voice's own. So the lone word is
+  understood for most sounds and not reliably
+  (TESTING_LEDGER.md, "the stop problems checked again"). The command `stop` is recognised
   and shown; nothing in this workshop's pick loop interrupts a running
   pick on it.
 - With "stop robot" going through Gemma only (5.1, departure 3), a stop
@@ -1067,6 +1089,23 @@ section 5.2. Pass counts are still the user's (decision 4). Detail:
   do (commit `6cc7eae`; since 2026-11-22 in `microphone.py`, 5.1). One
   complete clip, as in section 4.5 and in the
   notebook's section 6, is not affected. Decision 11.
+  Closed on 2026-11-23 on the user's word ("once the VAD detected voice
+  it should be sent to the gemma4 without delay", "review the entire
+  audio input mechanism"): the session no longer sends windows on a
+  grid. It cuts utterances (`Utterances` in `microphone.py`): from the
+  first frame of speech, with `pre_roll_ms` of the sound before it, to
+  the moment the speaker has been silent for `end_silence_ms`, at most
+  `window_s` long, and the frame that ends an utterance sends it. One
+  request per sentence; no half sentence is sent; `HopWindows`,
+  `CommandFilter`, `hop_s` and `cooldown_s` are gone, a sentence in
+  which Gemma finds no command is still dropped. Measured with eight
+  sentences of the synthetic voice played into the live session on the
+  NPU (TESTING_LEDGER.md, the same date): from the end of the speech to
+  the call 2.23 to 2.98 s (median 2.89) against 0.85 to 13.10 s
+  (median 3.89) on the grid, where one sentence was answered from half
+  of it and one got no call. What stays: a sentence longer than
+  `window_s` is cut, and a pause longer than `end_silence_ms` inside a
+  sentence ends it; 400 ms is a first value, not tuned with a person.
 - Everything here is for the twin. Nothing is measured on the real arm.
 
 <a id="s-11-decisions-that-are-the-users"></a>
