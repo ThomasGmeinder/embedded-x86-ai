@@ -62,8 +62,9 @@ flowchart TD
   subgraph S5 ["5. Motion"]
     P --> VLA["SmolVLA, so101-smolvla-sim-real-10task"]:::model
     X["sentence: Pick up a cube and place in the bin"] --> VLA
-    VLA --> J["50 joint targets per plan"] --> A(["arm: green cube into the bin"]):::input
+    VLA --> J["50 joint targets per plan"]
   end
+  J --> A(["🦾 arm: green cube into the bin"]):::input
   classDef model fill:#efdcff,stroke:#7b3fa0,stroke-width:2px,color:#000
   classDef program fill:#dff0df,stroke:#3b7a3b,stroke-width:2px,color:#000
   classDef input fill:#fffbe6,stroke:#8a7a2a,color:#000
