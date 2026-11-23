@@ -139,8 +139,14 @@ def _bar(draw: ImageDraw.ImageDraw, rect: tuple, share: float, colour: tuple, ma
         draw.line([mx, y - 3, mx, y + h + 3], fill=TEXT, width=1)
 
 
-def voice_state(voice: VoiceLevel, now: float) -> tuple[str, tuple]:
-    """The one line above the voice meter and its colour."""
+STOPPED = "stopped; run the live cell again"
+
+
+def voice_state(voice: VoiceLevel, now: float, stopped: bool = False) -> tuple[str, tuple]:
+    """The one line above the voice meter and its colour. ``stopped``: the picture was closed and
+    no longer follows the microphone, whatever the last frame said."""
+    if stopped:
+        return STOPPED, YELLOW
     if not voice.available:
         return (f"no microphone: {voice.error}" if voice.error else "no microphone; type a command"), RED
     if now - voice.time > SILENT_AFTER_S:
@@ -152,20 +158,24 @@ def voice_state(voice: VoiceLevel, now: float) -> tuple[str, tuple]:
     return "listening", DIM
 
 
-def panel(snapshot: Snapshot, transcript: tuple, voice: VoiceLevel, now: float) -> np.ndarray:
-    """The side panel: voice meter, command, transcript, gripper."""
+def panel(snapshot: Snapshot, transcript: tuple, voice: VoiceLevel, now: float, stopped: bool = False) -> np.ndarray:
+    """The side panel: voice meter, command, transcript, gripper. ``stopped``: the last picture of
+    a closed view, which says so instead of a voice state that no longer holds."""
     image = Image.new("RGB", (PANEL_W, TILES_H), PANEL)
     draw = ImageDraw.Draw(image)
     # Voice
     draw.text((16, 14), "VOICE", font=FONT, fill=TEXT)
-    state, colour = voice_state(voice, now)
+    state, colour = voice_state(voice, now, stopped)
     draw.text((80, 14), state, font=SMALL, fill=colour)
-    if voice.available:
+    if voice.available and not stopped:
         _bar(draw, VAD_BAR, voice.level, GREEN if voice.speaking else DIM)
     # Command
     y = 84
     draw.text((16, y), "COMMAND", font=FONT, fill=TEXT)
-    draw.text((16, y + 22), snapshot.status, font=SMALL, fill=CYAN)
+    if stopped:
+        draw.text((16, y + 22), "the picture is stopped", font=SMALL, fill=YELLOW)
+    else:
+        draw.text((16, y + 22), snapshot.status, font=SMALL, fill=CYAN)
     if snapshot.cube is not None and snapshot.step is not None and snapshot.steps_per_pick:
         _bar(draw, (16, y + 46, PANEL_W - 32, 6), (snapshot.step + 1) / snapshot.steps_per_pick, CYAN)
     # Transcript
@@ -198,9 +208,9 @@ def panel(snapshot: Snapshot, transcript: tuple, voice: VoiceLevel, now: float) 
     return np.asarray(image)
 
 
-def compose(snapshot: Snapshot, transcript: tuple, voice: VoiceLevel, now: float) -> np.ndarray:
+def compose(snapshot: Snapshot, transcript: tuple, voice: VoiceLevel, now: float, stopped: bool = False) -> np.ndarray:
     """The whole picture: the six tiles on the left, the panel on the right."""
-    frame = np.hstack([tiles(snapshot), panel(snapshot, transcript, voice, now)])
+    frame = np.hstack([tiles(snapshot), panel(snapshot, transcript, voice, now, stopped)])
     assert frame.shape == FRAME_SHAPE, frame.shape
     return frame
 

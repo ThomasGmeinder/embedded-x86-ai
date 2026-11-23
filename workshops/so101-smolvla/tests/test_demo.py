@@ -236,3 +236,39 @@ def test_the_view_draws_on_change_only_and_closes_its_thread():
         view.close()
         session.close()
     assert not view._thread.is_alive() and view.text.disabled
+
+
+def test_a_closed_view_shows_the_stopped_picture_not_its_last_frame():
+    from so101_smolvla.demo_console import compose, jpeg
+    from so101_smolvla.demo_view import DemoView
+
+    _, _, session = _session()
+    view = DemoView(session, fps=50.0)
+    try:
+        view.show()
+        first = bytes(view.image.value)  # drawn before any microphone frame: it says "no microphone"
+        view.close()
+        stopped = jpeg(compose(session.snapshot, session.transcript, session.voice, 0.0, stopped=True))
+        assert bytes(view.image.value) == stopped and stopped != first
+        view.close()  # a second close changes nothing
+        assert bytes(view.image.value) == stopped
+    finally:
+        session.close()
+
+
+def test_the_stop_control_stops_nothing_when_shown_and_once_when_pressed():
+    from so101_smolvla.demo_view import StopControl
+
+    stops = []
+
+    def stop():
+        stops.append(1)
+        return ["table closed", "Gemma, SAM 3 and the scene stopped."]
+
+    control = StopControl(stop).show()
+    assert stops == [] and not control.done and control.said == "" and not control.button.disabled
+    control.button.click()
+    assert stops == [1] and control.done and control.button.disabled
+    assert control.said == "table closed\nGemma, SAM 3 and the scene stopped."
+    control.button.click()  # a second press does nothing
+    assert stops == [1]

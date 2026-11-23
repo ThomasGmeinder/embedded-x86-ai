@@ -10,7 +10,9 @@ received``) end that pause through the session's ``urgent`` event, so each is
 on the picture one draw (about 9 ms, measured) after it happens. A one-shot timer redraws once after the voice meter's
 silence time, so "no microphone signal" appears even when nothing else changes.
 The cell that shows the view returns at once; the text box and the buttons are
-widget callbacks.
+widget callbacks. So does the notebook's stop cell: it shows a button
+(``StopControl``) and stops nothing until that is pressed, so running every
+cell in a row leaves the demo running.
 """
 
 from __future__ import annotations
@@ -89,11 +91,53 @@ class DemoView:
             self._watchdog.start()
 
     def close(self) -> None:
-        """End the render thread; the session and the stack live on."""
+        """End the render thread; the session and the stack live on. The picture's last frame says
+        that it is stopped: a frame from before (for one, the first, drawn before the microphone
+        opened, which reads "no microphone") would otherwise stand there as if it were current."""
+        if self._closing.is_set():
+            return
         self._closing.set()
         if self._watchdog is not None:
             self._watchdog.cancel()
         self.session.changed.set()  # wakes the render thread so it sees the flag
         if self._thread.is_alive() and threading.current_thread() is not self._thread:
             self._thread.join(timeout=5)
+        self.image.value = jpeg(compose(
+            self.session.snapshot, self.session.transcript, self.session.voice, time.monotonic(), stopped=True,
+        ))
         self.text.disabled = self.new_layout.disabled = self.stop.disabled = True
+
+
+class StopControl:
+    """A button that stops the demo when it is pressed. Showing it stops nothing.
+
+    The notebook's stop cell shows this instead of stopping: "Run All" runs that cell right after
+    the live cell, and a cell that stopped everything ended the demo a second after it began
+    (2026-11-23: the picture then stood on its first frame, "no microphone"). ``stop`` does the
+    stopping and returns the lines to show; it runs once, on the first press.
+    """
+
+    def __init__(self, stop) -> None:
+        import ipywidgets as widgets
+
+        self._stop = stop
+        self.done = False
+        self.said = ""  # what the stop reported, once pressed
+        self.button = widgets.Button(description="stop everything", button_style="danger")
+        self.output = widgets.Output()
+        self.box = widgets.VBox([self.button, self.output])
+        self.button.on_click(self._pressed)
+
+    def show(self) -> "StopControl":
+        from IPython.display import display
+
+        display(self.box)
+        return self
+
+    def _pressed(self, _=None) -> None:
+        if self.done:
+            return
+        self.done = True
+        self.button.disabled = True
+        self.said = "\n".join(self._stop())
+        self.output.append_stdout(self.said + "\n")

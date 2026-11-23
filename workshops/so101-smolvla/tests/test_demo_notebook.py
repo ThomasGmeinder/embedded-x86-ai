@@ -1,19 +1,26 @@
 """notebooks/pick_place_demo.ipynb, run the way a person runs it: its kernel, the real Gemma, SAM 3 and SAPIEN.
 
-Every cell runs (none is tagged to be left out: without a microphone the live cell says so and goes on).
-Section 1 has to bring up every part, section 3 has to say what it does about the microphone, and section 4
-must leave no server on Gemma's default port and no utilization table running. (Until 2026-11-23 the notebook
-also ran one typed command and a new layout from cells, its sections 4 and 5; the user had them removed, so a
-command now goes through the live cell's text box or the microphone only.) Skipped while Gemma, the SAM 3
-environment or the SAPIEN twin is not set up; anything else that goes wrong fails. Needs a display for the
-utilization window and nothing answering on the Gemma port. Jupyter's data and settings go to a temporary
-directory, as in the launcher's tests.
+Every cell runs in a row, as "Run All" runs them, and after them two cells of this test. Section 1 has to
+bring up every part. Section 3 has to open the microphone: this machine has one, so a microphone that does not
+open fails the test. Section 4 shows its stop button and must stop nothing: on 2026-11-23 it stopped
+everything, "Run All" ended the demo a second after the live cell, and the picture stood on its first frame,
+"no microphone". The test's first cell then checks the microphone in the running demo: frames keep reaching
+the session, the picture keeps being drawn on them, the panel says it is listening, no read overflowed, and
+Gemma's server still answers. Its second cell presses the stop button, which must leave no server on Gemma's
+default port and no utilization table running. (Until 2026-11-23 the notebook also ran one typed command and
+a new layout from cells, its sections 4 and 5; the user had them removed, so a command now goes through the
+live cell's text box or the microphone only.) Skipped while Gemma, the SAM 3 environment or the SAPIEN twin is
+not set up; anything else that goes wrong fails. Needs a display for the utilization window, a microphone and
+nothing answering on the Gemma port. Jupyter's data and settings go to a temporary directory, as in the
+launcher's tests.
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -43,17 +50,55 @@ pytestmark = [
 ]
 
 
-def test_the_demo_notebook_starts_every_part_shows_the_live_picture_and_stops_everything(tmp_path):
+# The test's first cell, run after every cell of the notebook: the microphone in the running demo. Each wait
+# is one bounded wait for the view's own event that it has drawn; at rest the microphone's frames are the
+# only thing that makes it draw.
+MICROPHONE_CHECK = '''
+import json, time
+from so101_smolvla.demo_console import voice_state
+_listener, _session = stack.listener, stack.session
+_frame_before, _drawn_before, _draws = _session.voice.time, view.frames, 0
+for _ in range(10):
+    view.drawn.clear()
+    if not view.drawn.wait(5):
+        break
+    _draws += 1
+_voice = _session.voice
+print("MICROPHONE " + json.dumps({
+    "opened": _listener.opened.is_set(), "error": _listener.error, "overflows": _listener.overflows,
+    "threads_alive": [thread.is_alive() for thread in _listener._threads],
+    "available": _voice.available, "panel": voice_state(_voice, time.monotonic())[0],
+    "draws_awaited": _draws, "frames_drawn": view.frames - _drawn_before,
+    "a_later_frame_arrived": _voice.time > _frame_before,
+    "gemma_answers": stack.server.answers(), "stop_pressed": stop.done,
+}))
+'''
+# The test's second cell: the stop button pressed, as a person presses it.
+PRESS_STOP = "stop.button.click()\nprint(stop.said)\n"
+
+
+def test_run_all_leaves_the_demo_running_with_a_live_microphone_and_the_button_stops_everything(tmp_path):
     assert os.environ.get("DISPLAY"), "the utilization window needs a display"
     assert not _gemma_answers(), "something already answers on the Gemma port; stop it before this test"
     env = _environment(tmp_path)
     subprocess.run([str(LAUNCHER), "--kernel-only"], env=env, check=True, timeout=120)
+
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    template = next(c for c in notebook["cells"] if c["cell_type"] == "code")
+    for source in (MICROPHONE_CHECK, PRESS_STOP):
+        cell = copy.deepcopy(template)
+        cell.update(source=source, metadata={}, outputs=[], execution_count=None)
+        if "id" in cell:
+            cell["id"] = uuid.uuid4().hex[:8]
+        notebook["cells"].append(cell)
+
     out = tmp_path / "executed.ipynb"
     ran = subprocess.run(
         [str(VENV / "bin" / "jupyter"), "nbconvert", "--to", "notebook", "--execute",
          f"--ExecutePreprocessor.kernel_name={KERNEL}", f"--ExecutePreprocessor.timeout={RUN_LIMIT_S}",
-         "--output", out.stem, "--output-dir", str(out.parent), str(NOTEBOOK)],
-        env=env, cwd=NOTEBOOKS, capture_output=True, text=True, timeout=RUN_LIMIT_S + 60,
+         "--output", out.stem, "--output-dir", str(out.parent), "--stdin"],
+        env=env, cwd=NOTEBOOKS, input=json.dumps(notebook), capture_output=True, text=True,
+        timeout=RUN_LIMIT_S + 60,
     )
     assert ran.returncode == 0, ran.stdout + ran.stderr
     assert not _gemma_answers(), "the notebook left its Gemma server running"
@@ -67,6 +112,20 @@ def test_the_demo_notebook_starts_every_part_shows_the_live_picture_and_stops_ev
     for part in ("Gemma 4 server at", "SAM 3 worker ready", "SmolVLA", "SAPIEN scene, layout seed 0", "utilization and power table"):
         assert part in started, started
     live = _printed(_code_after(cells, "## 3."))
-    assert "microphone" in live, live
-    stopped = _printed(_code_after(cells, "## 4."))
-    assert "table closed" in stopped and "stopped" in stopped, stopped
+    assert "listening to the microphone" in live, live  # this machine has a microphone: it has to open
+    # Section 4 run in the row of all cells: its button is shown, nothing is stopped.
+    shown = _printed(_code_after(cells, "## 4."))
+    assert "the demo keeps running" in shown and "stopped" not in shown, shown
+
+    checked, pressed = (_printed(cell) for cell in cells[-2:])
+    print(checked.strip())
+    microphone = json.loads(checked.split("MICROPHONE ", 1)[1])
+    assert microphone["opened"] and microphone["error"] is None, microphone
+    assert microphone["threads_alive"] == [True, True], microphone
+    # Frames keep coming and reach the picture: the panel is live, not a first frame left standing.
+    assert microphone["available"] and microphone["a_later_frame_arrived"], microphone
+    assert microphone["draws_awaited"] == 10 and microphone["frames_drawn"] >= 10, microphone
+    assert microphone["panel"] in ("listening", "hearing you", "asking Gemma..."), microphone
+    assert microphone["overflows"] == 0, microphone
+    assert microphone["gemma_answers"] and not microphone["stop_pressed"], microphone
+    assert "table closed" in pressed and "Gemma, SAM 3 and the scene stopped." in pressed, pressed

@@ -11,8 +11,10 @@ from so101_smolvla.demo_console import (
     GRIP_BAR,
     RED,
     SILENT_AFTER_S,
+    STOPPED,
     TILES_W,
     VAD_BAR,
+    YELLOW,
     Snapshot,
     VoiceLevel,
     compose,
@@ -58,6 +60,21 @@ def test_the_voice_meter_fills_with_the_level_green_while_speaking_and_says_why_
     assert voice_state(quiet, now)[0] == "listening"
     # Without a microphone no bar is drawn at all.
     assert _bar_fill(compose(_snapshot(), (), VoiceLevel(), now), VAD_BAR, DIM) == 0
+
+
+def test_a_stopped_picture_says_so_whatever_the_microphone_last_reported():
+    now = 100.0
+    for voice in (VoiceLevel(), VoiceLevel(error="no device"), VoiceLevel(available=True, level=0.5, speaking=True, time=now)):
+        assert voice_state(voice, now, stopped=True) == (STOPPED, YELLOW)
+    # Never "no microphone" on a stopped picture, and no voice bar: the meter no longer follows anything.
+    assert "microphone" not in STOPPED
+    loud = VoiceLevel(available=True, level=0.5, speaking=True, time=now)
+    stopped = compose(_snapshot(), (), loud, now, stopped=True)
+    assert stopped.shape == FRAME_SHAPE
+    assert _bar_fill(stopped, VAD_BAR, GREEN) == 0
+    assert not np.array_equal(stopped, compose(_snapshot(), (), loud, now))
+    # The same stopped picture whatever the voice was: the first frame's "no microphone" cannot stay.
+    assert np.array_equal(stopped, compose(_snapshot(), (), VoiceLevel(), now, stopped=True))
 
 
 def test_the_gripper_bar_shows_the_opening_and_turns_green_on_contact():
