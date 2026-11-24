@@ -344,14 +344,17 @@ JupyterLab there.
 
 ## Utilization and power table
 
-A small always-on-top table, three rows and two columns, read twice a second
-from the kernel's own files on the machine it runs on:
+A small always-on-top table named "Utilization and power", three rows and two
+columns, read twice a second from the kernel's own files on the machine it
+runs on. Beside its name it shows the processor's name as the kernel reports
+it (on this machine "AMD RYZEN AI MAX+ PRO 395"): the three rows are parts of
+that one chip, the APU (accelerated processing unit).
 
 | Row | Utilization | Power |
 |---|---|---|
 | CPU | `/proc/stat`, the difference of two readings; busy is all time minus idle minus iowait (psutil's definition; `top` counts iowait as busy) | the firmware's `average_all_core_power`: the cores only, not the caches, memory controller or fabric |
 | iGPU | the graphics driver's `gpu_busy_percent`: the share of the interval in which the graphics engine was not idle (graphics and compute; the video engine is not in it) | the firmware's `average_gfx_power` |
-| NPU | the firmware's eight per-column busy values, one segment each; the number is their mean | the firmware's `average_ipu_power` ("IPU" is the firmware's name for the NPU) |
+| NPU | the mean of the firmware's eight per-column busy values, one bar and one number like the other two rows | the firmware's `average_ipu_power` ("IPU" is the firmware's name for the NPU) |
 
 The firmware values come from the platform firmware's metrics table, which the
 `amdgpu` driver hands out as `/sys/class/drm/card<N>/device/gpu_metrics`

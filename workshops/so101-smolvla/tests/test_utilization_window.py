@@ -10,9 +10,9 @@ import time
 
 import pytest
 
-from so101_smolvla.utilization import Reading
+from so101_smolvla.utilization import Reading, apu_name
 from so101_smolvla.utilization_meters import LAUNCHER, close_meters, running_facts
-from so101_smolvla.utilization_window import SCENE, choose_renderer, rows_from_reading
+from so101_smolvla.utilization_window import SCENE, WINDOW_NAME, choose_renderer, rows_from_reading
 from test_utilization import BusyProcessors
 from test_utilization_meters import _xwininfo
 from utilization_machines import WORKSHOP, this_machine
@@ -39,13 +39,15 @@ def test_the_renderer_rule_is_gpu_on_a_local_display_and_software_on_a_forwarded
     assert choose_renderer("otherhost:11.0") == "software"
 
 
-def test_the_scenes_rows_carry_values_columns_and_the_reason_of_a_missing_value():
+def test_the_scenes_rows_carry_one_utilization_each_and_the_reason_of_a_missing_value():
     rows = rows_from_reading(_reading(gpu_percent="gpu_busy_percent reads 130, above 100"))
     assert [row["label"] for row in rows] == ["CPU", "iGPU", "NPU"]
-    assert rows[0]["percent"] == 42.0 and rows[0]["columns"] == [42.0] and rows[0]["power"] == 8.9
-    assert rows[1]["percent"] is None and rows[1]["columns"] is None
+    assert rows[0]["percent"] == 42.0 and rows[0]["power"] == 8.9
+    assert rows[1]["percent"] is None
     assert rows[1]["reason_util"] == "gpu_busy_percent reads 130, above 100" and rows[1]["reason_power"] == ""
-    assert rows[2]["columns"] == [60.0, 62.0, 64.0, 60.0, 62.0, 64.0, 60.0, 64.0] and rows[2]["percent"] == 62.0
+    # The NPU is one overall utilization like the other two: its eight columns are not handed to the scene.
+    assert rows[2]["percent"] == 62.0
+    assert all(set(row) == {"label", "colour", "percent", "power", "reason_util", "reason_power"} for row in rows)
 
 
 SCENE_CHECK = """
@@ -63,7 +65,8 @@ engine.load(QUrl.fromLocalFile(str(SCENE)))
 window = engine.rootObjects()[0]
 reading = Reading(**json.loads(sys.argv[1]))
 reading = Reading(**{**reading.__dict__, "npu_columns": None if reading.npu_columns is None else tuple(reading.npu_columns)})
-window.setProperty("caption", "a-machine")
+window.setTitle("A name")
+window.setProperty("caption", "A PROCESSOR 123")
 window.setProperty("rows", rows_from_reading(reading))
 app.processEvents()
 print(json.dumps(cell_texts(window)))
@@ -71,7 +74,7 @@ print(json.dumps(cell_texts(window)))
 
 
 def test_the_scene_shows_n_a_for_a_missing_value_and_the_numbers_for_the_rest():
-    reading = _reading(gpu_power_w="metrics file is format 2.4, expected 3.0")
+    reading = _reading(gpu_power_w="metrics file is format 2.4, expected 3.0", cpu_percent="no time passed")
     record = reading.as_dict()
     ran = subprocess.run(
         [str(WORKSHOP / ".venv" / "bin" / "python"), "-c", SCENE_CHECK, json.dumps(record)],
@@ -80,11 +83,12 @@ def test_the_scene_shows_n_a_for_a_missing_value_and_the_numbers_for_the_rest():
     )
     assert ran.returncode == 0, ran.stderr
     texts = json.loads(ran.stdout.strip().splitlines()[-1])
-    assert texts["caption"] == "a-machine"
-    assert texts["util_CPU"] == "42 %" and texts["power_CPU"] == "8.9 W"
+    assert texts["name"] == "A name" and texts["caption"] == "A PROCESSOR 123"
+    assert texts["util_CPU"] == "n/a" and texts["power_CPU"] == "8.9 W"
     assert texts["util_iGPU"] == "74 %" and texts["power_iGPU"] == "n/a"
     assert texts["util_NPU"] == "62 %" and texts["power_NPU"] == "1.2 W"
-    assert texts["npu_segments"] == [0.6, 0.62, 0.64, 0.6, 0.62, 0.64, 0.6, 0.64]
+    # One bar per row, filled to the row's number; none for the missing value.
+    assert texts["bars"] == {"CPU": None, "iGPU": 0.74, "NPU": 0.62}
 
 
 def _start(*args: str) -> tuple[subprocess.Popen, dict]:
@@ -131,7 +135,7 @@ def test_a_drag_moves_the_window_and_a_click_on_x_ends_the_program_with_status_0
 
 
 @live
-def test_under_a_processor_load_the_cpu_cell_is_at_or_above_the_floor_and_the_caption_names_this_machine():
+def test_under_a_processor_load_the_cpu_cell_is_at_or_above_the_floor_and_the_caption_names_the_processor():
     load = BusyProcessors(16)
     try:
         process, facts = _start("--report-after", "5")
@@ -144,7 +148,12 @@ def test_under_a_processor_load_the_cpu_cell_is_at_or_above_the_floor_and_the_ca
     floor = 100.0 * 16 / MACHINE["logical_processors"]
     cpu = int(report["util_CPU"].split()[0])
     assert cpu >= floor, report
-    assert report["caption"] == os.uname().nodename
-    assert len(report["npu_segments"]) == 8
+    # The table's name and, beside it, this machine's processor as the kernel names it.
+    assert report["name"] == WINDOW_NAME == "Utilization and power"
+    assert report["caption"] == MACHINE["apu_name"] == apu_name()
+    # One bar per row, each filled to the row's number.
+    assert set(report["bars"]) == {"CPU", "iGPU", "NPU"}
+    for label in report["bars"]:
+        assert abs(report["bars"][label] - int(report[f"util_{label}"].split()[0]) / 100) <= 0.006, report
     assert report["power_CPU"].endswith(" W") and report["util_NPU"].endswith(" %")
     assert facts["renderer"] == "OpenGL"  # the rule's choice on this machine's local display

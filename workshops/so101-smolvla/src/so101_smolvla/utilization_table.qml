@@ -2,9 +2,13 @@
 // (utilization, power). No shader effect, so Qt Quick's graphics-processor renderer and its software
 // renderer draw the same picture. Look as approved from the mock-up of 2026-11-22.
 //
-// ``rows`` holds per row: label, colour, percent (null when missing), power (null when missing),
-// columns (the values the segments show; one for CPU and iGPU, eight for the NPU), reason_util and
-// reason_power (why a value is missing, shown while the mouse rests on the cell).
+// ``rows`` holds per row: label, colour, percent (null when missing; the row's one bar and its
+// number), power (null when missing), reason_util and reason_power (why a value is missing, shown
+// while the mouse rests on the cell). Every row has one bar: the NPU's is its overall utilization,
+// like the other two (until 2026-11-24 it was eight segments, one per NPU column, which read as if
+// the NPU were measured in more detail than the processor and the graphics).
+// ``title`` (the window's own property) is the table's name, shown in the card and to the desktop;
+// ``caption`` is the processor's name.
 import QtQuick
 import QtQuick.Window
 
@@ -68,8 +72,19 @@ Window {
         }
 
         Text {
-            objectName: "caption"
+            id: name
+            objectName: "name"
             x: 18; y: 11; height: 16
+            verticalAlignment: Text.AlignVCenter
+            text: win.title
+            color: win.bright
+            font { family: win.face; pixelSize: 10; weight: Font.DemiBold; letterSpacing: 0.3 }
+        }
+        Text {
+            objectName: "caption"
+            x: name.x + name.implicitWidth + 8; y: 11; height: 16
+            width: 282 - x                   // up to the "×"; a longer name is cut with "…"
+            elide: Text.ElideRight
             verticalAlignment: Text.AlignVCenter
             text: win.caption
             color: win.dim
@@ -108,10 +123,7 @@ Window {
                 id: line
                 required property int index
                 readonly property var row: win.rows[index]
-                readonly property var columns: row.columns === null || row.columns === undefined ? [] : row.columns
-                readonly property real gap: 2
-                readonly property int pieces: Math.max(columns.length, 1)
-                readonly property real piece: (118 - gap * (pieces - 1)) / pieces
+                readonly property bool known: row.percent !== null && row.percent !== undefined
                 y: 56 + index * 32
                 width: 320
                 height: 24
@@ -123,27 +135,24 @@ Window {
                     color: win.bright
                     font { family: win.face; pixelSize: 13; weight: Font.DemiBold }
                 }
-                Repeater {
-                    model: line.columns.length
+                Rectangle {                  // the row's one bar; no bar for a missing value
+                    id: track
+                    objectName: "bar_" + line.row.label
+                    visible: line.known
+                    x: 66
+                    y: 9
+                    width: 118
+                    height: 6
+                    radius: 3
+                    color: Qt.rgba(1, 1, 1, 24 / 255)
                     Rectangle {
-                        id: track
-                        objectName: "segment_" + line.row.label + "_" + index
-                        required property int index
-                        x: 66 + index * (line.piece + line.gap)
-                        y: 9
-                        width: line.piece
+                        width: line.known ? track.width * line.row.percent / 100 : 0
                         height: 6
                         radius: 3
-                        color: Qt.rgba(1, 1, 1, 24 / 255)
-                        Rectangle {
-                            width: track.width * line.columns[track.index] / 100
-                            height: 6
-                            radius: 3
-                            gradient: Gradient {
-                                orientation: Gradient.Horizontal
-                                GradientStop { position: 0; color: Qt.darker(line.row.colour, 1.25) }
-                                GradientStop { position: 1; color: line.row.colour }
-                            }
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0; color: Qt.darker(line.row.colour, 1.25) }
+                            GradientStop { position: 1; color: line.row.colour }
                         }
                     }
                 }

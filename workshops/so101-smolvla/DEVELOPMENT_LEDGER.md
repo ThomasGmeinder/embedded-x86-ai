@@ -7514,3 +7514,29 @@ Open, each needs the user's word:
   unfinished work on the start cell's messages
   (`TESTING_LEDGER.md`, the addition of 07:35). Left as it is for the user
   to decide. Nothing of this is committed.
+- Later that morning: the user had the notebook test repaired (the kernel
+  of the test hid its child processes' output), tried the demo by hand
+  ("manual notbook test worked") and had it committed and pushed
+  (`9126184`, `1847313`, `dde45e6`).
+
+### Addition, 2026-11-24 09:20: the utilization table shows one bar for the NPU, has a name, and names the processor
+
+- The user: "it is misleading to show 8 seprate columns for NPU in the
+  activity monitor for NPU but not for CPU and iGPU. change it to a single
+  overall utilization meter. give the popup window a proper name. instead
+  of host name use APU name".
+- One bar per row. The NPU's bar is the mean of the firmware's eight
+  column values, the number the row showed already
+  (`Reading.npu_percent`); the columns are still read and still in the
+  reading and its JSON, they are no longer handed to the scene. The scene
+  lost its segments.
+- The name, mine: "Utilization and power", the words the documents use for
+  the table. One constant (`utilization_window.WINDOW_NAME`) sets the
+  window's title, which the card shows too.
+- The processor's name: the first `model name` of `/proc/cpuinfo` without
+  what follows " w/ " (`utilization.apu_name`), in the card where the host
+  name stood. The host name stays in the facts `open_meters` returns and in
+  the reading.
+- Tests in `TESTING_LEDGER.md`,
+  [the section](TESTING_LEDGER.md#t-2026-11-24-table-one-bar-per-row).
+  Not committed.

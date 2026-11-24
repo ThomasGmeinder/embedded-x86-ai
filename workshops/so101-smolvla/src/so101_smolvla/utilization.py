@@ -113,6 +113,20 @@ def read_cpu_times() -> tuple[int, int]:
     return total - idle - iowait, total
 
 
+def apu_name(cpuinfo: Path = Path("/proc/cpuinfo")) -> str:
+    """The name of the chip the three rows are parts of, as the kernel reports its processor.
+
+    The first ``model name`` of /proc/cpuinfo without what follows " w/ " (the kernel's
+    "AMD RYZEN AI MAX+ PRO 395 w/ Radeon 8060S" names the graphics after it). The APU
+    (accelerated processing unit) is the one chip that holds processor, graphics and NPU.
+    """
+    for line in cpuinfo.read_text(encoding="utf-8", errors="replace").splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "model name" and value.strip():
+            return value.strip().split(" w/ ", 1)[0]
+    raise SourceError(f"{cpuinfo} has no model name line")
+
+
 def _percent(value: int, what: str) -> tuple[float | None, str | None]:
     if value > 100:
         return None, f"{what} reads {value}, above 100"

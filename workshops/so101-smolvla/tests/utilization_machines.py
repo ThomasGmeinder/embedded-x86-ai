@@ -15,6 +15,8 @@ MACHINES = {
     "xdetgmeinde-lx01": {
         # AMD Ryzen AI Max+ PRO 395, 32 logical processors, GNOME 46 on Wayland, X11 display ":0".
         "logical_processors": 32,
+        # The table's caption: /proc/cpuinfo's model name without " w/ Radeon 8060S".
+        "apu_name": "AMD RYZEN AI MAX+ PRO 395",
         "metrics_format": (3, 0),
         "npu_device": "/dev/accel/accel0",
         "has_display": True,

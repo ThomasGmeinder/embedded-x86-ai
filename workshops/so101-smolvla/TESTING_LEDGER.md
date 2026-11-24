@@ -3581,3 +3581,19 @@ user had tried the demo by hand before it: "manual notbook test worked".
 | Job | Clock, exit | Command | Result |
 |---|---|---|---|
 | `full-suite-d` | 08:42:44 to 08:57:23, exit 1, 877.27 s | `env DISPLAY=:0 PYTHONPATH=src .venv/bin/python -m pytest tests -v --tb=short -rA -s` (`/tmp/so101-full-suite-d.log`, exit file `/tmp/so101-full-suite-d.exit`) | **290 passed, 2 failed, 1 expected failure.** The notebook test passes. The two failures are the spoken test on each backend, with the question and the negation only ("is the red cube in the box", "do not pick up the red cube", each heard as a pick of the red cube): the known ones, not touched by this change. |
+
+<a id="t-2026-11-24-table-one-bar-per-row"></a>
+## 2026-11-24 — The utilization table: one bar for the NPU, a name, the processor's name
+
+The user: eight columns for the NPU and one for the CPU and the iGPU is
+misleading; one overall meter; a proper name for the window; the APU's name
+instead of the host name. Environment: the workshop directory,
+`PYTHONPATH=src DISPLAY=:0 .venv/bin/python -m pytest`.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| the table's tests on the real display | 09:15, exit 0, 25.84 s | `pytest tests/test_utilization.py tests/test_utilization_window.py tests/test_utilization_meters.py -v --tb=short -rA -s` (`/tmp/so101-table-tests.log`) | **19 passed.** New or changed in them: the processor's name from the kernel's `model name` without what follows " w/ " (on this machine "AMD RYZEN AI MAX+ PRO 395"); the scene's rows hold one utilization each and no columns; the scene shows one bar per row filled to the row's number and none for a missing value; the running window's name is "Utilization and power" (`xdotool getwindowname`); the report of the running program holds that name, the processor's name and three bars. |
+| the card looked at | 09:16 | the scene rendered off screen with this machine's values to `/tmp/table-look/card.png` | Top line "Utilization and power" and "AMD RYZEN AI MAX+ PRO 395", both whole, the "×" free; one bar per row. |
+| `table-nb`, the two notebooks that open the table | ended 09:20, exit 0, 222.25 s | `pytest tests/test_demo_notebook.py tests/test_voice_notebook.py -v --tb=short -rA -s` (`/tmp/so101-table-nb.log`) | **3 passed.** |
+
+Not run after this change: the rest of the suite.

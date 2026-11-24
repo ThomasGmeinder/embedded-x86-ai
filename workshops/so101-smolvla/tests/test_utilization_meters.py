@@ -60,6 +60,9 @@ def test_open_meters_shows_a_window_outside_the_window_manager_and_a_second_call
     assert info["Map State"].strip() == "IsViewable"
     assert info["Override Redirect State"].strip() == "yes"
     assert info["Depth"].strip() == "32"
+    # The window has a name of its own, for a window list and for whoever looks it up.
+    name = subprocess.run(["xdotool", "getwindowname", str(facts["window"])], capture_output=True, text=True, check=True)
+    assert name.stdout.strip() == "Utilization and power"
     focus_after = subprocess.run(["xdotool", "getwindowfocus"], capture_output=True, text=True).stdout.strip()
     assert focus_after == focus_before, "the table took the keyboard focus"
     assert not _lock_is_free()

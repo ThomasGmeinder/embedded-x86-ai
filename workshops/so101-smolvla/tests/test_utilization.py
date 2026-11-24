@@ -25,6 +25,7 @@ from so101_smolvla.utilization import (
     Reading,
     Sampler,
     SourceError,
+    apu_name,
     decode_metrics,
     find_amdgpu_device,
     read_cpu_times,
@@ -158,8 +159,23 @@ def test_the_cpu_busy_definition_leaves_out_idle_and_iowait():
     assert total - busy >= idle + iowait
 
 
+def test_the_apu_name_is_the_kernels_model_name_without_the_graphics_after_it(tmp_path):
+    cpuinfo = tmp_path / "cpuinfo"
+    cpuinfo.write_text(
+        "processor\t: 0\nvendor_id\t: AuthenticAMD\nmodel name\t: AMD RYZEN AI MAX+ PRO 395 w/ Radeon 8060S\n"
+        "processor\t: 1\nmodel name\t: another line that is not read\n"
+    )
+    assert apu_name(cpuinfo) == "AMD RYZEN AI MAX+ PRO 395"
+    cpuinfo.write_text("processor\t: 0\nmodel name\t: AMD EPYC 9654 96-Core Processor\n")
+    assert apu_name(cpuinfo) == "AMD EPYC 9654 96-Core Processor"  # nothing after it to drop
+    cpuinfo.write_text("processor\t: 0\nmodel name\t:\n")
+    with pytest.raises(SourceError, match="no model name"):
+        apu_name(cpuinfo)
+
+
 @live
 def test_this_machine_has_every_source_and_a_reading_holds_every_value():
+    assert apu_name() == MACHINE["apu_name"]
     device = find_amdgpu_device()
     assert (device / "gpu_metrics").is_file() and (device / "gpu_busy_percent").is_file()
     assert Path(MACHINE["npu_device"]).exists(), f"{MACHINE['npu_device']} is missing on a machine that has it"
