@@ -157,6 +157,15 @@ tests share it. `notebooks/run_notebooks.sh` registers the kernel and opens
 JupyterLab; `tests/test_demo_notebook.py` runs the notebook against the real
 Gemma, SAM 3 and SAPIEN.
 
+One thing the demo does and the batch runner does not: a command whose 400
+steps end while the cube is still in the gripper goes on until the
+simulator's rule says the cube is placed, and ends there. A command that ends
+without its cube placed, after its 400 steps with the gripper empty or at
+1000 steps, has given up: a program, not SmolVLA, opens the gripper and
+drives the arm back to the pose the layout started in, and the transcript
+says so. The batch
+runner's commands stay 400 steps, so its measurements are unchanged.
+
 ## Compute placement
 
 A run is four processes: the main one (`.venv`: the runner, the Gemma client,

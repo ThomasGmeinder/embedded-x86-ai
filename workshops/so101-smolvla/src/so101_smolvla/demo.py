@@ -42,6 +42,10 @@ from so101_smolvla.voice.intents import ParsedCommand
 logger = logging.getLogger(__name__)
 
 TRANSCRIPT_LINES = 40
+# A command whose steps end with the cube in the gripper goes on until the cube is placed; at
+# this many steps it gives up and the arm is driven home (the user, 2026-11-24: "after 1000
+# steps the robot should give up and go back to the default/home position").
+GIVE_UP_AFTER = 1000
 # The two events of a command, in the order they happen. Gemma writes the call first and the
 # words it heard after it; each is shown the moment it is complete.
 COMMAND_RECEIVED = "command received"
@@ -282,6 +286,19 @@ class DemoSession:
         result = self.scene.run_command(pick, observer=self)
         self.results.append(result)
         placed = result["first_success_step"]
+        if result["gave_up"]:
+            # Said first: the arm stands at its start pose because a program drove it there.
+            self.say(
+                f"{pick.cube} cube: gave up after {result['steps']} steps; a program opened the gripper "
+                f"and drove the arm home ({result['home_steps']} steps)",
+                "error",
+            )
+        elif result["steps"] > self.scene.steps_per_pick:
+            self.say(
+                f"{pick.cube} cube: in the gripper when its {self.scene.steps_per_pick} steps ended; "
+                f"went on to step {result['steps']}",
+                "note",
+            )
         self.say(
             f"{pick.cube} cube: {'placed, rule held at step ' + str(placed) if placed is not None else 'not placed'}; "
             f"in the bin at the end: {'yes' if result['in_bin_at_end'] else 'no'}",
@@ -300,13 +317,18 @@ class DemoSession:
         placed = self.snapshot.placed_at
         if view.success and placed is None:
             placed = view.step
+        if view.going_home:
+            status = f"gave up on the {view.cube} cube; a program drives the arm home"
+        elif view.step >= view.steps_per_pick:
+            status = f"{view.cube} cube in the gripper past {view.steps_per_pick} steps: step {view.step + 1}"
+        else:
+            status = f"picking the {view.cube} cube: step {view.step + 1} of {view.steps_per_pick}"
         self._update(
             step=view.step,
             pictures={"top": observation.top, "wrist": observation.wrist},
             opening=float(observation.state[5]),
             contact=view.contact, grasped=view.grasped, in_bin=view.in_bin, placed_at=placed,
-            status=f"picking the {view.cube} cube: step {view.step + 1} of {view.steps_per_pick}"
-            + ("; in the bin" if view.in_bin else ""),
+            status=status + ("; in the bin" if view.in_bin else ""),
         )
 
 
@@ -319,12 +341,16 @@ class DemoStack:
         *,
         pictures: str = "others-painted",
         steps_per_pick: int = DEFAULT_STEPS_PER_PICK,
+        give_up_after: int | None = None,
         log_dir: Path | str = "logs",
         layouts_per_scene: int = 3,
     ) -> None:
         self.seed = seed
         self.pictures = pictures
         self.steps_per_pick = steps_per_pick
+        # With the default steps the demo's ceiling; with fewer (the tests' short commands) the
+        # same share above them.
+        self.give_up_after = give_up_after or steps_per_pick * GIVE_UP_AFTER // DEFAULT_STEPS_PER_PICK
         self.log_dir = Path(log_dir)
         self.layouts_per_scene = layouts_per_scene
         self.server = self.client = self.sam3 = self.env = self.scene = self.session = self.listener = None
@@ -362,7 +388,7 @@ class DemoStack:
         )
         self.scene = PickPlaceScene(
             self.env, policy, pre, post, pictures=self.pictures, sam3=self.sam3,
-            steps_per_pick=self.steps_per_pick, act=_action, record=False,
+            steps_per_pick=self.steps_per_pick, give_up_after=self.give_up_after, act=_action, record=False,
         )
         self.scene.start_layout(self.seed, self.seed)
         say(f"SAPIEN scene, layout seed {self.seed}, after {time.perf_counter() - began:.1f} s")

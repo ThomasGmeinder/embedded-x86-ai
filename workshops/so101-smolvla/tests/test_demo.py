@@ -67,6 +67,55 @@ def test_a_typed_command_runs_one_pick_and_the_state_follows_it():
         session.close()
 
 
+def _late_session(placed_after):
+    from test_pick_place import LateScene
+
+    scene, gemma = LateScene(gripped_after=3, placed_after=placed_after), Gemma()
+    loop = PickPlaceScene(scene, StandInPolicy(), None, None, pictures="others-painted", steps_per_pick=3,
+                          give_up_after=8, act=act, record=False)
+    loop.start_layout(4, 10)
+    return DemoSession(loop, gemma.parse, seed=4).start()
+
+
+def test_a_command_that_goes_on_past_its_steps_says_so_and_ends_idle_with_the_cube_in_the_bin():
+    session = _late_session(placed_after=5)
+    try:
+        session.submit("grab the blue one")
+        assert session.wait_idle(10)
+        notes = _kinds(session, "note")
+        assert "blue cube: in the gripper when its 3 steps ended; went on to step 5" in notes
+        assert "blue cube: placed, rule held at step 4; in the bin at the end: yes" in notes
+        assert session.snapshot.status.startswith("idle") and session.snapshot.cubes_in_bin == ("blue",)
+        assert not session.snapshot.grasped and _kinds(session, "error") == []
+    finally:
+        session.close()
+
+
+def test_a_command_that_gives_up_says_that_a_program_drove_the_arm_home():
+    session = _late_session(placed_after=None)
+    try:
+        statuses = []
+        on_step = session.on_step
+
+        def keep_status(view):
+            on_step(view)
+            statuses.append(session.snapshot.status)
+
+        session.on_step = keep_status
+        session.submit("grab the blue one")
+        assert session.wait_idle(10)
+        assert _kinds(session, "error") == [
+            "blue cube: gave up after 8 steps; a program opened the gripper and drove the arm home (20 steps)"
+        ]
+        assert "blue cube: not placed; in the bin at the end: no" in _kinds(session, "note")
+        assert statuses[2] == "picking the blue cube: step 3 of 3"
+        assert statuses[3] == "blue cube in the gripper past 3 steps: step 4"
+        assert statuses[8] == statuses[-1] == "gave up on the blue cube; a program drives the arm home"
+        assert session.snapshot.status.startswith("idle") and not session.snapshot.grasped
+    finally:
+        session.close()
+
+
 def test_a_spoken_command_arrives_with_gemmas_fields_and_is_not_asked_again():
     scene, gemma, session = _session()
     try:

@@ -6,7 +6,14 @@ the cube the command names (``cube_commands.choose_cube``), the outlines the
 picture editor paints by (the scene's own or SAM 3's at every plan), the
 pictures SmolVLA is given, one action per step for ``steps_per_pick`` steps,
 and the record of what happened. A refused command moves nothing and is
-recorded as such.
+recorded as such. With ``give_up_after`` (the demo) a command whose steps end
+while the cube is in the gripper goes on until the simulator's rule holds
+(``PickPlaceScene.goes_on``). A command that ends without its cube placed,
+after its own steps with the gripper empty or at ``give_up_after`` steps, has
+given up: a program, not SmolVLA, opens the gripper and drives the arm back
+to the pose the layout started in (``PickPlaceScene._go_home``). Without it a command is
+its ``steps_per_pick`` steps and no more (the batch runner and its
+measurements).
 
 ``PickPlaceScene`` owns one scene (``env``), one policy and, with SAM 3, one
 outline worker. ``start_layout`` resets the scene once; ``run_command`` runs one
@@ -40,6 +47,17 @@ from so101_smolvla.voice.commands import CommandFields
 # bin scenes (so101_sim/envs.py:902). A command runs all of them, so the arm
 # has the time to come back before the next command starts.
 DEFAULT_STEPS_PER_PICK = 400
+# The way home of a command that gave up, driven by a program: the gripper is
+# opened to this share of its travel (SmolVLA itself opens to 47 % before a
+# pick, measured 2026-11-23) over these steps, then the joints go to the pose
+# the layout started in, at most this many degrees per step, and that pose is
+# held for the last steps while the gripper closes and the arm arrives (with
+# one such step the arm stood 3.6 degrees short and the gripper at 36 %,
+# measured 2026-11-24).
+HOME_OPEN_JAW = 50.0
+HOME_OPEN_STEPS = 10
+HOME_DEGREES_PER_STEP = 2.0
+HOME_ARRIVE_STEPS = 10
 # What SmolVLA is shown.
 PICTURE_MODES = {
     "unedited": "the pictures as the cameras take them",
@@ -179,7 +197,7 @@ class PlanView:
 class StepView:
     """What an observer is told after one step of a command."""
 
-    step: int  # within the command, from 0
+    step: int  # within the command, from 0; ``steps_per_pick`` and above in a command that goes on
     steps_per_pick: int
     command: str
     cube: str
@@ -188,6 +206,7 @@ class StepView:
     grasped: bool
     contact: bool
     success: bool
+    going_home: bool = False  # the command gave up; a program drives the arm home
 
 
 class Observer(Protocol):
@@ -261,6 +280,7 @@ class PickPlaceScene:
         pictures: str,
         sam3: Sam3Outlines | None = None,
         steps_per_pick: int = DEFAULT_STEPS_PER_PICK,
+        give_up_after: int | None = None,
         act: Callable[..., np.ndarray],
         record: bool = True,
     ) -> None:
@@ -270,6 +290,11 @@ class PickPlaceScene:
             )
         if steps_per_pick < 1:
             raise ValueError(f"steps per command must be positive, got {steps_per_pick}")
+        if give_up_after is not None and give_up_after <= steps_per_pick:
+            raise ValueError(
+                f"a command gives up after more steps than its {steps_per_pick}, got {give_up_after}"
+            )
+        self.give_up_after = give_up_after  # None: a command never goes on; see goes_on
         self.env = env
         self.policy = policy
         self.pre = pre
@@ -330,6 +355,85 @@ class PickPlaceScene:
         self.start_layout(*self._layout_seeds)
         return seconds
 
+    def goes_on(self, step: int, in_gripper: bool, rule_held: bool) -> bool:
+        """Whether a command runs its step ``step``; the two flags are of the step before.
+
+        A command runs its ``steps_per_pick`` steps. With ``give_up_after`` it goes on past
+        them when they end with the cube in the gripper: a pick that came late is finished by
+        SmolVLA instead of being left standing with the cube in the air (2026-11-23, the demo:
+        a cube gripped at step 340 of 400 was over the bin at step 383 and still held at 399).
+        Once it goes on, it ends at the first step at which the simulator's rule holds (the
+        cube in the bin, let go, the robot still and off the bin) and not at the end of the
+        plan: measured in that session, SmolVLA let the cube go at step 406, gripped it again
+        and had it out of the bin by step 444. It ends at the latest at ``give_up_after``
+        steps; ``run_command`` then sends the arm home.
+        """
+        if step < self.steps_per_pick:
+            return True
+        if self.give_up_after is None or step >= self.give_up_after:
+            return False
+        if step == self.steps_per_pick:
+            return in_gripper
+        return not rule_held
+
+    def _keep(self, target: np.ndarray, outcome) -> None:
+        """One step of the layout: counted and, with ``record``, kept for the episode folder."""
+        self.layout_steps += 1
+        if not self.recording:
+            return
+        record, facts = self.record, outcome.facts
+        record.targets.append(target)
+        record.commanded.append(outcome.commanded)
+        record.achieved.append(outcome.achieved)
+        record.successes.append(outcome.success)
+        record.top_frames.append(outcome.observation.top)
+        record.wrist_frames.append(outcome.observation.wrist)
+        for other in BIN_CUBE_COLORS:
+            record.cube_positions[other].append(facts["cubes"][other]["position"])
+        record.bin_positions.append(facts["bin"]["position"])
+
+    def _go_home(self, pick: PickCommand, step: int, observer: Observer | None) -> int:
+        """The way home of a command that gave up, driven by this program and not by SmolVLA.
+
+        The gripper is opened where the arm stands, so a cube in it falls there; then the
+        joints go in a straight line to the pose the layout started in. The steps it took;
+        ``self.observation`` is the last one's.
+        """
+        start = self.record.start_state
+        stand = self.observation.state
+        opened = stand.copy()
+        opened[5] = max(float(stand[5]), HOME_OPEN_JAW)
+        way = int(np.ceil(np.max(np.abs(start[:5] - stand[:5])) / HOME_DEGREES_PER_STEP))
+        targets = [opened] * HOME_OPEN_STEPS
+        # The arm first, the gripper still open; the gripper closes to its start in the last steps.
+        for share in np.linspace(0.0, 1.0, way + 1)[1:]:
+            target = opened + share * (start - opened)
+            target[5] = opened[5]
+            targets.append(target)
+        targets.extend([start.copy()] * HOME_ARRIVE_STEPS)
+        color = pick.cube
+        for count, target in enumerate(targets):
+            outcome = self.env.step(target)
+            self._keep(target, outcome)
+            self.observation = outcome.observation
+            if observer is not None:
+                cube = outcome.facts["cubes"][color]
+                observer.on_step(
+                    StepView(
+                        step=step + count,
+                        steps_per_pick=self.steps_per_pick,
+                        command=pick.command,
+                        cube=color,
+                        observation=outcome.observation,
+                        in_bin=bool(cube["in_bin"]),
+                        grasped=bool(cube["grasped"]),
+                        contact=bool(outcome.facts["grip"][color]["contact"]),
+                        success=bool(outcome.success),
+                        going_home=True,
+                    )
+                )
+        return len(targets)
+
     def run_command(self, pick: PickCommand, observer: Observer | None = None) -> dict:
         """One command in the scene as it stands: the pick's record (``steps`` 0 when refused)."""
         if self.observation is None:
@@ -361,7 +465,9 @@ class PickPlaceScene:
         held = False
         grip_moment = GripMoment()
         painted_top, painted_wrist, wrist_kept = [], [], []
-        for step in range(self.steps_per_pick):
+        step = 0
+        in_gripper = rule_held = False
+        while self.goes_on(step, in_gripper, rule_held):
             facts = env.facts
             painted = cubes_to_paint(self.pictures, color, facts)
             # SmolVLA plans when its queue of actions is empty: at the first
@@ -446,17 +552,7 @@ class PickPlaceScene:
             outcome = env.step(target)
             observation = outcome.observation
             facts = outcome.facts
-            self.layout_steps += 1
-            if self.recording:
-                record.targets.append(target)
-                record.commanded.append(outcome.commanded)
-                record.achieved.append(outcome.achieved)
-                record.successes.append(outcome.success)
-                record.top_frames.append(observation.top)
-                record.wrist_frames.append(observation.wrist)
-                for other in BIN_CUBE_COLORS:
-                    record.cube_positions[other].append(facts["cubes"][other]["position"])
-                record.bin_positions.append(facts["bin"]["position"])
+            self._keep(target, outcome)
             cube = facts["cubes"][color]
             picked_up |= bool(cube["above_table"])
             held |= bool(cube["grasped"])
@@ -486,7 +582,19 @@ class PickPlaceScene:
                         success=bool(outcome.success),
                     )
                 )
+            in_gripper = bool(cube["grasped"])
+            rule_held = bool(outcome.success)
+            step += 1
         self.observation = observation
+        # Where a command may give up (``give_up_after``), it does when it ends without its cube
+        # placed: the rule never held (a pick that missed for all its steps and ended with the
+        # gripper empty), or it went on to its last allowed step without the rule holding there.
+        # The arm then does not stay where the miss left it (2026-11-23: 144 degrees from its
+        # start pose after a missed green cube, where the next command began).
+        gave_up = self.give_up_after is not None and (
+            first_success is None or (step == self.give_up_after and not rule_held)
+        )
+        home_steps = self._go_home(pick, step, observer) if gave_up else 0
         ended = env.facts["cubes"]
         translation = pick.translation
         result = {
@@ -505,6 +613,11 @@ class PickPlaceScene:
             "success": first_success is not None,
             "first_success_step": first_success,
             "in_bin_at_end": bool(ended[color]["in_bin"]),
+            # SmolVLA's steps: ``steps_per_pick``, or more where the command went on. Where it
+            # gave up, the steps of the program that opened the gripper and drove the arm home.
+            "steps": step,
+            "gave_up": gave_up,
+            "home_steps": home_steps,
             "picked_up": picked_up,
             "held": held,
             **grip_moment.chosen().as_result(),
