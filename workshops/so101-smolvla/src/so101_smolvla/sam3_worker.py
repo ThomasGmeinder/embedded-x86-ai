@@ -6,7 +6,9 @@ Started by so101_smolvla.sam3_outlines.Sam3Outlines through the reference's
 launcher, which puts this process into the reference's Python environment
 (.venv-sam3) and its checkout and names the model folder (SAM3_MODEL_DIR) and
 the compiled model files (SAM3_ONNX_DIR). This file imports nothing of the
-workshop: its package is not installed in that environment. The requests:
+workshop's package, which is not installed in that environment; the one module
+it takes from the workshop is ``loading_messages``, the file beside it, which
+needs the standard library only. The requests:
 
   start    begin a new tracking session for each camera named in ``cameras``,
            for the word ``phrase``
@@ -30,6 +32,7 @@ import os
 import sys
 import time
 import traceback
+import warnings
 from multiprocessing.connection import Connection
 from pathlib import Path
 
@@ -51,9 +54,16 @@ def _versions() -> dict[str, str]:
 
 def serve(requests: Connection, replies: Connection) -> None:
     try:
+        # The reference compiles parts of the model with torch.jit.script, which this torch
+        # announces as deprecated: the reference's to act on, not shown at every start.
+        warnings.filterwarnings("ignore", message=r"`torch\.jit\.script` is deprecated", category=FutureWarning)
         import torch
         from tracker.live_inference import SAM3Live
 
+        # One line per model when its weights are loaded, instead of a progress bar.
+        from loading_messages import loading_weights_as_a_line
+
+        loading_weights_as_a_line()
         model_dir = Path(os.environ["SAM3_MODEL_DIR"])
         onnx_dir = Path(os.environ["SAM3_ONNX_DIR"])
         manifest = onnx_dir / "ARTIFACT_MANIFEST.json"

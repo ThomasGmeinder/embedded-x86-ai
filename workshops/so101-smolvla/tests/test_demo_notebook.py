@@ -100,6 +100,12 @@ def test_run_all_leaves_the_demo_running_with_a_live_microphone_and_the_button_s
     assert os.environ.get("DISPLAY"), "the utilization window needs a display"
     assert not _gemma_answers(), "something already answers on the Gemma port; stop it before this test"
     env = _environment(tmp_path)
+    # The kernel as a person's kernel runs: without pytest's variable. With it in its environment the
+    # kernel does not show what its child processes write (ipykernel/iostream.py: "Pytest set its own
+    # capture. Don't redirect from within pytest"), and the SAM 3 worker, its launcher and the simulator
+    # worker are child processes: their lines, and anything they write to standard error, were missing
+    # from the cell this test reads (2026-11-24).
+    env.pop("PYTEST_CURRENT_TEST", None)
     subprocess.run([str(LAUNCHER), "--kernel-only"], env=env, check=True, timeout=120)
 
     notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
@@ -127,10 +133,21 @@ def test_run_all_leaves_the_demo_running_with_a_live_microphone_and_the_button_s
         if cell["cell_type"] == "code":
             assert not _errors(cell), "".join(cell["source"])
 
-    started = _printed(_code_after(cells, "## 1."))
+    start_cell = _code_after(cells, "## 1.")
+    started = _printed(start_cell)
     for part in ("Gemma 4 server at", "Gemma 4 warmed up", "SAM 3 worker ready", "SmolVLA", "SAPIEN scene, layout seed 0",
                  "SAM 3 warmed up with one outline of both cameras", "SmolVLA with one plan", "utilization and power table"):
         assert part in started, started
+    # The start says nothing on standard error: a notebook shows that as if something had gone wrong.
+    # Until 2026-11-23 it held uv's line about its environment, two deprecation notices of libraries, the
+    # simulator's warning about a CUDA device it was never going to get (twice) and progress bars.
+    on_standard_error = "".join(
+        "".join(output["text"]) for output in start_cell["outputs"]
+        if output["output_type"] == "stream" and output["name"] == "stderr"
+    )
+    assert on_standard_error == "", on_standard_error
+    # The weights' loading is said in plain lines: SmolVLA's language model, and SAM 3 once per camera.
+    assert started.count("Loading weights: ") == 3, started
     live = _printed(_code_after(cells, "## 3."))
     assert "listening to the microphone" in live, live  # this machine has a microphone: it has to open
     # Section 4 run in the row of all cells: its button is shown, nothing is stopped.

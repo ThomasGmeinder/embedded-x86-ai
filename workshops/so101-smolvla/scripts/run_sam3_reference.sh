@@ -56,7 +56,8 @@ export PYTHONPATH="$checkout"
 # The reference records which container image built its model files. There is no
 # image here; the environment's package list stands in for it.
 export SAM3_DOCKER_IMAGE_REF="venv:.venv-sam3 (no Docker; ROCm 10.1.0 from Python packages)"
-packages="$(uv pip freeze --python "$python" | sha256sum)"
+# --quiet: without it uv writes which environment it reads to standard error at every start.
+packages="$(uv pip freeze --quiet --python "$python" | sha256sum)"
 export SAM3_DOCKER_IMAGE_ID="venv-sha256:${packages%% *}"
 
 # The graphics settings of the reference's container (Dockerfile:73-74) are the

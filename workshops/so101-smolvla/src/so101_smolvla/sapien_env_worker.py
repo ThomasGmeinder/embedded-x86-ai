@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
+from so101_smolvla.loading_messages import WithoutNotice
 from so101_smolvla.sapien_config import (
     ACTION_SHAPE,
     HAND_LINKS,
@@ -117,7 +118,15 @@ def serve() -> None:
 
     import so101_smolvla.sapien_bin_env  # noqa: F401
     import so101_smolvla.sapien_stack_env  # noqa: F401
+    from mani_skill.utils.logging_utils import logger as simulator_log
     from so101_sim.envs import ROBOT_COLOR as TRAINING_ROBOT_COLOR
+
+    # ManiSkill asks for a CUDA device to render with, finds none on this machine, says so and
+    # renders on the processor: at every environment it makes, so here at every reset. The
+    # simulator's environment class hands no render device on (so101_sim/lerobot_env.py passes
+    # ``sim_backend`` only and drops what it does not know), so the request cannot be changed
+    # from here. That the twin renders on the processor is in README.md, "Compute placement".
+    simulator_log.addFilter(WithoutNotice('Requested to use render device "sapien_cuda"'))
 
     actual_commit = subprocess.check_output(
         ["git", "-C", str(SAPIEN_SOURCE), "rev-parse", "HEAD"],

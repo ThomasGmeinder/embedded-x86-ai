@@ -56,6 +56,12 @@ def _load_policy():
     from lerobot.configs.policies import PreTrainedConfig
     from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 
+    from so101_smolvla.loading_messages import drop_transformers_notice, loading_weights_as_a_line
+
+    # One line when the weights are loaded instead of a progress bar, and not the notice about
+    # ``torch_dtype``: LeRobot passes it for SmolVLA's language model (smolvlm_with_expert.py).
+    loading_weights_as_a_line()
+    drop_transformers_notice("`torch_dtype` is deprecated")
     checkpoint = Path(snapshot_download(repo_id=CHECKPOINT, local_files_only=True))
     config = PreTrainedConfig.from_pretrained(checkpoint)
     policy_class = get_policy_class(config.type)
