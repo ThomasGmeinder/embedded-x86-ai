@@ -7419,3 +7419,98 @@ Open, each needs the user's word:
   command's first run is then the slow one. Measured in the test: 0.39 s
   against 6.59 s for the outline, 0.18 s against 1.22 s for the plan.
 - Nothing of this is committed. The full suite was not run after it.
+  (Committed since, on the user's word: `75f07d7` and `eb82bc6`.)
+
+<a id="d-2026-11-23-quiet-start"></a>
+### Addition, 23:11: the demo's start writes nothing to standard error
+
+- The user: "Look at the warnings in 1. Start everything cell output. get
+  rid of the warnings and turn this into a normal message: Loading
+  weights: 100%|...| 1797/1797 [...]".
+- Built (`TESTING_LEDGER.md`,
+  [the table of what wrote what](TESTING_LEDGER.md#t-2026-11-23-quiet-start)):
+  - `src/so101_smolvla/loading_messages.py`, standard library only, so
+    that the SAM 3 worker can import it as the file beside it:
+    `plain_progress` and `loading_weights_as_a_line` (transformers' bar
+    over the weights becomes the line "Loading weights: N of N" on
+    standard output), `WithoutNotice` and `drop_transformers_notice` (one
+    named notice kept from being printed).
+  - `sapien_rollout._load_policy`: the line instead of the bar, and not
+    the `torch_dtype` notice (LeRobot's call, not this workshop's).
+  - `sam3_worker.py`: the line instead of the bar, and not the
+    `torch.jit.script` notice (the reference's code).
+  - `sapien_env_worker.py`: ManiSkill's "Requested to use render device
+    sapien_cuda ... Falling back to cpu" is filtered. It came at every
+    reset; the simulator's environment class hands no render device on,
+    so it cannot be asked for the processor outright.
+  - `scripts/run_sam3_reference.sh`: `uv pip freeze --quiet`.
+  - `tests/test_loading_messages.py` (4); `tests/test_demo_notebook.py`
+    requires the start cell to write nothing to standard error and to say
+    "Loading weights: " three times.
+- What it means: what a library announces about its own future, or about
+  a device this machine never had, is no longer shown as if the demo had
+  a fault; every filter names one message, so anything else on standard
+  error still shows, and the notebook test now fails on it.
+- A wrong first step, taken back: I put `render_backend` into the
+  simulator's arguments without reading how the simulator's class passes
+  them; it drops the argument (`AGENT_MISTAKES.md`).
+- Open: the notebook test and the full suite have not run on this (port
+  8082 was the user's demo's). Another session has uncommitted work in
+  `pick_place.py` and the notebook in the same tree. Nothing of this is
+  committed.
+
+### Addition, 2026-11-24 07:25: a demo command that ends with the cube in the gripper goes on; at 1000 steps it gives up and the arm is driven home
+
+- The report: by hand in the demo, blue was picked up after three misses
+  and the demo then "hangs". It did not hang: a command was exactly 400
+  steps (`pick_place.py`, the loop of `run_command`), blue was gripped at
+  step 340 and still in the gripper at step 399; the demo then wrote its
+  result line and went idle with the arm where it stood. Measured in a
+  replay (`TESTING_LEDGER.md`,
+  [the section](TESTING_LEDGER.md#t-2026-11-24-cube-in-the-gripper-when-the-steps-end)).
+- The user's decisions, by question form: (1) "Let SmolVLA finish", not a
+  scripted let-go and not only a message; (2) after the measurement that
+  SmolVLA lets the cube go at step 406 and has pulled it out of the bin
+  again by step 444: the extra steps end when the rule first holds, "but
+  with a ceiling. sometimes it picks up cubes in the bin again multiple
+  times. after 1000 steps the robot should give up and go back to the
+  default/home position".
+- Built: `PickPlaceScene(give_up_after=...)`, off by default, so the batch
+  runner's commands and measurements are as they were. `goes_on` is the
+  one place that says whether a command runs another step: its own steps
+  always; past them only when they ended with the cube in the gripper
+  (the simulator's `grasped`), then until the simulator's rule holds, at
+  the latest to `give_up_after`. There `_go_home`, a program and not
+  SmolVLA, opens the gripper to 50 % over 10 steps where the arm stands,
+  moves the joints in a straight line to the layout's start pose at no
+  more than 2 degrees a step and holds that pose for 10 steps. The demo
+  (`demo.GIVE_UP_AFTER = 1000`) says in the transcript that a command went
+  on, or that it gave up and a program drove the arm home; the status line
+  follows both. A pick's record has `steps`, `gave_up`, `home_steps`.
+- Mine, not the user's words: the trigger stays "the cube is in the gripper
+  when the 400 steps end". A command that ends without the cube in the
+  gripper (green in that session, the arm 144 degrees from its start pose)
+  is still 400 steps and the arm stays where it is. The three numbers of
+  the way home (50 %, 2 degrees, 10 steps) are mine, checked by one
+  measurement each.
+- Open: the notebook's text still says "400 steps per command" (the user
+  had the notebook open in JupyterLab with a live kernel; not edited under
+  it). The notebook test and the full suite have not run. Nothing of this
+  is committed.
+
+### Addition, 2026-11-24 07:55: a missed pick gives up too; the notebook's text
+
+- The user: "address the undone". A command that may give up
+  (`give_up_after`, the demo) now does so whenever it ends without its cube
+  placed: at its last allowed step, as before, and also after its own 400
+  steps when the rule never held and the gripper is empty. The arm is
+  driven home by the same `_go_home`. One line in `run_command` decides it.
+  Measured: after the missed green cube the arm is home and the blue cube
+  is gripped at step 136 instead of 340.
+- The notebook's section 3 now says what a command does past its 400
+  steps; the saved outputs of the user's run are as they were.
+- The full suite: 289 passed, 3 failed. Two are the known spoken ones; the
+  third is the notebook test, at an assertion of the other session's
+  unfinished work on the start cell's messages
+  (`TESTING_LEDGER.md`, the addition of 07:35). Left as it is for the user
+  to decide. Nothing of this is committed.

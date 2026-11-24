@@ -3463,6 +3463,121 @@ of what its warm-up run took.
 | Job | Clock, exit | Command | Result |
 |---|---|---|---|
 | unit tests, foreground | 22:47, 13.40 s | `PYTHONPATH=src MUJOCO_GL=egl .venv/bin/python -m pytest tests/test_pick_place.py tests/test_demo.py tests/test_three_cube_rollout.py -q --tb=short` | **39 passed.** The warm-up test also holds that the seconds of each plan of a command are kept (two for a command of three steps with two actions per plan) and that the warm-up's own plan is not among them. |
-| `demo-nb-warmcheck-224734` | 22:47:34 to 22:48:55, exit 0, 81.02 s | `PYTHONPATH=src .venv/bin/python -m pytest tests/test_demo_notebook.py -v --tb=short -rA -s`, `DISPLAY=:0` (`/tmp/so101-demo-nb-warmcheck.log`) | **1 passed.** Warm-up at the start: SAM 3's outline of both cameras 6.59 s, SmolVLA's plan 1.22 s. The first command: red cube, run to its end (400 steps, 8 plans); its first outline **0.386 s**, its first plan **0.183 s**. The microphone check before it as before (opened, 0 overflows, 10 of 10 draws, "listening"); the stop button after it left nothing on port 8082. The test takes 81 s against 63 s: the one command. |
+| `demo-nb-warmcheck-224734` (committed as `75f07d7`) | 22:47:34 to 22:48:55, exit 0, 81.02 s | `PYTHONPATH=src .venv/bin/python -m pytest tests/test_demo_notebook.py -v --tb=short -rA -s`, `DISPLAY=:0` (`/tmp/so101-demo-nb-warmcheck.log`) | **1 passed.** Warm-up at the start: SAM 3's outline of both cameras 6.59 s, SmolVLA's plan 1.22 s. The first command: red cube, run to its end (400 steps, 8 plans); its first outline **0.386 s**, its first plan **0.183 s**. The microphone check before it as before (opened, 0 overflows, 10 of 10 draws, "listening"); the stop button after it left nothing on port 8082. The test takes 81 s against 63 s: the one command. |
 
 Not run after these changes: the full suite.
+
+<a id="t-2026-11-23-quiet-start"></a>
+### Addition, 22:55 to 23:11: the start cell of the demo notebook says nothing on standard error
+
+The user: get rid of the warnings in the output of "1. Start everything",
+and turn `Loading weights: 100%|██████████| 1797/1797 [00:00<00:00,
+20793.27it/s]` into a normal message. What the cell wrote to standard
+error in the run saved at 22:54, each traced to the line that writes it:
+
+| On standard error | Written by | What was done |
+|---|---|---|
+| `Using Python 3.12.3 environment at: .venv-sam3` | `uv pip freeze` in `scripts/run_sam3_reference.sh:59` | `--quiet`; the list it hashes is the same (`21cce1c8...` with and without) |
+| `torch/jit/_script.py:1491: FutureWarning: torch.jit.script is deprecated` | the SAM 3 reference's code, in the worker's process | filtered in `sam3_worker.py`, that one message |
+| `[transformers] torch_dtype is deprecated! Use dtype instead!` | LeRobot's `smolvlm_with_expert.py:94`, logged by transformers | that one notice kept from transformers' handler (`loading_messages.drop_transformers_notice`) |
+| `Loading weights: 0%\| 0/489` (a progress bar widget) | transformers `core_model_loading`, its `tqdm`, SmolVLA's language model | one line on standard output: `Loading weights: 489 of 489` |
+| `Loading weights: 100%\|...\| 1797/1797 [...]`, twice | the same loop in the SAM 3 worker, once per camera's model | `Loading weights: 1797 of 1797`, twice, on standard output |
+| `mani_skill - WARNING - Requested to use render device "sapien_cuda", but CUDA device was not found. Falling back to "cpu" device`, twice | ManiSkill `envs/utils/system/backend.py:94`, at every environment the simulator worker makes (one per reset) | filtered in `sapien_env_worker.py`, that one message |
+
+The simulator's warning, first tried and taken back: `render_backend:
+"sapien_cpu"` in the simulator's arguments (`sapien_config.py`). The warning
+stayed: the simulator's `So101SimEnv` (`so101_sim/lerobot_env.py:79-81`,
+`:177-190`) takes `sim_backend` only, drops what it does not know and
+prints that it did; ManiSkill never sees the argument. The edit is out
+again (`sapien_config.py` is as committed).
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| the simulator's pictures before and after | 22:59, 23:01, 23:03 | `/tmp/flm-probe/sapien_pictures.py`: a layout's first pictures and five held steps, saved before any change, with the argument that did nothing, and with the filter | **Identical** (top and wrist pictures of 6 steps, the states) all three times. With the filter the script's whole output is its own one line. |
+| the start's loading steps without Gemma | 23:04, exit 0 | `/tmp/flm-probe/quiet_start.py`: the SAM 3 worker and its two models, `_load_policy`, the SAPIEN scene started twice; standard output and standard error into two files | **Standard error: 0 bytes.** Standard output holds `Loading weights: 489 of 489` once and `Loading weights: 1797 of 1797` twice, beside the lines there were before. |
+| `quiet-tests-230601` | 23:06:01 to 23:10:26, exit 0, 265.32 s | `PYTHONPATH=src MUJOCO_GL=egl .venv/bin/python -m pytest tests/test_loading_messages.py tests/test_sam3_reference_env.py tests/test_sam3_outlines.py tests/test_sam3_three_cubes_integration.py tests/test_sapien_protocol.py tests/test_sapien_env_integration.py tests/test_sapien_three_cubes_integration.py tests/test_three_cube_rollout.py tests/test_pick_place.py tests/test_demo.py -v --tb=short -rA` (`/tmp/so101-quiet-tests.log`) | **94 passed, 1 expected failure.** Four of them new (`test_loading_messages.py`). During this run another session changed `pick_place.py` in the same tree (its `extra_steps`); the tests of that file ran on whatever stood there at their moment. |
+
+**Not run: `tests/test_demo_notebook.py`**, which now also requires the
+start cell to write nothing to standard error and to say "Loading weights: "
+three times. It needs port 8082, on which the user's demo was running
+(checked at 23:03 and 23:11). Not run either: the full suite.
+
+<a id="t-2026-11-24-cube-in-the-gripper-when-the-steps-end"></a>
+## 2026-11-24 — The demo "hangs" with the cube in the gripper: a command's 400 steps ended there
+
+The user, by hand in `notebooks/pick_place_demo.ipynb` (layout seed 1; red,
+green, blue): "pick up the blue cube" misses three times, picks the cube up,
+"then it hangs up in this state"; the transcript's last line "blue cube: not
+placed; in the bin at the end: yes", the status "idle", the gripper "grasped".
+Another session (`gemma4-npu-fastflowlm`) had uncommitted work in the same
+tree during all of this. Environment of every job: the workshop directory,
+`PYTHONPATH=src .venv/bin/python`, each in its own tmux session with an exit
+file; the user's demo ran beside them on the same graphics processor.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| the session replayed, then blue commanded again | 2026-11-23, ended 23:06, exit 0 | `/tmp/diag_blue.py`: the demo's parts without Gemma, `start_layout(1, 1)`, red, green, blue, blue, 400 steps each (`/tmp/diag-blue-2311.log`) | **The session, step for step**: red placed at step 181; green not placed, the arm 143.8 degrees from its start pose at the end; blue gripped at step 340, in the bin's footprint at 383, **still gripped at step 399**, the last. Blue again: let go at step 6 (the rule held), gripped again at 12, out of the bin at 44; at the end blue on the table. |
+| the same with "plans of 50 steps while the cube is in the gripper" | ended 23:14, exit 0 | `/tmp/diag_blue_ext.py` (`/tmp/diag-blue-ext-2325.log`; the numbers in the names of these logs are not clock times); a first run, ended 23:11, exit 1, a broken print line of mine in the script | Blue 450 steps: the rule held at step 406, the cube gripped again at 412, out of the bin at 444. This rule was dropped for it. |
+| the rule that was built, and a forced give-up | 2026-11-24, ended 07:17, exit 0 | `/tmp/diag_giveup.py`: the session with `give_up_after=1000`, then again with 403 for blue (`/tmp/diag-giveup-0010.log`) | **Blue ends at step 406, in the bin**, gripper open at 47 %, the arm 117.9 degrees from its start pose. Forced to give up at 403 with the cube gripped: the gripper opened, the cube fell into the bin, 71 steps home; **the arm 3.60 degrees short and the gripper at 36.3 %** (start 1.7 %) with one step at the start pose. |
+| the way home with ten steps at the start pose | ended 07:18, exit 0 | `/tmp/diag_home.py`: no SAM 3, green for 150 steps, then `_go_home` (`/tmp/diag-home-0020.log`) | From 118.96 degrees away: 80 steps, **the arm 0.18 degrees from its start pose**, the gripper at 3.5 % (start 1.7 %). SmolVLA's own return after red left 0.60 degrees. |
+| unit tests | 07:14, exit 0, 7.99 s | `pytest tests/test_pick_place.py tests/test_demo.py -v --tb=short` (`/tmp/so101-giveup-unit2.log`); the run before it, with `test_three_cube_rollout.py`, `test_demo_console.py` and `test_sapien_protocol.py`: 70 passed, 1 failed, the stand-in scene of the new test gripping the cube again when the gripper closed at home | **24 passed**, six of them new: a command goes on until the rule holds; only with the cube in the gripper and only where asked to; `goes_on` step by step; the give-up opens the gripper and drives home at no more than 2 degrees a step; the demo's transcript and status for both. Not run again after the ten steps at the start pose were added to two expectations; the suite below ran them. |
+| `giveup-suite-0030`, everything that starts no Gemma server | ended 07:24, exit 1, 294.73 s | `pytest tests -v --tb=short -rA -s` without `test_gemma_cube_commands_integration.py`, `test_gemma_three_cubes_integration.py`, `test_demo_notebook.py`, `test_voice_notebook.py`, `test_voice_commands.py` (`/tmp/so101-giveup-suite-0030.log`) | **250 passed, 1 expected failure, 4 errors.** The four errors are `tests/test_utilization_meters.py` refusing to start: "a table is running before the test; close it first", the table of the user's running demo. |
+
+**Not run:** the five test files named above (port 8082 was the user's
+demo's) and with them the full suite; `tests/test_demo_notebook.py` builds
+the `DemoStack` this change touches. The give-up at 1000 steps was not
+reached by SmolVLA in any run: it was forced at step 403. The notebook was
+not run by hand with the change.
+
+### Addition, 07:35 to 07:53: a missed pick gives up too; the full suite
+
+The user ("address the undone"): a command that ends its 400 steps without
+its cube placed and with the gripper empty now gives up as well, and the arm
+is driven home. Port 8082 was free; the other session was no longer running.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| unit tests | 07:35, exit 0, 13.95 s | `pytest tests/test_pick_place.py tests/test_demo.py tests/test_three_cube_rollout.py -v --tb=short` (`/tmp/so101-missed-unit.log`) | **45 passed.** New in them: a command that never gripped gives up after its own steps and is driven home; one that placed within its steps does not. |
+| the session with the rule | ended 07:38, exit 0 | `/tmp/diag_missed.py`: `start_layout(1, 1)`, red, green, blue, `give_up_after=1000` (`/tmp/diag-missed-0740.log`) | Red as before (placed at 181, 400 steps). **Green: 400 steps, gave up, 92 steps home, the arm 0.18 degrees from its start pose** (144 degrees before the rule). **Blue from there: gripped at step 136, the rule held at step 202**, the cube taken up once more at 216 and let go in the bin at 276; 400 steps, in the bin at the end, the arm 0.64 degrees from its start pose. Without the rule blue missed three times and was gripped at step 340. |
+| `full-suite-b` | 07:38:36 to 07:53:09, exit 1, 873.18 s | `env DISPLAY=:0 PYTHONPATH=src .venv/bin/python -m pytest tests -v --tb=short -rA -s` (`/tmp/so101-full-suite-b.log`, exit file `/tmp/so101-full-suite-b.exit`) | **289 passed, 3 failed, 1 expected failure.** Two failures are the spoken test on each backend with the question and the negation only, red on the user's word. The third is `tests/test_demo_notebook.py`, below. |
+
+**`tests/test_demo_notebook.py` failed at its line 144**, an assertion the
+session `gemma4-npu-fastflowlm` added and had not yet run: the start cell is
+to say "Loading weights: " three times; it said it once (SmolVLA's language
+model, `Loading weights: 489 of 489`). The two lines of the SAM 3 worker are
+printed (a plain process shows all three: `/tmp/diag-missed-0740.log`, lines
+2, 5 and 40) but are not in the cell's output of the test's run, and neither
+is any other line of that worker (`[SAM3Live] ...`); the worker is a child
+process that writes to the descriptors it inherits
+(`sam3_outlines.py:155-160`). Why the test's run of the notebook does not
+show a child's lines, while the user's run in JupyterLab of 2026-11-23
+22:54 did, is not verified. The test stops there: its later parts, the live
+microphone and the first command, which run through the `DemoStack` this
+change touches, **did not run**. Not changed by me: the assertion is the
+other session's.
+
+**The cause, and the test repaired (the user: "I fix it"), 07:58.** The
+kernel shows what its child processes write only when `PYTEST_CURRENT_TEST`
+is not in its environment (`ipykernel/iostream.py:564`, ipykernel 7.4.0:
+"Pytest set its own capture. Don't redirect from within pytest"); the test
+handed the kernel its own environment with that variable in it. The SAM 3
+worker, its launcher and the simulator worker are child processes, so in
+the test's run none of their lines reached the cell: the two "Loading
+weights" lines were missing, and the check that the start cell writes
+nothing to standard error could not see those processes either. The test
+now starts the kernel without the variable.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `nb-test-c` | ended 07:58, exit 0, 78.03 s | `env DISPLAY=:0 PYTHONPATH=src .venv/bin/python -m pytest tests/test_demo_notebook.py -v --tb=short -rA -s` (`/tmp/so101-nb-test-c.log`) | **1 passed**, with the child processes' output in the cell: "Loading weights: " three times, nothing on standard error. The microphone opened, 0 overflows, 10 of 10 draws, "listening". The first command (red) ran to its end in 8 plans, so 400 steps, through the `DemoStack` with the give-up on; first outline 0.397 s against 6.70 s at the warm-up, first plan 0.169 s against 1.225 s. The stop button left nothing on port 8082. |
+
+Not run again after this repair: the rest of the suite (the repair is in
+that one test file).
+
+**The full suite after the repair** (the user: "did you re-run the full
+suite to validate that the 3 failures are gone ?"; it had not been). The
+user had tried the demo by hand before it: "manual notbook test worked".
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| `full-suite-d` | 08:42:44 to 08:57:23, exit 1, 877.27 s | `env DISPLAY=:0 PYTHONPATH=src .venv/bin/python -m pytest tests -v --tb=short -rA -s` (`/tmp/so101-full-suite-d.log`, exit file `/tmp/so101-full-suite-d.exit`) | **290 passed, 2 failed, 1 expected failure.** The notebook test passes. The two failures are the spoken test on each backend, with the question and the negation only ("is the red cube in the box", "do not pick up the red cube", each heard as a pick of the red cube): the known ones, not touched by this change. |
