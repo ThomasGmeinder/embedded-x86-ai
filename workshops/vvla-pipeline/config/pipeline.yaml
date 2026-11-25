@@ -8,8 +8,12 @@ system:
   cache_dir: cache            # VitisAI NPU compile cache (first compile is slow)
   log_dir: logs
 
-# gemma4-e4b-it: Silero on the CPU, Gemma 4 E4B audio on the iGPU via llama-server.
-# A sentence is sent the moment the speaker has been silent for end_silence_ms.
+# Which model hears the microphone and picks the command. Both run on the iGPU through
+# llama-server; Silero on the CPU cuts the sound into utterances for either (listening: below).
+#   gemma4-e4b-it  Gemma 4 E4B writes the command, the object and the words it heard.
+#   d1-omni-2b     Liquid AI's d1-Omni-2B, a decision model: it picks the command, and the
+#                  object of a pick, from the answers it is offered. It writes no words.
+# After a change, run scripts/ensure_voice.sh once: it fetches the model's files.
 voice_intent: gemma4-e4b-it
 
 gemma4-e4b-it:
@@ -26,6 +30,33 @@ gemma4-e4b-it:
   parallel: 1
   no_warmup: true
   hsa_override_gfx_version: "11.5.0"  # Strix Point; "11.5.1" is Strix Halo
+
+d1-omni-2b:
+  server_bin: third_party/llama.cpp/build/bin/llama-server
+  model_gguf: models/d1-Omni-2B/d1-Omni-2B-Q8_0.gguf
+  mmproj: models/d1-Omni-2B/mmproj-d1-Omni-2B-Q8_0.gguf   # one file: the audio and the picture encoder
+  host: 127.0.0.1
+  port: 8083                  # not Gemma's: a Gemma server left running is never taken for this model
+  n_gpu_layers: 99
+  batch_size: 8192            # a question is read in one batch: it must hold the clip
+  autostart: true
+  hsa_override_gfx_version: "11.5.0"  # as for Gemma
+  # The model gives every command a probability. A pick is taken when its probability
+  # reaches this, and otherwise the most probable of the other commands: a spoken "pick up
+  # the ball" is often its second choice (0.10 to 0.28), and most sentences that are no
+  # pick stay below. Calibrated on typed sentences and clips of a synthetic voice,
+  # 2026-11-24 (vla_pipeline/llm/intents.py, COMMAND_ANSWERS, has the counts); calibrate it
+  # again with the voices of your floor. Lower takes more picks and more talk for a pick;
+  # leave it out to take the most probable command.
+  min_pick_probability: 0.08
+  # The model's confidence in its answer, 0 to 1, below which a command is taken as no
+  # command, and an object as not named. 0 takes every answer. Not calibrated: right and
+  # wrong answers overlap in confidence on the test clips.
+  min_confidence: 0.0
+  min_object_confidence: 0.0
+
+# How the microphone's sound is cut into utterances, for either model.
+listening:
   vad_model: models/silero_vad.onnx
   window_s: 6                 # the longest utterance; one that grows to it is sent as it is
   # An utterance is sent once the speaker has been silent this long. Lower sends sooner and
@@ -40,7 +71,7 @@ gemma4-e4b-it:
   min_voice_ms: 100           # an utterance with less speech than this (a click, a cough) is dropped
   sent_peak: 0.5              # an utterance is sent with its loud samples at this share of full scale,
   most_gain: 20               # raised by this factor at most: Gemma hears quiet sound worse
-  max_age_s: 10               # an utterance that waited longer than this for Gemma is not asked
+  max_age_s: 10               # an utterance that waited longer than this for the model is not asked
 
 audio:
   sample_rate: 16000

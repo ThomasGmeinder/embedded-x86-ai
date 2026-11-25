@@ -268,7 +268,8 @@ def offline_parse_text(text: str) -> dict:
 
 
 class MockLlamaServer:
-    """A llama-server imposter: ``GET /health`` + ``POST /v1/chat/completions``.
+    """A llama-server imposter: ``GET /health``, ``POST /v1/chat/completions``, and the
+    decision model's ``GET /v1/models`` + ``POST /v1/systemone``.
 
     Routes intents with keywords and *records every request payload* so the
     self-test can verify your client sent the GBNF grammar, the system
@@ -287,14 +288,22 @@ class MockLlamaServer:
             def log_message(self, *args):
                 pass
 
+            def _send_json(self, answer: dict) -> None:
+                body = json.dumps(answer).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
             def do_GET(self):
                 if self.path == "/health":
-                    body = json.dumps({"status": "ok"}).encode()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
+                    self._send_json({"status": "ok"})
+                elif self.path == "/v1/models":
+                    # It stands in for either voice model: one that writes text (Gemma) and a
+                    # decision model (d1-Omni-2B), which the pipeline's decision parser asks for.
+                    self._send_json({"data": [{
+                        "id": "mock", "architecture": {"output_modalities": ["text", "decisions"]}}]})
                 else:
                     self.send_response(404)
                     self.end_headers()
@@ -303,6 +312,18 @@ class MockLlamaServer:
                 length = int(self.headers.get("Content-Length", 0))
                 payload = json.loads(self.rfile.read(length) or b"{}")
                 mock.requests.append(payload)
+                if self.path == "/v1/systemone":
+                    # The pipeline's decision parser: named pick-one questions about a sentence.
+                    # The keyword routing picks the command and the object; an object it does
+                    # not find is answered with no choice.
+                    state = payload.get("state")
+                    found = offline_parse_text(state if isinstance(state, str) else "")
+                    picked = {"command": found["command"], "object": found["object"]}
+                    self._send_json({"answers": {
+                        name: {"type": "choice", "choice": picked.get(name, ""),
+                               "confidence": 1.0 if picked.get(name) else 0.0}
+                        for name in payload.get("questions", {})}})
+                    return
                 user = ""
                 for m in payload.get("messages", []):
                     if m.get("role") == "user":

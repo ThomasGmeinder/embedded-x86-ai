@@ -115,9 +115,14 @@ def _assert_held_out(rig, stack: str, body: str, spoken: str, z0: float):
 def test_wave(rig, stack, mock_llm):
     rig.run([(0.0, "wave at me")])
 
-    # the LLM client sent a grammar-constrained, deterministic request
     p = mock_llm.last_payload
-    assert p and p.get("grammar") and p.get("temperature") == 0.0
+    if rig.cfg["voice_intent"] == "d1-omni-2b":
+        # the decision parser asked one pick-one question about the sentence, offering every command
+        assert p and p["state"] == "wave at me" and list(p["questions"]) == ["command"]
+        assert "wave" in p["questions"]["command"]["criteria"]
+    else:
+        # the LLM client sent a grammar-constrained, deterministic request
+        assert p and p.get("grammar") and p.get("temperature") == 0.0
     assert rig.event_times("behavior_start", intent="wave")
     assert rig.event_times("behavior_end", intent="wave", ok=True)
 

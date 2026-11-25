@@ -36,29 +36,22 @@ import argparse
 import base64
 import json
 import logging
-import os
-import subprocess
-import threading
 import time
 from collections.abc import Callable, Iterator
 
-import requests
-
 from vla_pipeline.llm.intents import (
     INTENT_SYSTEM_PROMPT,
+    SELFTEST_CASES,
     Intent,
     ParsedCommand,
     call_from_partial,
     heard_from_partial,
 )
+from vla_pipeline.llm.llama_server import REQUEST_TIMEOUT_S, LlamaServer
 from vla_pipeline.utils.config import load_config, resolve
 
 logger = logging.getLogger(__name__)
 
-# What llama-server logs once its model is loaded and it serves requests.
-READY_LINE = "listening on http://"
-# The longest a request may go without the server sending anything, in seconds.
-REQUEST_TIMEOUT_S = 30
 # The call, and the seconds from the request to it. Returning False says the words are not wanted.
 OnCall = Callable[[ParsedCommand, float], bool | None]
 
@@ -81,159 +74,28 @@ def answer_pieces(lines) -> Iterator[str]:
         yield (choices[0].get("delta") or {}).get("content") or ""
 
 
-class LlamaIntentParser:
-    """Manage a llama.cpp server and turn transcripts into :class:`ParsedCommand`."""
+class LlamaIntentParser(LlamaServer):
+    """Gemma 4 on a llama.cpp server (:class:`LlamaServer`): transcripts and clips into :class:`ParsedCommand`."""
 
     def __init__(self, cfg: dict, *, section: str = "gemma4-e4b-it"):
         l = cfg[section]
         self._audio = bool(l.get("mmproj"))
-        self.host: str = l["host"]
-        self.port: int = int(l["port"])
-        self.base = f"http://{self.host}:{self.port}"
         self.temperature: float = float(l.get("temperature", 0.0))
         self.grammar = resolve(l["grammar_file"]).read_text(encoding="utf-8")
-        self._cfg = l
-        self._log_dir = cfg.get("system", {}).get("log_dir", "logs")
-        self._proc: subprocess.Popen | None = None
-        self._http = requests.Session()  # keep-alive: saves ~5-20 ms per command
         self.last_call_s: float | None = None  # the last request: seconds until its call was complete
         self.last_total_s: float | None = None  # the last request: seconds until reading its answer ended
+        super().__init__(cfg, section=section)  # finds the server running, or starts it
 
-        if not self._server_alive():
-            if l.get("autostart", True):
-                self._spawn_server()
-            else:
-                raise ConnectionError(
-                    f"llama-server not reachable at {self.base} and autostart is disabled."
-                )
-
-    # ------------------------------------------------------------------
-    # Server lifecycle
-    # ------------------------------------------------------------------
-
-    def _server_alive(self, timeout: float = 0.5) -> bool:
-        """Return True if llama-server responds healthy at /health."""
-        try:
-            r = self._http.get(f"{self.base}/health", timeout=timeout)
-            return r.status_code == 200
-        except requests.RequestException:
-            return False
-
-    def _spawn_server(self, ready_timeout_s: float = 120.0) -> None:
-        """Launch llama-server as a subprocess and block until it logs that it
-        is listening (:data:`READY_LINE`), or exits."""
-        server_bin = resolve(self._cfg["server_bin"])
-        model = resolve(self._cfg["model_gguf"])
-        if not server_bin.exists():
-            raise FileNotFoundError(
-                f"{server_bin} not found - run ./bootstrap.sh (llama.cpp build step)."
-            )
-        if not model.exists():
-            raise FileNotFoundError(
-                f"{model} not found - run ./bootstrap.sh (model download step)."
-            )
-        cmd = [
-            str(server_bin),
-            "--model",
-            str(model),
-            "--host",
-            self.host,
-            "--port",
-            str(self.port),
-            "--n-gpu-layers",
-            str(self._cfg["n_gpu_layers"]),
-            "--ctx-size",
-            str(self._cfg["ctx_size"]),
-            "--parallel",
-            str(self._cfg.get("parallel", 1)),
-        ]
-        if self._cfg.get("mmproj"):
-            mmproj = resolve(self._cfg["mmproj"])
-            if not mmproj.exists():
-                raise FileNotFoundError(
-                    f"{mmproj} not found - the Gemma audio projector has not finished downloading."
-                )
-            cmd += ["--mmproj", str(mmproj)]
+    def _server_args(self) -> list[str]:
+        """Gemma's own server arguments: the context, the slots, the warm-up, the batch."""
+        args = ["--ctx-size", str(self._cfg["ctx_size"]), "--parallel", str(self._cfg.get("parallel", 1))]
         if self._cfg.get("no_warmup", False):
-            cmd.append("--no-warmup")
+            args.append("--no-warmup")
         # Smaller compute ubatches keep each GPU submission short, so a 3-D
         # render pass sharing the iGPU waits less behind prompt processing.
         if self._cfg.get("ubatch_size"):
-            cmd += ["--ubatch-size", str(int(self._cfg["ubatch_size"]))]
-        cmd += list(self._cfg.get("extra_args", []) or [])
-
-        # Deterministic GPU init on Strix Halo (gfx1151): the ROCm runtime can
-        # segfault on the first kernel dispatch unless the iGPU is presented as
-        # its nearest supported relative. Allow overriding/clearing via config.
-        env = os.environ.copy()
-        gfx = self._cfg.get("hsa_override_gfx_version", "11.5.1")
-        if gfx:
-            env.setdefault("HSA_OVERRIDE_GFX_VERSION", str(gfx))
-        # Optional compute-unit fence (e.g. "0:0-31" leaves 8 of 40 CUs to the
-        # graphics queue). Off by default: measure with so101_sim.bench first.
-        if self._cfg.get("cu_mask"):
-            env["HSA_CU_MASK"] = str(self._cfg["cu_mask"])
-
-        logger.info("Starting llama-server (ROCm): %s", " ".join(cmd))
-        log_dir = resolve(self._log_dir)
-        log_dir.mkdir(parents=True, exist_ok=True)
-        self._server_log_path = log_dir / "llama-server.log"
-        self._server_log = open(self._server_log_path, "w")
-        self._proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True, errors="replace",
-        )
-        ready = threading.Event()
-
-        def relay() -> None:
-            """The server's output to its log; its readiness line, or its exit, sets ``ready``."""
-            for line in self._proc.stdout:
-                self._server_log.write(line)
-                self._server_log.flush()
-                if READY_LINE in line:
-                    ready.set()
-            ready.set()
-
-        threading.Thread(target=relay, daemon=True, name="llama-server-log").start()
-        try:
-            if not ready.wait(ready_timeout_s):
-                raise TimeoutError(
-                    f"llama-server did not log {READY_LINE!r} within {ready_timeout_s:.0f} s "
-                    f"(log: {self._server_log_path})"
-                )
-            if self._proc.poll() is not None:
-                tail = self._read_server_log_tail()
-                raise RuntimeError(
-                    f"llama-server exited with code {self._proc.wait()} during "
-                    f"startup. Last log lines:\n{tail}\n"
-                    f"(full log: {self._server_log_path})"
-                )
-            if not self._server_alive():
-                raise RuntimeError(f"llama-server logged readiness but {self.base}/health is not ready")
-        except BaseException:
-            self.close()
-            raise
-        logger.info("llama-server ready at %s", self.base)
-
-    def _read_server_log_tail(self, n: int = 20) -> str:
-        """Return the last n lines of the server log, for error messages."""
-        try:
-            with open(self._server_log_path) as f:
-                return "".join(f.readlines()[-n:])
-        except OSError:
-            return "(no server log available)"
-
-    def close(self) -> None:
-        """Terminate the server if this object spawned it."""
-        if self._proc is not None and self._proc.poll() is None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-            self._proc = None
-        server_log = getattr(self, "_server_log", None)
-        if server_log is not None and not server_log.closed:
-            server_log.close()
+            args += ["--ubatch-size", str(int(self._cfg["ubatch_size"]))]
+        return args + list(self._cfg.get("extra_args", []) or [])
 
     # ------------------------------------------------------------------
     # Intent parsing
@@ -335,25 +197,6 @@ class LlamaIntentParser:
 # Standalone component test
 # =============================================================================
 
-_SELFTEST_CASES = [
-    ("can you copy my arm movements", Intent.GESTURE_MIMIC, None),
-    ("mirror my hand please", Intent.GESTURE_MIMIC, None),
-    ("go grab the block and bring it to me", Intent.FETCH_BLOCK, None),
-    ("fetch the cube", Intent.FETCH_BLOCK, None),
-    ("pick up the ball", Intent.PICK_PLACE, "ball"),
-    ("grab the bottle and hand it to me", Intent.PICK_PLACE, "bottle"),
-    ("show me your best dance moves", Intent.DANCE, None),
-    ("hold this pencil for me", Intent.GRIP, None),
-    ("release", Intent.RELEASE, None),
-    ("open your hand", Intent.RELEASE, None),
-    ("drop it", Intent.RELEASE, None),
-    ("wave hello", Intent.WAVE, None),
-    ("go home", Intent.HOME, None),
-    ("stop robot", Intent.STOP, None),
-    ("what's the weather like today", Intent.UNKNOWN, None),
-]
-
-
 def main() -> None:
     """CLI entry point: parse one utterance, run the selftest suite, or start an interactive REPL."""
     logging.basicConfig(
@@ -373,7 +216,7 @@ def main() -> None:
     try:
         if args.selftest:
             passed = 0
-            for text, expected, obj in _SELFTEST_CASES:
+            for text, expected, obj in SELFTEST_CASES:
                 got = llm.parse(text)
                 ok = got.intent == expected and (obj is None or got.object_name == obj)
                 passed += ok
@@ -381,8 +224,8 @@ def main() -> None:
                     f"  [{'PASS' if ok else 'FAIL'}] {text!r} -> {got.intent.value} "
                     f"{got.params} (expected {expected.value} {obj or ''})"
                 )
-            print(f"\n{passed}/{len(_SELFTEST_CASES)} cases passed")
-            raise SystemExit(0 if passed == len(_SELFTEST_CASES) else 1)
+            print(f"\n{passed}/{len(SELFTEST_CASES)} cases passed")
+            raise SystemExit(0 if passed == len(SELFTEST_CASES) else 1)
         if args.text:
             cmd = llm.parse(args.text)
             print(cmd.intent.value, cmd.params)

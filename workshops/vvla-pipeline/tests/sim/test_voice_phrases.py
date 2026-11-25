@@ -15,6 +15,7 @@ of a stream only.
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -179,12 +180,24 @@ def test_an_utterance_is_sent_at_a_fixed_level_and_silence_is_not_blown_up():
     assert at_level(bytes(640), 0.5, 20) == bytes(640) and at_level(b"", 0.5, 20) == b""
 
 
-def test_the_listening_settings_are_the_utterance_cuts():
-    g = load_config()["gemma4-e4b-it"]
-    for key in ("window_s", "end_silence_ms", "pre_roll_ms", "min_dbfs", "vad_threshold", "min_voice_ms",
-                "sent_peak", "most_gain", "max_age_s"):
-        assert key in g, key
+LISTENING_KEYS = ("vad_model", "window_s", "end_silence_ms", "pre_roll_ms", "min_dbfs", "vad_threshold",
+                  "min_voice_ms", "sent_peak", "most_gain", "max_age_s")
+
+
+def test_the_listening_settings_are_one_section_for_both_voice_models():
+    cfg = load_config()
+    g = cfg["listening"]
+    assert sorted(g) == sorted(LISTENING_KEYS)
     assert 0 < g["end_silence_ms"] < g["window_s"] * 1000 and 0 < g["sent_peak"] <= 1 and g["most_gain"] >= 1
+    # Each model's own section holds its server and model, and none of the listening settings.
+    from vla_pipeline.llm.voice import VOICE_INTENTS
+
+    assert cfg["voice_intent"] in VOICE_INTENTS
+    for intent in VOICE_INTENTS:
+        assert not set(cfg[intent]) & set(LISTENING_KEYS), intent
+        assert {"server_bin", "model_gguf", "mmproj", "host", "port"} <= set(cfg[intent]), intent
+    # A server of one model left running is never taken for the other's.
+    assert len({cfg[intent]["port"] for intent in VOICE_INTENTS}) == len(VOICE_INTENTS)
 
 
 def test_reset_button_is_the_orange_control_at_the_bottom():
@@ -262,6 +275,265 @@ def test_intent_grammar_is_one_llama_cpp_accepts():
     # The two forms that made llama-server answer 400 for every spoken command.
     assert _llama_grammar_fault("heard_char ::= [a-z]\n") == "name stops before '_'"
     assert _llama_grammar_fault('hchar ::= [^"a]\n') == "quote inside a character class"
+
+
+# ---- the questions for the decision model ---------------------------------------------------------
+
+
+def test_the_decision_models_questions_offer_every_command_and_every_name_the_detector_knows():
+    from vla_pipeline.llm.d1_intent import known_object_names, object_as_the_detector_names_it
+    from vla_pipeline.llm.intents import COMMAND_ANSWERS, command_question, object_question
+    from vla_pipeline.vision.yolo_detect_npu import COCO_NAMES, SYNONYMS
+
+    command = command_question()
+    assert command["type"] == "choice" and command["instructions"]
+    labels = [label for label, _, _ in COMMAND_ANSWERS]
+    assert list(command["criteria"]) == labels and len(set(labels)) == len(labels)
+    assert all(command["criteria"].values()) and len(set(command["criteria"].values())) == len(labels)
+    # Every command has an answer, under its own name; the pick is offered first.
+    assert {intent for _, intent, _ in COMMAND_ANSWERS} == set(Intent)
+    for label, intent, _ in COMMAND_ANSWERS:
+        assert (label == intent.value) or intent is Intent.UNKNOWN, label
+    assert labels[0] == "pick_place"
+    assert [label for label, intent, _ in COMMAND_ANSWERS if intent is not Intent.UNKNOWN] == [
+        intent.value for intent in (Intent.PICK_PLACE, Intent.GESTURE_MIMIC, Intent.FETCH_BLOCK, Intent.DANCE,
+                                    Intent.GRIP, Intent.RELEASE, Intent.WAVE, Intent.HOME, Intent.STOP)]
+    # "No command" has several answers, one for each kind of sentence that must do nothing.
+    nothing = [label for label, intent, _ in COMMAND_ANSWERS if intent is Intent.UNKNOWN]
+    assert nothing == ["one_word", "about_stopping", "negation", "unknown"]
+    # A spoken "pick up" is heard close to "copy": that word does not lead the mimic answer.
+    assert not command["criteria"]["gesture_mimic"].startswith("copy")
+    assert command["criteria"]["pick_place"].count("pick up") >= 3
+    # The grip answer names no object: "take this pencil" there made "pick up the pen" a grip.
+    assert "pen" not in command["criteria"]["grip"]
+
+    names = known_object_names()
+    question = object_question(names)
+    # Exactly the names the detector knows, each once: its classes and the words said for
+    # them, also the words it has no class for ("pencil"). No "none" and no "other".
+    assert sorted(question["criteria"]) == sorted(set(COCO_NAMES) | set(SYNONYMS))
+    assert len(names) == len(set(names))
+    assert "none" not in question["criteria"] and "other" not in question["criteria"]
+    assert {"pencil", "cube", "ball", "sports ball"} <= set(question["criteria"])
+    # A chosen name is handed on as the detector's class; a name without a class as itself.
+    assert object_as_the_detector_names_it("foot ball") == "sports ball"
+    assert object_as_the_detector_names_it("bottle") == "bottle"
+    assert object_as_the_detector_names_it("pencil") == "pencil"
+
+
+def test_a_decision_models_answers_become_a_command():
+    from vla_pipeline.llm.intents import command_from_answers
+
+    def answer(choice, confidence=0.9):
+        return {"type": "choice", "choice": choice, "confidence": confidence}
+
+    wave = command_from_answers(answer("wave"))
+    assert wave.intent is Intent.WAVE and wave.params == {} and wave.transcript == ""
+    # The object belongs to a pick command only.
+    pick = command_from_answers(answer("pick_place"), answer("ball"))
+    assert pick.intent is Intent.PICK_PLACE and pick.params == {"object": "ball"}
+    assert command_from_answers(answer("wave"), answer("ball")).params == {}
+    assert command_from_answers(answer("pick_place")).params == {}
+    # A command the model is not confident of is no command; an object it is not confident of
+    # is left out, as when the speaker named none. Zero takes every answer.
+    assert command_from_answers(answer("wave", 0.3), min_confidence=0.5).intent is Intent.UNKNOWN
+    assert command_from_answers(answer("wave", 0.5), min_confidence=0.5).intent is Intent.WAVE
+    unsure = command_from_answers(answer("pick_place"), answer("ball", 0.2), min_object_confidence=0.4)
+    assert unsure.intent is Intent.PICK_PLACE and unsure.params == {}
+    assert command_from_answers(answer("pick_place", 0.0), answer("ball", 0.0)).params == {"object": "ball"}
+    # An answer that names no command the robot has is unknown.
+    assert command_from_answers(answer("fly")).intent is Intent.UNKNOWN
+    assert command_from_answers({}).intent is Intent.UNKNOWN
+
+
+def test_the_names_of_one_object_are_added_up_before_the_object_is_chosen():
+    from vla_pipeline.llm.d1_intent import object_as_the_detector_names_it
+    from vla_pipeline.llm.intents import most_probable_thing
+
+    # As measured for a spoken "pick up the ball": the model spreads the ball over its names,
+    # and one unrelated name is its first choice.
+    answer = {"choice": "handbag", "confidence": 0.04, "probabilities": {
+        "handbag": 0.12, "ball": 0.10, "football": 0.08, "soccer ball": 0.07, "sports ball": 0.06, "cup": 0.05}}
+    thing = most_probable_thing(answer, object_as_the_detector_names_it)
+    assert thing["choice"] == "sports ball" and thing["confidence"] == pytest.approx(0.31)
+    # A word the detector has no class for stands for itself.
+    pencil = most_probable_thing({"choice": "pencil", "probabilities": {"pencil": 0.6, "pen": 0.2, "book": 0.2}},
+                                 object_as_the_detector_names_it)
+    assert pencil == {"choice": "pencil", "confidence": 0.6}
+    # An answer without probabilities is taken by its choice, as the detector names it.
+    assert most_probable_thing({"choice": "foot ball", "confidence": 0.5}, object_as_the_detector_names_it) == {
+        "choice": "sports ball", "confidence": 0.5}
+    assert most_probable_thing({"choice": "", "confidence": 0.0}, object_as_the_detector_names_it)["choice"] == ""
+
+
+def test_a_pick_is_taken_when_its_probability_reaches_the_bar_else_the_best_of_the_others():
+    from vla_pipeline.llm.intents import chosen_command, command_from_answers
+
+    def answer(**probabilities):
+        choice = max(probabilities, key=probabilities.get)
+        return {"type": "choice", "choice": choice, "probabilities": probabilities, "confidence": 0.5}
+
+    # As measured for a spoken "pick up the ball": the model's first choice is another command,
+    # the pick its second. Without the bar the first choice stands; with it the pick is taken.
+    heard = answer(home=0.40, pick_place=0.15, gesture_mimic=0.30, unknown=0.15)
+    assert chosen_command(heard) is Intent.HOME
+    assert chosen_command(heard, min_pick_probability=0.08) is Intent.PICK_PLACE
+    assert chosen_command(heard, min_pick_probability=0.15) is Intent.PICK_PLACE  # reaching it is enough
+    assert chosen_command(heard, min_pick_probability=0.16) is Intent.HOME
+    # A sentence that is no pick stays below the bar: its own command stands.
+    wave = answer(wave=0.90, pick_place=0.02, unknown=0.08)
+    assert chosen_command(wave, min_pick_probability=0.08) is Intent.WAVE
+    # Below the bar the pick is not taken even as the model's first choice: the best other is.
+    weak = answer(pick_place=0.35, grip=0.33, unknown=0.32)
+    assert chosen_command(weak, min_pick_probability=0.50) is Intent.GRIP
+    assert chosen_command(weak) is Intent.PICK_PLACE
+    # The pick's own probability decides it, not the confidence in the first choice; for any
+    # other command the confidence limit still holds.
+    assert chosen_command(heard, min_pick_probability=0.08, min_confidence=0.9) is Intent.PICK_PLACE
+    assert chosen_command(wave, min_pick_probability=0.08, min_confidence=0.9) is Intent.UNKNOWN
+    # An answer without probabilities (an older server) is taken by its choice.
+    assert chosen_command({"choice": "wave", "confidence": 0.5}, min_pick_probability=0.08) is Intent.WAVE
+    # The four "no command" answers are one: together they outweigh a command that leads each of them.
+    talk = answer(stop=0.30, one_word=0.25, about_stopping=0.25, negation=0.10, unknown=0.08, pick_place=0.02)
+    assert talk["choice"] == "stop"
+    assert chosen_command(talk) is Intent.UNKNOWN and chosen_command(talk, min_pick_probability=0.08) is Intent.UNKNOWN
+    assert chosen_command({"choice": "about_stopping", "confidence": 0.5}) is Intent.UNKNOWN
+    # The object follows the command the rule gives.
+    command = command_from_answers(heard, {"choice": "ball", "confidence": 0.1}, min_pick_probability=0.08)
+    assert command.intent is Intent.PICK_PLACE and command.params == {"object": "ball"}
+    # The setting is the decision model's own, and it is set.
+    assert 0 < load_config()["d1-omni-2b"]["min_pick_probability"] < 1
+
+
+class DecisionStandIn:
+    """A stand-in for llama-server with a decision model: ``/v1/models`` says what it serves and
+    ``/v1/systemone`` answers from a table. Plumbing only; the real model is asked in
+    ``test_voice_live.py``."""
+
+    def __init__(self, modalities=("decisions",), answers=None) -> None:
+        self.requests: list[dict] = []
+        self.answers = answers or {}
+        stand_in = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def _json(self, body: dict) -> None:
+                data = json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                if self.path == "/health":
+                    self._json({"status": "ok"})
+                elif self.path == "/v1/models":
+                    self._json({"data": [{"id": "stand-in", "architecture": {"output_modalities": list(modalities)}}]})
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def do_POST(self):
+                payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                stand_in.requests.append(payload)
+                self._json({"answers": {
+                    name: {"type": "choice", "choice": stand_in.answers[name], "confidence": 0.8}
+                    for name in payload["questions"]}})
+
+            def log_message(self, *_):
+                pass
+
+        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.port = self.server.server_address[1]
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.thread.join()
+
+
+def _decision_parser(port: int, **settings):
+    from vla_pipeline.llm.d1_intent import D1IntentParser
+
+    cfg = load_config()
+    cfg["d1-omni-2b"].update(host="127.0.0.1", port=port, autostart=False, **settings)
+    return D1IntentParser(cfg)
+
+
+def test_the_decision_parser_asks_the_command_then_the_object_only_for_a_pick():
+    stand_in = DecisionStandIn(answers={"command": "pick_place", "object": "foot ball"})
+    parser = _decision_parser(stand_in.port)
+    try:
+        calls = []
+        command = parser.parse_audio(b"RIFF-clip", on_call=lambda call, seconds: calls.append((call, seconds)))
+        # Two requests: the command, then the object. Both carry the clip and no sentence.
+        assert [list(request["questions"]) for request in stand_in.requests] == [["command"], ["object"]]
+        clip = "data:audio/wav;base64," + base64.b64encode(b"RIFF-clip").decode("ascii")
+        assert all(request["state"] is None and request["files"] == [clip] for request in stand_in.requests)
+        # The object is handed on as the detector names it; there are no words heard.
+        assert command.intent is Intent.PICK_PLACE and command.params == {"object": "sports ball"}
+        assert command.transcript == ""
+        # on_call gets the command once, when it is decided, with the seconds it took.
+        assert len(calls) == 1 and calls[0][0] is command
+        assert calls[0][1] == parser.last_call_s == parser.last_total_s > 0
+
+        # Another command is one request: the object is not asked.
+        stand_in.requests.clear()
+        stand_in.answers = {"command": "wave"}
+        typed = parser.parse("wave at me")
+        assert [list(request["questions"]) for request in stand_in.requests] == [["command"]]
+        assert stand_in.requests[0]["state"] == "wave at me" and "files" not in stand_in.requests[0]
+        assert typed.intent is Intent.WAVE and typed.params == {} and typed.transcript == "wave at me"
+        # Nothing typed is no request.
+        stand_in.requests.clear()
+        assert parser.parse("  ").intent is Intent.UNKNOWN and not stand_in.requests
+    finally:
+        parser.close()
+        stand_in.close()
+
+
+def test_the_decision_parser_takes_its_confidence_limits_from_its_section():
+    stand_in = DecisionStandIn(answers={"command": "pick_place", "object": "ball"})  # confidence 0.8 each
+    try:
+        sure = _decision_parser(stand_in.port, min_confidence=0.9)
+        assert sure.parse("pick up the ball").intent is Intent.UNKNOWN
+        sure.close()
+        picky = _decision_parser(stand_in.port, min_object_confidence=0.9)
+        command = picky.parse("pick up the ball")
+        assert command.intent is Intent.PICK_PLACE and command.params == {}
+        picky.close()
+    finally:
+        stand_in.close()
+
+
+def test_the_decision_parser_refuses_a_server_that_serves_another_kind_of_model():
+    stand_in = DecisionStandIn(modalities=("text",))  # as a Gemma server left running would answer
+    try:
+        with pytest.raises(RuntimeError, match="not a decision model"):
+            _decision_parser(stand_in.port)
+    finally:
+        stand_in.close()
+
+
+def test_open_voice_takes_the_parser_voice_intent_names(monkeypatch):
+    from vla_pipeline.llm import voice
+    from vla_pipeline.llm.d1_intent import D1IntentParser
+
+    stand_in = DecisionStandIn(answers={"command": "unknown"})
+    try:
+        cfg = load_config()
+        cfg["voice_intent"] = "d1-omni-2b"
+        cfg["d1-omni-2b"].update(host="127.0.0.1", port=stand_in.port, autostart=False)
+        session = voice.open_voice(cfg)
+        assert isinstance(session.llm, D1IntentParser) and session.kind == "d1-omni-2b" and not session.error
+        assert [list(request["questions"]) for request in stand_in.requests] == [["command"]]  # the warm-up
+        session.close()
+        cfg["voice_intent"] = "whisper"
+        with pytest.raises(ValueError, match="gemma4-e4b-it, d1-omni-2b"):
+            voice.open_voice(cfg)
+    finally:
+        stand_in.close()
 
 
 # ---- the answer read as it is written: the call before the words heard ---------------------------
@@ -457,9 +729,9 @@ def test_the_session_delivers_the_command_at_the_call_then_its_words_and_nothing
     monkeypatch.setattr(sounddevice, "RawInputStream", Microphone)
     monkeypatch.setattr(voice, "_Silero", Detector)
     cfg = load_config()
-    cfg["gemma4-e4b-it"]["min_dbfs"] = -200  # the stand-in frames are digital silence; the detector decides
+    cfg["listening"]["min_dbfs"] = -200  # the stand-in frames are digital silence; the detector decides
     session = VoiceSession("gemma4-e4b-it", None, Parser())
-    session._cfg, session._gemma_cfg = cfg, cfg["gemma4-e4b-it"]
+    session._cfg = cfg
     done = threading.Event()
 
     def on_heard(words):

@@ -7,12 +7,16 @@
 
 """The one speech front end for the pipeline and the digital-twin notebook.
 
-``voice_intent`` in ``config/pipeline.yaml`` is ``gemma4-e4b-it``. The
-microphone's sound is cut into utterances; each is sent to Gemma 4 on
-llama-server the moment the speaker has been silent for ``end_silence_ms``,
-one request per sentence. A command Gemma finds is reported twice: the call
-(command and object) the moment Gemma has written it, to ``on_text``; the
-words Gemma heard when the answer is complete, to ``on_heard``.
+``voice_intent`` in ``config/pipeline.yaml`` names the model that hears:
+``gemma4-e4b-it`` (Gemma 4, :mod:`vla_pipeline.llm.llama_intent`) or
+``d1-omni-2b`` (the decision model, :mod:`vla_pipeline.llm.d1_intent`), both
+on llama-server. The microphone's sound is cut into utterances, the same way
+for either (the ``listening`` section); each is sent to the model the moment
+the speaker has been silent for ``end_silence_ms``, one request per sentence.
+A command the model finds is reported twice: the call (command and object) the
+moment it is decided, to ``on_text``; the words the model heard when the
+answer is complete, to ``on_heard`` (empty for the decision model, which
+writes none).
 """
 
 from __future__ import annotations
@@ -32,8 +36,8 @@ from vla_pipeline.utils.config import resolve
 
 logger = logging.getLogger(__name__)
 
-VOICE_INTENTS = ("gemma4-e4b-it",)
-WAITING_UTTERANCES = 4  # utterances that may wait for Gemma; the oldest goes when one more arrives
+VOICE_INTENTS = ("gemma4-e4b-it", "d1-omni-2b")  # the config section of each is its name
+WAITING_UTTERANCES = 4  # utterances that may wait for the model; the oldest goes when one more arrives
 _STOP = None  # the sentinel that ends the request thread
 
 
@@ -74,7 +78,7 @@ class VoiceSession:
         if self.error:
             self.opened.set()
             return self
-        target = self._gemma
+        target = self._listen
         self._thread = threading.Thread(
             target=target, args=(on_text, on_level, on_busy, on_drop, stop_check, on_heard),
             daemon=True, name="voice",
@@ -94,10 +98,10 @@ class VoiceSession:
         if self.llm is not None:
             self.llm.close()
 
-    def _gemma(self, on_text, on_level, on_busy, on_drop, stop_check, on_heard) -> None:
+    def _listen(self, on_text, on_level, on_busy, on_drop, stop_check, on_heard) -> None:
         import sounddevice as sd
 
-        g = self._gemma_cfg
+        g = self._cfg["listening"]  # the same cut of the microphone's sound for either model
         rate = int((self._cfg.get("audio") or {}).get("sample_rate", 16000))
         samples = rate * FRAME_MS // 1000
         utterances = Utterances(
@@ -159,7 +163,7 @@ class VoiceSession:
                 try:
                     words = self.llm.parse_audio(_wav(utterance.pcm, rate), on_call=call_written).transcript
                 except Exception:
-                    logger.exception("Gemma audio request failed")
+                    logger.exception("The voice model's audio request failed")
                 finally:
                     self.transcribing = False
                     if on_busy is not None:
@@ -261,19 +265,33 @@ def open_voice(cfg: dict, *, device=None) -> VoiceSession:
     """Build the speech front end selected by ``cfg['voice_intent']``."""
     kind = cfg.get("voice_intent")
     if kind not in VOICE_INTENTS:
-        raise ValueError(f"voice_intent must be gemma4-e4b-it, not {kind!r}")
+        raise ValueError(f"voice_intent must be one of {', '.join(VOICE_INTENTS)}, not {kind!r}")
     try:
-        from vla_pipeline.llm.llama_intent import LlamaIntentParser
-
-        llm = LlamaIntentParser(cfg, section="gemma4-e4b-it")
+        llm = make_parser(cfg)
     except FileNotFoundError as exc:
-        logger.warning("Gemma is not ready (%s). Typed commands use the keyword match.", exc)
+        logger.warning("%s is not ready (%s). Typed commands use the keyword match.", kind, exc)
         session = VoiceSession(kind, keyword_parse, error=str(exc))
         return session
     # The first request pays for the instructions being read into the model: here, not at
     # the user's first command.
-    logger.info("Gemma warmed up with one request, %.1f s", llm.warm_up())
+    logger.info("%s warmed up with one request, %.1f s", kind, llm.warm_up())
     session = VoiceSession(kind, llm.parse, llm)
     session._cfg = cfg
-    session._gemma_cfg = cfg["gemma4-e4b-it"]
     return session
+
+
+def make_parser(cfg: dict):
+    """The parser of the model ``cfg['voice_intent']`` names, on its llama-server (started if needed).
+
+    Either has ``parse(text)``, ``parse_audio(wav, on_call)``, ``warm_up()`` and ``close()``.
+    """
+    kind = cfg.get("voice_intent")
+    if kind == "d1-omni-2b":
+        from vla_pipeline.llm.d1_intent import D1IntentParser
+
+        return D1IntentParser(cfg, section=kind)
+    if kind == "gemma4-e4b-it":
+        from vla_pipeline.llm.llama_intent import LlamaIntentParser
+
+        return LlamaIntentParser(cfg, section=kind)
+    raise ValueError(f"voice_intent must be one of {', '.join(VOICE_INTENTS)}, not {kind!r}")

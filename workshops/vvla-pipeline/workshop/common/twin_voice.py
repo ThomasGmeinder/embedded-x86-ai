@@ -170,7 +170,7 @@ class VoiceCommands:
             print(f'Without a microphone, here is a typed sentence: "{example}"')
             self._explain(example)
             return
-        from vla_pipeline.llm.llama_intent import REQUEST_TIMEOUT_S
+        from vla_pipeline.llm.llama_server import REQUEST_TIMEOUT_S
 
         print(f'Say a command, for example "pick up the ball". Listening for {seconds:.0f} s...')
         heard: queue.Queue[str] = queue.Queue()

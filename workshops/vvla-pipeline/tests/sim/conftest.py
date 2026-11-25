@@ -58,6 +58,9 @@ def pytest_addoption(parser):
     g.addoption("--sim-yolo-device", choices=("cpu", "npu"), default="npu",
                 help="where the YOLO eyes run (default npu, as in the notebooks; "
                      "./run_sim_tests.sh sources scripts/ryzen_ai_env.sh)")
+    g.addoption("--sim-voice-intent", choices=("gemma4-e4b-it", "d1-omni-2b"), default=None,
+                help="the voice model the pipeline's scenarios parse commands with "
+                     "(default: voice_intent of config/pipeline.yaml)")
     g.addoption("--sim-repeat", type=int, default=1,
                 help="run every selected test this many times, to catch a flaky one")
 
@@ -161,10 +164,13 @@ def pytest_sessionfinish(session, exitstatus):
 # configs / services
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="session")
-def pipeline_cfg():
+def pipeline_cfg(request):
     from vla_pipeline.utils.config import load_config
 
     cfg = load_config()
+    chosen = request.config.getoption("--sim-voice-intent")
+    if chosen:
+        cfg["voice_intent"] = chosen
     cfg["behaviors"]["dance"]["duration_s"] = 5.0  # keep the dance scenario short
     cfg.setdefault("sim", {})["require_hw_gl"] = False
     return cfg

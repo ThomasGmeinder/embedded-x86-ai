@@ -5,11 +5,13 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""scripts/ensure_voice.sh on a machine set up before Gemma 4.
+"""scripts/ensure_voice.sh on a machine set up before its voice model.
 
 Each test runs the real script in a scratch repository root: a copy of
 ``vla_pipeline`` and the script, its own ``config/pipeline.yaml``, this clone's
 llama.cpp checkout and llama-server, and this clone's Gemma files linked in.
+The script serves whichever model ``voice_intent`` names: Gemma 4 or the
+decision model d1-Omni-2B.
 """
 
 from __future__ import annotations
@@ -94,7 +96,7 @@ def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def _place_silero(root: Path) -> Path:
-    target = root / _config(root)["gemma4-e4b-it"]["vad_model"]
+    target = root / _config(root)["listening"]["vad_model"]
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(PIPE_ROOT / "models" / "silero_vad.onnx", target)
     return target
@@ -110,7 +112,7 @@ def test_a_machine_with_every_voice_file_downloads_nothing(root):
 def test_a_missing_silero_model_is_downloaded_and_checked(root):
     result = _run(root)
     assert result.returncode == 0, result.stderr
-    target = root / _config(root)["gemma4-e4b-it"]["vad_model"]
+    target = root / _config(root)["listening"]["vad_model"]
     assert _sha256(target) == SILERO_SHA256
     assert not target.with_name(target.name + ".part").exists()
 
@@ -176,3 +178,85 @@ def test_models_only_skips_the_llama_server_check(root):
     assert _run(root).returncode == 1
     result = _run(root, "--models-only")
     assert result.returncode == 0, result.stderr
+
+
+# ---- the decision model, d1-Omni-2B ---------------------------------------------------------------
+
+D1_FILES = ("d1-Omni-2B-Q8_0.gguf", "mmproj-d1-Omni-2B-Q8_0.gguf")
+
+
+def _choose_d1(root: Path, with_files: bool = True) -> dict:
+    """Switch the scratch root to the decision model; its two files stand in as empty ones."""
+    cfg = _config(root)
+    cfg["voice_intent"] = "d1-omni-2b"
+    _write_config(root, cfg)
+    folder = (root / cfg["d1-omni-2b"]["model_gguf"]).parent
+    folder.mkdir(parents=True, exist_ok=True)
+    if with_files:
+        for name in D1_FILES:
+            (folder / name).touch()
+    return cfg
+
+
+def test_the_decision_models_paths_are_its_own_section_and_the_shared_silero(root):
+    cfg = _choose_d1(root)
+    assert [Path(cfg["d1-omni-2b"][key]).name for key in ("model_gguf", "mmproj")] == list(D1_FILES)
+    result = _run(root, "--models-only")  # the Silero model is missing: it is fetched for this model too
+    assert result.returncode == 0, result.stderr
+    assert _sha256(root / cfg["listening"]["vad_model"]) == SILERO_SHA256
+    assert "downloading d1" not in result.stdout and "gemma" not in result.stdout.lower()
+
+
+def test_a_missing_decision_model_file_is_fetched_from_the_liquid_repo(root):
+    _place_silero(root)
+    cfg = _choose_d1(root)
+    folder = (root / cfg["d1-omni-2b"]["model_gguf"]).parent
+    (folder / D1_FILES[0]).unlink()
+    record = root / "hf-args"
+    hf = root / "venv" / "bin" / "hf"
+    hf.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$@" > "{record}"\n'
+        'while [ $# -gt 0 ]; do [ "$1" = --local-dir ] && dir="$2"; shift; done\n'
+        f'touch "$dir/{D1_FILES[0]}"\n'
+    )
+    hf.chmod(0o755)
+    result = _run(root, "--models-only")
+    assert result.returncode == 0, result.stderr
+    assert record.read_text().split() == [
+        "download", "LiquidAI/d1-Omni-2B-GGUF", D1_FILES[0], "--local-dir", str(folder),
+    ]
+
+
+def test_a_llama_server_older_than_the_decision_model_fails_and_one_that_knows_it_passes(root):
+    _place_silero(root)
+    cfg = _choose_d1(root)
+    old = root / "old-llama-server"
+    # 781dbc5ac (2026-10-10) has Gemma 4 audio and is 17 days before d1-Omni-2B (d05706b4f).
+    old.write_text("#!/bin/sh\necho 'version: 0.6.0-dev (build 11548, commit 781dbc5ac)'\n")
+    old.chmod(0o755)
+    cfg["d1-omni-2b"]["server_bin"] = str(old)
+    _write_config(root, cfg)
+    result = _run(root)
+    assert result.returncode == 1
+    assert "predates d1-Omni-2B" in result.stderr
+    # The same server is new enough for Gemma: the check is the chosen model's.
+    cfg["voice_intent"] = "gemma4-e4b-it"
+    cfg["gemma4-e4b-it"]["server_bin"] = str(old)
+    _write_config(root, cfg)
+    assert _run(root).returncode == 0
+    # This clone's own llama-server knows the decision model.
+    cfg = _choose_d1(root)
+    cfg["d1-omni-2b"]["server_bin"] = str(LLAMA_DIR / "build" / "bin" / "llama-server")
+    _write_config(root, cfg)
+    result = _run(root)
+    assert result.returncode == 0, result.stderr
+
+
+def test_an_unknown_voice_intent_is_refused_by_name(root):
+    cfg = _config(root)
+    cfg["voice_intent"] = "whisper"
+    _write_config(root, cfg)
+    result = _run(root)
+    assert result.returncode == 1
+    assert "'whisper'" in result.stderr and "gemma4-e4b-it or d1-omni-2b" in result.stderr

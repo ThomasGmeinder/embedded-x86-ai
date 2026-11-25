@@ -302,7 +302,7 @@ vvla-pipeline/
 ├── scripts/
 │   ├── calibrate_arm_camera.py   # arm camera intrinsics + mount on the gripper (pick_place IK)
 │   ├── compile_npu_models.{py,sh} # compile the YOLO ONNX for the NPU (SDK venv)
-│   ├── ensure_voice.sh           # Gemma 4 GGUF, audio projector, Silero, llama-server check
+│   ├── ensure_voice.sh           # the chosen voice model's GGUF and projector, Silero, llama-server check
 │   ├── export_yolo26s_pose.py    # body-keypoint ONNX export
 │   ├── export_yolo26s_detect.py  # 80-class detection ONNX export
 │   ├── ryzen_ai_env.sh           # LD_LIBRARY_PATH for the VitisAI EP runtime
@@ -316,9 +316,11 @@ vvla-pipeline/
     ├── audio/
     │   └── gemma_listen.py       # offset removal, the utterance cut, the level raise
     ├── llm/
-    │   ├── intents.py            # Intent enum, ParsedCommand, CommandRegistry, system prompt
-    │   ├── llama_intent.py       # llama-server lifecycle + Gemma audio and text parsing
-    │   └── voice.py              # the microphone thread; voice_intent gemma4-e4b-it
+    │   ├── intents.py            # Intent enum, ParsedCommand, CommandRegistry, Gemma's system prompt, the decision model's questions
+    │   ├── llama_server.py       # llama-server lifecycle, for either voice model
+    │   ├── llama_intent.py       # Gemma 4: audio and text parsing
+    │   ├── d1_intent.py          # d1-Omni-2B, the decision model: audio and text parsing
+    │   └── voice.py              # the microphone thread; voice_intent picks the model
     ├── vision/
     │   ├── camera.py             # CameraClient (direct / ROS 2) per role
     │   ├── camera_node.py        # ROS 2 camera publisher node
@@ -507,6 +509,34 @@ Of the 0.55 s, 0.3 s is the end silence and 0.23 to 0.25 s is the request up to 
 
 `stop robot` is a command Gemma returns like any other, so a stop takes the same time. "stop" alone does nothing.
 
+### The other voice model: d1-Omni-2B
+
+`voice_intent: d1-omni-2b` in `config/pipeline.yaml` replaces Gemma with Liquid AI's d1-Omni-2B, a decision model: it writes no text, it picks one of the answers it is offered, in one pass. Run `scripts/ensure_voice.sh` once after the change; it fetches the model (2.2 GB) and checks that `llama-server` is new enough for it. The microphone, the utterance cut and the behaviors are the same for both models.
+
+What it is asked (`vla_pipeline/llm/intents.py`, `COMMAND_ANSWERS`): "What does the speaker ask the robot arm to do?", with one answer per command, each a few phrases a speaker says for it, and four answers that all mean no command (one word alone, talk about stopping, a negation, any other talk). For a pick it is asked a second question, which object, out of every name the detector knows. Two rules use the probabilities it returns: a pick is taken when its probability reaches `min_pick_probability` (0.08), and the names of one object ("ball", "football", "sports ball") are added up before the object is chosen. It writes no words, so the console shows the command and no "you: …" line for speech.
+
+Measured side by side on a Strix Halo (Ryzen AI Max+ 395), both models through their own parsers on the same inputs (2026-11-24, llama.cpp `33aeb17`). Speech is a synthetic voice (espeak-ng); "voice B" is a second synthetic voice neither model was tuned on; "noise" is pink noise 10 dB below the speech. "Tuned-on" are the sentences d1's answers were chosen with; "held-out" are sentences in none of its answers' phrases. A pick is right only with its object.
+
+| Right answers, Gemma 4 / d1-Omni-2B | Commands | Picks | Must do nothing | All |
+|---|---|---|---|---|
+| Typed, tuned-on | 26 / 26 of 26 | 9 / 9 of 9 | 8 / 13 of 14 | 43 / 48 of 49 |
+| Typed, held-out | 16 / 15 of 16 | 4 / 4 of 4 | 13 / 10 of 14 | 33 / 29 of 34 |
+| Spoken, tuned-on | 30 / 32 of 36 | 11 / 13 of 21 | 30 / 33 of 42 | 71 / 78 of 99 |
+| Spoken, held-out | 43 / 42 of 48 | 10 / 11 of 12 | 34 / 28 of 42 | 87 / 81 of 102 |
+| Voice B, tuned-on | 22 / 33 of 36 | 10 / 15 of 21 | 31 / 33 of 42 | 63 / 81 of 99 |
+| Voice B, held-out | 33 / 37 of 48 | 7 / 12 of 12 | 36 / 26 of 42 | 76 / 75 of 102 |
+| Noise, tuned-on | 20 / 32 of 36 | 6 / 8 of 21 | 33 / 36 of 42 | 59 / 76 of 99 |
+| Noise, held-out | 34 / 39 of 48 | 10 / 12 of 12 | 37 / 28 of 42 | 81 / 79 of 102 |
+
+| Seconds from the request to the command, median | Gemma 4 | d1-Omni-2B |
+|---|---|---|
+| Typed | 0.135 | 0.093 |
+| Spoken, not a pick | 0.185 | 0.110 |
+| Spoken pick, with its object | 0.275 | 0.230 |
+| From the last word to the command, live (`tests/sim/test_voice_live.py`) | 0.48 | 0.38 |
+
+What the numbers say. d1-Omni-2B is the faster one, by about 0.1 s a command, and it finds commands and picks at least as well as Gemma, also in the second voice and in noise. It is worse at leaving talk alone that it was not shown: on the held-out sentences that must do nothing it is right 92 times of 140 against Gemma's 120. A sentence that names an object ("the ball is red") is taken for a pick, and "don't wave at them" for a wave. Gemma in turn takes a bare "stop", "halt" or "freeze" for a stop, which d1 does not. Both are 3 % slower while the twin renders on the same iGPU (three views, 17 ms a pass either way). Not measured: a person at the microphone. `min_pick_probability` and the answers' phrases are calibrated on the synthetic voice; calibrate them again on the voices of your floor.
+
 ### No denoiser
 
 An utterance is sent with the microphone's constant offset taken out and raised to a fixed level; nothing else is done to it. There is no noise-suppression stage. Google's audio guide for Gemma 4 specifies one channel, 16 kHz, float samples from −1 to 1, and a Fourier resample. It does not specify a denoiser ([Audio understanding](https://ai.google.dev/gemma/docs/capabilities/audio)).
@@ -559,7 +589,8 @@ Most components are standalone modules with their own `__main__` self-test. Pick
 |---|---|---|
 | Camera→joint mapping (One Euro/depth) | no (twin) | `./run_sim_tests.sh -k mimic` |
 | Intent grammar + parser | Gemma server running | `python -m vla_pipeline.llm.llama_intent --selftest` |
-| Spoken sentences → commands, with their times | no (a synthetic voice stands in for the microphone; the real Gemma on the iGPU) | `./run_sim_tests.sh -k voice_live -s` |
+| Decision model's questions + parser | the d1-Omni-2B files (`voice_intent: d1-omni-2b`, then `scripts/ensure_voice.sh`) | `python -m vla_pipeline.llm.d1_intent --selftest` |
+| Spoken sentences → commands, with their times | no (a synthetic voice stands in for the microphone; each real voice model on the iGPU, so the files of both are needed) | `./run_sim_tests.sh -k voice_live -s` |
 | YOLO pose | webcam | `python -m vla_pipeline.vision.yolo_pose_npu --device npu` |
 | YOLO detect | webcam | `python -m vla_pipeline.vision.yolo_detect_npu --find ball --role arm` |
 | MediaPipe hands | webcam | `python -m vla_pipeline.vision.mediapipe_hands` |
@@ -597,7 +628,7 @@ cd workshop && ./run_notebooks.sh --test    # notebooks and the Instructor's cor
 
 `./run_sim_tests.sh` uses the same `.venv`, Ryzen AI runtime, and ROS 2. It runs `pytest tests/npu`, then `pytest tests/sim -m "sim and not docs"`. Arguments after the command go to the twin tests only. It does not start llama-server or Jupyter, and it does not run the tests marked `docs` (the notebooks, the Instructor's corner, and the notebook console). Those belong to `./run_notebooks.sh --test`, which stands in a generated frame for the webcam and a scripted person for pose. The notebook reads that frame in this process. It does not open `/dev/video0` or wait on `/cameras/mount/image_raw`.
 
-Spoken commands are injected as text, except in `tests/sim/test_voice_live.py`: there a stand-in microphone plays six sentences of a synthetic voice (espeak-ng, `libespeak-ng1`) in real time through the real listener, and a `llama-server` the test starts answers them with the real Gemma. The operator's pose and hands are scripted. The arm camera is read by YOLO on the NPU (`--sim-eyes seg` substitutes the twin's segmentation boxes). The twin stands in for the arm and its camera, and its rendering runs on the iGPU. No arm, camera, or microphone has to be attached. The ROS cases run headless on a private ROS domain, and the exit code is the result.
+Spoken commands are injected as text, except in `tests/sim/test_voice_live.py`: there a stand-in microphone plays six sentences of a synthetic voice (espeak-ng, `libespeak-ng1`) in real time through the real listener, and a `llama-server` the test starts answers them, once with the real Gemma and once with the real d1-Omni-2B. The operator's pose and hands are scripted. The arm camera is read by YOLO on the NPU (`--sim-eyes seg` substitutes the twin's segmentation boxes). The twin stands in for the arm and its camera, and its rendering runs on the iGPU. No arm, camera, or microphone has to be attached. The ROS cases run headless on a private ROS domain, and the exit code is the result.
 
 Spoken commands, and how each one is checked. A cell is blank when that stack does not run the case. "Parks at rest" means the body joints finish within 4° of the rest pose.
 
@@ -655,7 +686,10 @@ Arguments after `./run_sim_tests.sh` select twin tests, for example `./run_sim_t
 
 All tunables live in `config/pipeline.yaml`:
 
-- **gemma4-e4b-it** — GGUF, audio projector, Silero path, the utterance cut (`end_silence_ms` 300, `pre_roll_ms` 300, `window_s` 6, `min_voice_ms` 100, `min_dbfs` −60), the level an utterance is sent at (`sent_peak`, `most_gain`), `llama-server` port 8082, GPU layers, ctx size, GBNF path, `hsa_override_gfx_version`
+- **voice_intent** — which model hears the microphone: `gemma4-e4b-it` (the default) or `d1-omni-2b`. Run `scripts/ensure_voice.sh` after a change; it fetches that model's files
+- **listening** — how the microphone's sound is cut, for either model: Silero path, the utterance cut (`end_silence_ms` 300, `pre_roll_ms` 300, `window_s` 6, `min_voice_ms` 100, `min_dbfs` −60), the level an utterance is sent at (`sent_peak`, `most_gain`)
+- **d1-omni-2b** — GGUF, projector, `llama-server` port 8083, batch size, and the confidence below which a command (`min_confidence`) or an object (`min_object_confidence`) is not taken
+- **gemma4-e4b-it** — GGUF, audio projector, `llama-server` port 8082, GPU layers, ctx size, GBNF path, `hsa_override_gfx_version`
 - **audio** — sample rate (16 kHz) and which microphone
 - **yolo_pose / yolo_detect / mediapipe** — confidence thresholds, cache keys, hand-roll cue threshold
 - **cameras** — per-role (`mount` / `arm`) device, resolution, fps, rotation, `use_ros2`, topic; legacy single `camera:` kept for one-cam dev machines
@@ -687,7 +721,7 @@ All tunables live in `config/pipeline.yaml`:
 - **Arm doesn't move** — verify `motor_port` permissions and that your calibration JSON matches `robot_id`.
 - **`ControllerArm` times out waiting for the controllers** — `ros2 control list_controllers` should show `arm_controller`, `gripper_forward_controller` and `joint_state_broadcaster` active. `ros_ws/install/topic_based_ros2_control is missing` means the hardware plugin was never built: rerun `./bootstrap.sh` (section 4e). `./scripts/validate_setup.sh` checks ROS 2, ros2_control and the plugin.
 - **Gripper trips `Overload error` on shutdown** — usually a side effect of an abnormal exit while the arm was parking; once the run exits cleanly it goes away. If it recurs, power-cycle the servo bus to clear the overload latch before the next run.
-- **A sentence is cut in two, or the arm feels late** — a sentence is sent once the speaker has been silent for `gemma4-e4b-it.end_silence_ms` (300). Raising it waits longer after the last word; lowering it sends sooner and cuts a sentence at a shorter pause (a pause after a comma is 220 to 260 ms). The log line "Command … N s after the end of the speech" gives the time of every command. The samples are not denoised; a second person talking is speech and is sent with the command.
-- **Speech is not picked up in a loud room, or the room is taken for speech** — `gemma4-e4b-it.min_dbfs` (−60) leaves the decision to Silero. Raise it only where the room is loud; a quiet microphone's speech frames are around −43 dBFS.
+- **A sentence is cut in two, or the arm feels late** — a sentence is sent once the speaker has been silent for `listening.end_silence_ms` (300). Raising it waits longer after the last word; lowering it sends sooner and cuts a sentence at a shorter pause (a pause after a comma is 220 to 260 ms). The log line "Command … N s after the end of the speech" gives the time of every command. The samples are not denoised; a second person talking is speech and is sent with the command.
+- **Speech is not picked up in a loud room, or the room is taken for speech** — `listening.min_dbfs` (−60) leaves the decision to Silero. Raise it only where the room is loud; a quiet microphone's speech frames are around −43 dBFS.
 - **Gripper drops thin objects** — raise `grip.stall_grace_s` and/or lower `grip.load_threshold`; verify effort feedback with `python -m vla_pipeline.robot.arm_interface --dry-run` (prints whether the gripper load register is readable).
 - **Arm camera image is sideways** — set `cameras.arm.rotate` (0/90/180/270) to match the end-effector mounting.

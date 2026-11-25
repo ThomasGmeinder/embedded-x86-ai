@@ -604,18 +604,19 @@ class PipelineRig(_Rig):
     def __init__(self, twin, cfg: dict, llm_base: str, recorder_path=None, title: str = "",
                  arm=None, arm_camera=None, detector=None):
         super().__init__(twin, cfg, recorder_path, title)
-        from vla_pipeline.llm.llama_intent import LlamaIntentParser
+        from vla_pipeline.llm.voice import make_parser
         from vla_pipeline.main import PipelineContext
         from vla_pipeline.robot.sim_arm import SimArmClient
         from vla_pipeline.vision.yolo_detect_npu import Detection, resolve_class
 
         host, port = _llm_host_port(llm_base)
-        self.cfg["gemma4-e4b-it"].update(host=host, port=port, autostart=False)
+        # The parser of the voice model the config names, against the stand-in server.
+        self.cfg[self.cfg["voice_intent"]].update(host=host, port=port, autostart=False)
         self.cfg["robot"]["backend"] = "sim"
         self.arm = arm if arm is not None else SimArmClient(self.cfg, world=self.world)
         self._eyes(detector, Detection, resolve_class)
         self.arm_camera = arm_camera if arm_camera is not None else self.seg_camera
-        self.parser = LlamaIntentParser(self.cfg, section="gemma4-e4b-it")
+        self.parser = make_parser(self.cfg)
         self._closers.append(self.parser.close)
         self.ctx = PipelineContext(
             cfg=self.cfg, arm=self.arm, pose=self.pose, detector=self.detector, hands=self.hands,
