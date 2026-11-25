@@ -30,17 +30,13 @@ from __future__ import annotations
 
 import json
 import socket
-import struct
-import subprocess
-import sys
 import threading
 import time
-from pathlib import Path
 
 import numpy as np
 import pytest
-from scipy.signal import resample_poly
 
+from synthetic_voice import OFFSET, RATE, microphone_bytes, spoken
 from vla_pipeline.llm.intents import Intent
 from vla_pipeline.llm.voice import VOICE_INTENTS
 from vla_pipeline.utils.config import load_config
@@ -48,10 +44,6 @@ from vla_pipeline.vision.yolo_detect_npu import resolve_class
 
 pytestmark = [pytest.mark.sim, pytest.mark.hw, pytest.mark.slow, pytest.mark.timeout(180)]
 
-ESPEAK_ONCE = Path(__file__).with_name("espeak_once.py")
-RATE = 16000
-OFFSET = 1028       # the constant a quiet built-in microphone was measured to add to its samples
-SPEECH_PEAK = 0.1   # of full scale: quiet speech
 LEAD_S = 1.5        # silence before the first sentence
 GAP_S = 2.5         # silence after each sentence: room for the model's answer
 # (sentence, the command it must give, its object). The last is a question: no command.
@@ -65,23 +57,6 @@ SENTENCES = [
 ]
 
 
-def spoken(text: str) -> np.ndarray:
-    """The sentence in espeak-ng's voice at 16 kHz, trimmed, at SPEECH_PEAK. A process per sentence:
-    espeak-ng keeps state between sentences, and the same sentence must be the same sound every time."""
-    ran = subprocess.run(
-        [sys.executable, str(ESPEAK_ONCE), "libespeak-ng.so.1", "en-us", "150", text],
-        capture_output=True, timeout=60,
-    )
-    assert ran.returncode == 0 and len(ran.stdout) > 4, (
-        "espeak-ng gave no sound (sudo apt install libespeak-ng1): " + ran.stderr.decode("utf-8", "replace")
-    )
-    rate = struct.unpack("<I", ran.stdout[:4])[0]
-    sound = np.frombuffer(ran.stdout[4:], "<i2").astype(np.float64)
-    loud = np.flatnonzero(np.abs(sound) > 0.01 * np.abs(sound).max())
-    sound = resample_poly(sound[loud[0]:loud[-1] + 1], RATE, rate)
-    return sound * (SPEECH_PEAK * 32767 / np.abs(sound).max())
-
-
 @pytest.mark.parametrize("voice_intent", VOICE_INTENTS)
 def test_spoken_sentences_give_their_commands_one_request_each_the_call_before_the_words(
     voice_intent, monkeypatch, tmp_path,
@@ -92,7 +67,7 @@ def test_spoken_sentences_give_their_commands_one_request_each_the_call_before_t
         parts.append(spoken(sentence))
         ends.append(sum(len(part) for part in parts) / RATE)
         parts.append(np.zeros(int(GAP_S * RATE)))
-    sound = np.round(np.concatenate(parts) + OFFSET).astype("<i2").tobytes()
+    sound = microphone_bytes(np.concatenate(parts))
     played_s = len(sound) / 2 / RATE
     answered = threading.Event()  # set when the parser has answered one request per sentence
 
@@ -218,3 +193,46 @@ def test_spoken_sentences_give_their_commands_one_request_each_the_call_before_t
     # Gemma wrote down the words of every command; the decision model writes none.
     words_written = [bool(words) for kind, _, words in events if kind == "heard"]
     assert words_written == [voice_intent == "gemma4-e4b-it"] * len(expected), events
+
+
+# ---- the stop rule, typed, on the real model -----------------------------------------------------
+# "stop robot" is the only stop. The tests that hold this rule elsewhere use the keyword match
+# and a stand-in server; when Gemma's answer became a list, the real model took a bare "stop"
+# for a stop and no test saw it. These ask the real model.
+STOP_ORDERS = ["stop robot", "Please STOP ROBOT now", "robot stop", "stop robot now"]
+NOT_STOP_ORDERS = ["stop", "halt", "freeze", "stop it", "abort", "stop talking"]
+
+
+@pytest.fixture(scope="module")
+def gemma(tmp_path_factory):
+    """The real Gemma on a llama-server of this module's own; a missing piece fails, nothing is skipped."""
+    from vla_pipeline.llm.llama_intent import LlamaIntentParser
+
+    cfg = load_config()
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        cfg["gemma4-e4b-it"]["port"] = sock.getsockname()[1]
+    cfg.setdefault("system", {})["log_dir"] = str(tmp_path_factory.mktemp("gemma-typed"))
+    parser = LlamaIntentParser(cfg)  # FileNotFoundError names the missing file and scripts/ensure_voice.sh
+    try:
+        parser.warm_up()
+        yield parser
+    finally:
+        parser.close()
+
+
+def test_a_typed_stop_robot_stops_and_a_bare_stop_does_not(gemma):
+    answers = [(text, Intent.STOP, gemma.parse(text).intent) for text in STOP_ORDERS]
+    answers += [(text, Intent.UNKNOWN, gemma.parse(text).intent) for text in NOT_STOP_ORDERS]
+    print()
+    for text, expected, got in answers:
+        print(f"{text!r:24} -> {got.value:8} should be {expected.value}")
+    wrong = [(text, got.value, expected.value) for text, expected, got in answers if got is not expected]
+    assert not wrong, wrong
+
+
+@pytest.mark.xfail(strict=True, reason='the real Gemma answers a typed "home" alone as home, with every wording '
+                                       'of the home line tried (2026-11-25); the instructions say it is unknown')
+def test_a_typed_home_alone_is_no_command(gemma):
+    assert gemma.parse("go home").intent is Intent.HOME
+    assert gemma.parse("home").intent is Intent.UNKNOWN
