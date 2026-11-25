@@ -3,7 +3,7 @@
 A 3-hour workshop that takes a CS/engineering student from zero to a
 running **vision -> language -> action** pipeline on an AMD Ryzen AI
 APU driving a LeRobot SO-101 arm: YOLOv26s x2 on the **NPU** (VitisAI EP),
-Gemma 4 E4B on the **iGPU** (llama.cpp + ROCm, one hop of audio),
+Gemma 4 E4B on the **iGPU** (llama.cpp + ROCm, one request per spoken sentence),
 Silero on the **CPU**, MediaPipe Hands on the **CPU**, all wired over **ROS 2**.
 
 The workshop depends on [Installation](../README.md#installation). That
@@ -15,7 +15,7 @@ The digital twin is the MuJoCo bringup in `launch/so101_control.launch.py`: upst
 
 ## What you learn
 
-The subject is a vision-language-action loop. You speak, Gemma 4 turns a hop of audio into one command, and MoveIt carries that command out on the arm. When the command is "copy my movements", YOLOv26s-pose and MediaPipe Hands read your body and your hand. The twin notebook (`notebooks/03_integration/02_digital_twin.ipynb`) is that loop.
+The subject is a vision-language-action loop. You speak, Gemma 4 turns your sentence into one command about half a second after your last word, and MoveIt carries that command out on the arm. When the command is "copy my movements", YOLOv26s-pose and MediaPipe Hands read your body and your hand. The twin notebook (`notebooks/03_integration/02_digital_twin.ipynb`) is that loop.
 
 Motion planning in the lesson is MoveIt's. YOLO object detection and the reach that turns a camera box into a grasp stay in the pipeline. They are how a demonstrated pick is recorded as training data for a later VLA finetune. The notebooks do not walk through that recorder.
 
