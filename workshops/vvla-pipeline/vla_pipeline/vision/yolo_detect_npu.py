@@ -440,7 +440,9 @@ def collision_object(name: str, centre, size, frame: str = "base_link", yaw: flo
 
 def main() -> None:
     """CLI entry point: live camera overlay of detections, optionally filtered by --find."""
-    from vla_pipeline.vision.camera import make_camera
+    import threading
+
+    from vla_pipeline.vision.camera import make_camera, wait_for_frames
 
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
@@ -461,11 +463,12 @@ def main() -> None:
     cam = make_camera(cfg, args.role)
     fps_window: deque[float] = deque(maxlen=30)
     print("Press 'q' to quit.")
+    never = threading.Event()  # this preview has no stop besides 'q' and Ctrl-C
     try:
         while True:
             ok, frame = cam.read()
             if not ok:
-                time.sleep(0.05)
+                wait_for_frames(cam, never)  # blocks on the camera's next frame or its reopen time
                 continue
             t0 = time.perf_counter()
             if args.find:

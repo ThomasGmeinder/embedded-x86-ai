@@ -298,6 +298,30 @@ class Ros2Camera(CameraClient):
             self._executor = None
 
 
+def wait_for_frames(camera, stop: threading.Event, bound_s: float = 1.0) -> None:
+    """After ``camera.read()`` gave no frame: block until the camera can give one again.
+
+    Each camera has one event for that, and this waits on it instead of
+    sleeping and trying again:
+
+    - a lost device says when it next tries to reopen (``retry_at()``): wait
+      until then, or until ``stop`` is set;
+    - a latest-frame client (a ROS topic) is waited on for its next arriving
+      frame (``next_frame``), for ``bound_s`` at most, so a caller that also
+      watches a stop sees it within that bound;
+    - a client whose ``read()`` itself blocks for a frame (the console's
+      fan-out, a paced stand-in) has done its waiting inside that read.
+    """
+    retry = getattr(camera, "retry_at", None)
+    retry_at = retry() if callable(retry) else None
+    if retry_at is not None:
+        stop.wait(max(retry_at - time.time(), 0.0))
+        return
+    next_frame = getattr(camera, "next_frame", None)
+    if callable(next_frame):
+        next_frame(time.time(), bound_s)
+
+
 def make_camera(cfg: dict, role: str) -> CameraClient:
     """Build the CameraClient for ``cameras.<role>`` from the pipeline config."""
     c = (cfg.get("cameras") or {}).get(role)
@@ -345,17 +369,18 @@ def main() -> None:
         cfg.setdefault("cameras", {}).setdefault(args.role, {})["use_ros2"] = True
     cam = make_camera(cfg, args.role)
     print(f"Previewing camera '{args.role}' - press 'q' to quit.")
-    misses = 0
+    offline = False
+    never = threading.Event()  # this preview has no stop besides 'q' and Ctrl-C
     try:
         while True:
             ok, frame = cam.read()
             if not ok:
-                misses += 1
-                if misses % 30 == 1:
-                    print("  (no frames - camera offline, retrying...)")
-                time.sleep(0.1)
+                if not offline:
+                    print("  (no frames - camera offline, waiting for it...)")
+                offline = True
+                wait_for_frames(cam, never)  # blocks on the camera's next frame or its reopen time
                 continue
-            misses = 0
+            offline = False
             cv2.imshow(f"camera:{args.role}", frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break

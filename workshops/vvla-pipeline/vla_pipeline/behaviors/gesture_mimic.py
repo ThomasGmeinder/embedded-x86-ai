@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import threading
 import time
 from dataclasses import dataclass
 
@@ -65,6 +66,7 @@ from vla_pipeline.user_robot_control import PipelineContext
 from vla_pipeline.robot.arm_interface import GRIPPER_CLOSED_FLOOR, make_arm
 from vla_pipeline.utils.config import load_config
 from vla_pipeline.utils.gesture_map import mapper_from_config
+from vla_pipeline.vision.camera import wait_for_frames
 from vla_pipeline.vision.mediapipe_hands import HandTracker
 from vla_pipeline.vision.yolo_pose_npu import PoseEstimator, draw_skeleton, pick_arm, pick_nearest
 
@@ -337,7 +339,9 @@ def run_mimic(ctx, cmd=None, tick=mimic_tick) -> MimicSignals | bool:
         while not ctx.stop_check():
             ok, frame = ctx.mount_camera.read()
             if not ok:
-                time.sleep(0.05)
+                # No frame: wait on the camera's own event (its next frame, or its reopen
+                # time, which a stop cuts short), not on a sleep.
+                wait_for_frames(ctx.mount_camera, ctx.stop_event)
                 continue
             last = tick(ctx, frame)
             frames += 1
@@ -391,11 +395,12 @@ def calibrate_depth(
     )
     input("Press Enter when in position... ")
     samples: list[float] = []
+    never = threading.Event()  # this calibration has no stop; the sampling time ends it
     deadline = time.time() + sample_s
     while time.time() < deadline:
         ok, frame = camera.read()
         if not ok:
-            time.sleep(0.03)
+            wait_for_frames(camera, never, bound_s=max(deadline - time.time(), 0.0))
             continue
         obs, _ = hands.process(frame)
         if obs is not None and obs.hand_size > 0:
@@ -426,11 +431,12 @@ def calibrate_grip(
         print(prompt)
         input("Press Enter when in position... ")
         vals: list[float] = []
+        never = threading.Event()  # this calibration has no stop; the sampling time ends it
         deadline = time.time() + sample_s
         while time.time() < deadline:
             ok, frame = camera.read()
             if not ok:
-                time.sleep(0.03)
+                wait_for_frames(camera, never, bound_s=max(deadline - time.time(), 0.0))
                 continue
             obs, _ = hands.process(frame)
             if obs is not None and obs.pinch >= 0:
