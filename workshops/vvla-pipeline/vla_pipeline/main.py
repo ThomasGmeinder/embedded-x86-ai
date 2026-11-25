@@ -5,16 +5,18 @@
 # Portions of this file consist of AI-generated content. AI-assisted
 # content has been reviewed and validated by the authors.
 
-"""Pipeline orchestrator: microphone → Gemma 4 on the iGPU → behavior dispatch,
-with an always-hot listener for the safety stop.
+"""Pipeline orchestrator: microphone → the voice model on the iGPU → behavior
+dispatch, with an always-hot listener for the safety stop. The voice model is
+the one ``voice_intent`` names in ``config/pipeline.yaml``: d1-Omni-2B by
+default, or Gemma 4.
 
 Architecture
 ------------
 - A **listener thread** cuts the microphone's sound into utterances and sends
-  each to Gemma the moment the speaker falls silent. The command is acted on
-  when Gemma has written it, before the words it heard. The microphone
-  stays hot *while behaviors run*, which is what makes a spoken "stop" able
-  to interrupt a running behavior.
+  each to the voice model the moment the speaker falls silent. The command is
+  acted on when the model has decided it (with Gemma, before the words it
+  heard). The microphone stays hot *while behaviors run*, which is what makes
+  a spoken "stop robot" able to interrupt a running behavior.
 - ``STOP`` is matched with plain keywords on the raw transcript
   (:data:`STOP_KEYWORDS`) before any LLM round trip, then sets the shared
   stop event that every behavior's ``stop_check`` polls (including mid

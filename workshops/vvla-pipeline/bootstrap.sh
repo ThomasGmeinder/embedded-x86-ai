@@ -34,7 +34,8 @@
 #      4e. Builds topic_based_ros2_control (the ros2_control hardware side that
 #          talks to the arm servers over topics) into the colcon workspace ros_ws/
 #   5. Downloads the models:
-#        - Gemma 4 E4B-IT GGUF + audio projector, and Silero VAD v6.2.3
+#        - both voice models (d1-Omni-2B and Gemma 4 E4B-IT: each GGUF with
+#          its projector), and Silero VAD v6.2.3
 #          (scripts/ensure_voice.sh; the launchers run it too, so a machine
 #          that only pulls gets them)
 #      YOLO ONNX export is manual (Ultralytics is AGPL-3.0). See the README:
@@ -652,9 +653,9 @@ if [[ "$SKIP_MODELS" -eq 0 ]]; then
 
   log "YOLO ONNX export is a manual setup step — see README"
 
-  log "Gemma 4 E4B-IT, its audio projector and Silero VAD (skipped when present)"
+  log "The voice models (d1-Omni-2B, Gemma 4 E4B-IT) and Silero VAD (skipped when present)"
   VENV_DIR="$VENV_DIR" "${REPO_ROOT}/scripts/ensure_voice.sh" --models-only \
-    || die "The Gemma 4 voice models are not in place (see the ensure_voice line above)."
+    || die "The voice models are not in place (see the ensure_voice line above)."
 else
   log "Skipping model download/export (--skip-models)"
 fi

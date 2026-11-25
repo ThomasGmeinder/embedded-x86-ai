@@ -93,7 +93,8 @@ print("NS " + _json.dumps({
     "log": [line for line, _color in console._log],
     "pid": owner(int(os.environ.get("ROS_DOMAIN_ID", "0"))),
     "sessions": _SESSIONS,
-    "gemma_port": voice.llm.port,
+    "voice_model": voice.mic.kind,
+    "voice_port": voice.llm.port,
     "microphone": voice.mic.error,
 }))
 '''
@@ -313,8 +314,12 @@ class NotebookKernel:
             f"the notebook kernel's microphone reports {namespace['microphone']!r}, not {expected!r}")
         from vla_pipeline.utils.config import load_config
 
-        assert namespace["gemma_port"] != load_config()["gemma4-e4b-it"]["port"], (
-            "the notebook kernel asks Gemma on the configured port, which a notebook open on this machine uses")
+        configured = load_config()
+        # The notebook's voice model is the one the pipeline's config selects.
+        assert namespace["voice_model"] == configured["voice_intent"], namespace["voice_model"]
+        assert namespace["voice_port"] != configured[configured["voice_intent"]]["port"], (
+            "the notebook kernel asks its voice model on the configured port, "
+            "which a notebook open on this machine uses")
         return namespace
 
     def failure_report(self, dest: Path, since: float | None) -> str:

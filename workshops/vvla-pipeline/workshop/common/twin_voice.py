@@ -12,9 +12,11 @@ Section 4 of ``notebooks/03_integration/02_digital_twin.ipynb`` builds one
 typed, goes to :meth:`VoiceCommands.on_transcript`: "stop" acts at once,
 noise is shown and dropped, anything else waits in a queue. :meth:`VoiceCommands.dispatch_loop`
 runs the newest waiting command through the workshop's ``handle_transcript``
-(``integration/dispatch.py``), with Gemma 4 on the iGPU picking the command.
-:meth:`VoiceCommands.listen` takes one sentence before the console runs: it
-prints what was heard and the command Gemma picks, and runs nothing.
+(``integration/dispatch.py``), with the voice model on the iGPU picking the
+command: the one ``voice_intent`` names in the pipeline's ``config/pipeline.yaml``,
+d1-Omni-2B or Gemma 4. :meth:`VoiceCommands.listen` takes one sentence before
+the console runs: it prints what was heard and the command the model picks,
+and runs nothing.
 """
 
 from __future__ import annotations
@@ -40,15 +42,16 @@ REPORT_RECORDS = False
 
 
 class _Words(str):
-    """The words Gemma heard in the spoken command delivered just before them.
+    """The words the model heard in the spoken command delivered just before them.
 
-    A spoken command arrives the moment Gemma has written its call; the words follow when
-    the answer is complete, once for every command (empty when Gemma made out none).
+    A spoken command arrives the moment the model has decided it; the words follow when
+    the answer is complete, once for every command: Gemma writes them (empty when it made
+    out none), d1-Omni-2B writes no words, so they are always empty for it.
     """
 
 
 def keyword_parse(text: str) -> ParsedCommand:
-    """The stand-in for Gemma: match keywords in the text."""
+    """The stand-in for the voice model: match keywords in the text."""
     d = offline_parse_text(text)
     params = {"object": d["object"]} if d.get("object") else {}
     return ParsedCommand(Intent.from_string(d["command"]), params=params, transcript=text)
@@ -98,10 +101,16 @@ class VoiceCommands:
 
     def _open(self, console):
         """The pipeline's speech front end. ``voice_intent`` in pipeline.yaml chooses it."""
+        from so101_sim.tiles import voice as voice_caption
         from vla_pipeline.llm.voice import open_voice
         from vla_pipeline.utils.config import load_config
 
-        session = open_voice(load_config())
+        cfg = load_config()
+        session = open_voice(cfg)
+        # The model's name as the config has it: on the console's voice panel, and in what
+        # listen() prints.
+        console.voice_caption = voice_caption(cfg)
+        self.model_name = str(cfg[session.kind].get("name", session.kind))
         session.start(
             self._utterance, on_level=console.on_level, on_drop=self._dropped, on_heard=self._words,
         )
@@ -146,17 +155,13 @@ class VoiceCommands:
         """Print the command the parser picks for ``text``, and how long it took."""
         ready = command_from_json(text)
         if ready is not None:
-            who = "Gemma" if self.mic.kind == "gemma4-e4b-it" else "The parser"
             params = ", ".join(f"{k}: {v}" for k, v in (ready.params or {}).items() if v)
-            print(f"{who} picked: {ready.intent.value}" + (f" ({params})" if params else ""))
+            print(f"{self.model_name} picked: {ready.intent.value}" + (f" ({params})" if params else ""))
             return
         t0 = time.perf_counter()
         cmd = self._parse_intent(text)
         ms = 1000 * (time.perf_counter() - t0)
-        if self.llm is None:
-            who = "The keyword match"
-        else:
-            who = "Gemma" if self.mic.kind == "gemma4-e4b-it" else "The parser"
+        who = self.model_name if self.llm is not None else "The keyword match"
         if cmd.intent is Intent.UNKNOWN:
             print(f"{who} found no command in it ({ms:.0f} ms).")
             return
@@ -164,7 +169,7 @@ class VoiceCommands:
         print(f"{who} picked: {cmd.intent.value}" + (f" ({params})" if params else "") + f", in {ms:.0f} ms")
 
     def listen(self, seconds: float = 20.0, example: str = "could you pick up the ball for me") -> None:
-        """Wait for one spoken command; print what was heard and the command Gemma picks.
+        """Wait for one spoken command; print what was heard and the command the voice model picks.
 
         Nothing runs: the sentence does not reach the command queue. Without a
         microphone, ``example`` stands in for the spoken sentence.
@@ -190,7 +195,7 @@ class VoiceCommands:
                 spoken = command_from_json(text)
                 words = spoken.transcript if spoken is not None else ""
                 if spoken is not None and not words:
-                    # The command came at Gemma's call. Its words follow when the answer is
+                    # The command came when the model had decided it. Its words follow when the answer is
                     # complete: the session sends them once for every command, so this is one
                     # wait for that event, bounded by the request's own time limit.
                     try:
@@ -221,7 +226,7 @@ class VoiceCommands:
             self.console.ignored(text)
             return
         spoken = command_from_json(text)
-        # A spoken command arrives at Gemma's call, before its words: _words shows them when they come.
+        # A spoken command arrives when the model has decided it, before its words: _words shows them when they come.
         if spoken is None or spoken.transcript:
             self.console.heard(spoken.transcript if spoken is not None else text)
         if is_stop(text):

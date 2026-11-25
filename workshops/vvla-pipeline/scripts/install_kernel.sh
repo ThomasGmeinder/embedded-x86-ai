@@ -9,7 +9,7 @@
 
 # =============================================================================
 # install_kernel.sh - register the repo's .venv as a Jupyter kernel.
-# scripts/ensure_voice.sh checks the Gemma 4 files and llama-server the notebooks use.
+# scripts/ensure_voice.sh checks the voice models' files and llama-server the notebooks use.
 #
 # Why this exists: running `jupyter notebook` from inside the venv is not
 # enough. Jupyter (and VS Code, and JupyterLab) launch notebooks with whatever
@@ -26,12 +26,13 @@
 # directly and source nothing - so without baking, the same notebook opened in
 # VS Code loses the NPU and rclpy. Baking makes every launcher behave the same.
 #
-# scripts/ensure_voice.sh (called below) checks the Gemma 4 files and the
-# built llama-server. Neither script starts the server: a notebook that
-# needs Gemma starts it, and stops it when it closes.
+# scripts/ensure_voice.sh (called below) checks the files of both voice
+# models (d1-Omni-2B and Gemma 4) and the built llama-server. Neither script
+# starts the server: a notebook that needs a model starts it, and stops it
+# when it closes.
 #
 # Usage:
-#   ./scripts/install_kernel.sh              # kernel + env bake + Gemma voice models
+#   ./scripts/install_kernel.sh              # kernel + env bake + the voice models
 #   ./scripts/install_kernel.sh --force      # reinstall the kernelspec too
 #   ./scripts/install_kernel.sh --no-vscode  # don't write .vscode/settings.json
 #   ./scripts/install_kernel.sh --register-only  # this clone's kernel.json only
@@ -238,8 +239,8 @@ print("    wrote %s" % path)
 PYEOF
 fi
 
-# Gemma's llama-server is started by the notebook that needs it, not here.
-LLM_STATUS="started by the notebook that needs it (Gemma 4 on the iGPU)"
+# A voice model's llama-server is started by the notebook that needs it, not here.
+LLM_STATUS="started by the notebook that needs it (d1-Omni-2B or Gemma 4, on the iGPU)"
 
 # 5. Sanity report: does THIS kernel actually see the accelerator stack?
 #    Reflect the same env we baked into kernel.json so the report matches what

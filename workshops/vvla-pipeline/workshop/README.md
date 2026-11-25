@@ -3,13 +3,25 @@
 A 3-hour workshop that takes a CS/engineering student from zero to a
 running **vision -> language -> action** pipeline on an AMD Ryzen AI
 APU driving a LeRobot SO-101 arm: YOLOv26s x2 on the **NPU** (VitisAI EP),
-Gemma 4 E4B on the **iGPU** (llama.cpp + ROCm, one spoken sentence at a time),
-Silero on the **CPU**, MediaPipe Hands on the **CPU**, all wired over **ROS 2**.
+a language model on the **iGPU** (llama.cpp + ROCm), Silero on the **CPU**,
+MediaPipe Hands on the **CPU**, all wired over **ROS 2**.
+
+Two language models are used. **Gemma 4 E4B** is the one you write a parser
+for: it turns a typed sentence into a command, held to its answer by a
+grammar (TODOs 1.5 and 1.6, `02_ros2/03_intent_node.ipynb`). The
+**microphone** in section 4 of `03_integration/02_digital_twin.ipynb` is heard
+by the pipeline's voice model, which `voice_intent` in `../config/pipeline.yaml`
+names: Liquid AI's **d1-Omni-2B** by default, or Gemma 4. That notebook's
+compute placement table and its console show the one that is set. With
+d1-Omni-2B a spoken command is acted on 0.39 s after its last word, with
+Gemma 4 0.49 s after it (medians of the same test run; the decision model is
+0.10 s, 20 %, faster). The measurements are in
+[Voice latency](../README.md#voice-latency).
 
 The workshop depends on [Installation](../README.md#installation). That
 creates `.venv`, the model files in `../models`, and the YOLO NPU compile
-cache in `../cache`. The two YOLO models load from that cache. Gemma 4
-and Silero are downloaded by `scripts/ensure_voice.sh`.
+cache in `../cache`. The two YOLO models load from that cache. Both
+language models and Silero are downloaded by `scripts/ensure_voice.sh`.
 
 ## What's in the box
 
@@ -41,7 +53,7 @@ Before the steps below, install the Ryzen AI SDK and prerequisites as described 
 ```bash
 cd workshop
 ./run_notebooks.sh                        # registers the kernel, installs missing
-                                          # deps, checks the Gemma 4 files, starts
+                                          # deps, checks the voice models, starts
                                           # the twin and the resource HUD, then
                                           # serves Jupyter Lab. This shell stays
                                           # here until you quit it.
@@ -90,7 +102,7 @@ headless, after the same setup as the happy path. See
 AMD-specific lessons for the session:
 
 **Choose the device on purpose.** YOLO-pose and YOLO-detect already fill
-the NPU. Gemma 4 stays on the iGPU and Silero stays on the CPU, so those
+the NPU. The language model stays on the iGPU and Silero stays on the CPU, so those
 two vision models keep the NPU. Pass `device="cpu"` or `device="npu"` for
 a vision session, then print the provider it got in order to verify where
 it landed.

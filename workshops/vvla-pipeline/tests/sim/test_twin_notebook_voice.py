@@ -12,8 +12,9 @@ speech front end is spoken to without the notebook (``test_voice_live.py``).
 Here the two meet, the way a person uses the notebook: the kernel's microphone
 is a stand-in that plays, in real time, sentences of a synthetic voice
 (:class:`notebook_harness.SpokenInput`). From there on everything is the
-notebook's own: Silero, the utterance cut, the real Gemma on a llama-server
-the kernel starts, the console's queue, the behaviors on the twin.
+notebook's own: Silero, the utterance cut, the real voice model the config
+selects (d1-Omni-2B by default, or Gemma 4) on a llama-server the kernel
+starts, the console's queue, the behaviors on the twin.
 
 The kernel is this module's own. Its notebook runs through ``c0000014``, whose
 ``voice.listen()`` asks for one spoken command and gets one; the test then
@@ -46,8 +47,9 @@ from twin_ros_rig import BODY_JOINTS
 pytestmark = [pytest.mark.sim, pytest.mark.hw, pytest.mark.docs, pytest.mark.slow, pytest.mark.timeout(120)]
 
 # The commands spoken, in this order, and between the first two a question, which is no command.
-# The sentences are ones the real Gemma took right on every clip of the synthetic voice
-# (three clips each, 2026-11-24).
+# The sentences are ones both voice models took right on every clip of the synthetic voice
+# (three clips each, 2026-11-24): the test runs with whichever the config selects. A plain
+# "go home" is not among them: d1-Omni-2B took one of its three clips for a pick.
 QUESTION = "what is the weather like today"
 COMMANDS = ["wave", "pick_place", "release", "home"]
 
@@ -62,11 +64,26 @@ def kernel(observers, microphone):  # noqa: F811
     yield from notebook_kernel(microphone)
 
 
-def test_listen_printed_the_command_gemma_picked(kernel):
-    """Cell c0000014's ``voice.listen()`` heard the sentence said to it and named its command."""
+def _thing(name: str) -> str:
+    """An object as the detector knows it: Gemma says "ball", d1-Omni-2B "sports ball"."""
+    from common.imaging import resolve_class
+
+    return resolve_class(name) or name
+
+
+def test_listen_printed_the_command_the_configured_model_picked(kernel):
+    """Cell c0000014's ``voice.listen()`` heard the sentence said to it and named its command,
+    under the name the pipeline's config gives the voice model it selects."""
+    import re
+
+    from vla_pipeline.utils.config import load_config
+
+    cfg = load_config()
+    name = cfg[cfg["voice_intent"]]["name"]
     said = kernel.watcher.text()
-    assert "Gemma picked: pick_place (object: ball)" in said, (
-        f"voice.listen() did not report the command of {LISTEN_SENTENCE!r}:\n{said[-1500:]}")
+    picked = re.search(re.escape(name) + r" picked: pick_place \(object: ([a-z ]+)\)", said)
+    assert picked, f"voice.listen() did not report the command of {LISTEN_SENTENCE!r} by {name}:\n{said[-1500:]}"
+    assert _thing(picked.group(1)) == "sports ball", picked.group(0)
 
 
 def test_spoken_commands_in_a_row_each_run(observers, kernel, microphone):
@@ -97,12 +114,12 @@ def test_spoken_commands_in_a_row_each_run(observers, kernel, microphone):
         seen["ball"] = await asyncio.to_thread(scene.reading, "sports_ball", after=time.time())
         seen["release"] = await say(console, "open your hand", "release")
         seen["dropped"] = await asyncio.to_thread(scene.reading, "sports_ball", after=time.time())
-        seen["home"] = await say(console, "go home", "home")
+        seen["home"] = await say(console, "robot, go home", "home")
         seen["joints"] = await asyncio.to_thread(probe.joints, after=time.time())
 
     namespace = kernel.run(script)
 
-    assert seen["pick"]["delivered"]["object"] == "ball", seen["pick"]
+    assert _thing(seen["pick"]["delivered"]["object"]) == "sports ball", seen["pick"]
     assert "Got the sports ball." in seen["pick"]["said"], seen["pick"]
     ball = seen["ball"]
     assert ball["grasped"] and ball["xyz"][2] > 0.08, f"the ball is not held up after the spoken pick: {ball}"

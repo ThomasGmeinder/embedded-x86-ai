@@ -38,7 +38,7 @@ import cv2
 import numpy as np
 
 from so101_sim import MOTOR_SHORT
-from so101_sim.tiles import DETECT, HANDS, POSE, VIEW, VOICE, with_processor
+from so101_sim.tiles import DETECT, HANDS, NO_VOICE, POSE, VIEW, with_processor
 
 from common.imaging import draw_skeleton
 from common.motion import GRIPPER_TORQUE_LIMIT
@@ -288,6 +288,9 @@ class TwinConsole:
     ):
         self.arm = arm
         self.voice = voice  # "mic" | "typed"
+        # The voice panel's caption: the voice model the pipeline's config selects, set by
+        # whoever opens that model (common.twin_voice.VoiceCommands).
+        self.voice_caption = NO_VOICE
         self.hint = hint
         self.load_threshold = float(load_threshold)
         self.mount = FanoutCamera(mount) if mount is not None else None
@@ -400,7 +403,7 @@ class TwinConsole:
         p = np.full((VIEW_H, PANEL_W, 3), 28, np.uint8)
         now = time.monotonic()
         y = 22
-        for line in VOICE:
+        for line in self.voice_caption:
             cv2.putText(p, line, (12, y), FONT, 0.45, WHITE, 1, cv2.LINE_AA)
             y += 18
         with self._lock:

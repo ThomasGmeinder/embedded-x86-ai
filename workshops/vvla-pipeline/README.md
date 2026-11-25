@@ -1,10 +1,14 @@
 # Strix VVLA Pipeline
 Voice-Vision-Language-Action
-Gemma4-Yolov26-ROS2
+d1-Omni-2B-Yolov26-ROS2
 
 Voice-controlled robot behaviors for the **LeRobot SO-101** arm on an **AMD Ryzen AI APU (Strix Point / Strix Halo, gfx1150 / gfx1151 / gfx1100 for compatibility)** — speech, language, and vision all running locally, split across the NPU, iGPU, and CPU.
 
-The robot has senses: **Gemma 4 is its ears and its brain**, **YOLO is its eyes**, and the **feedback gripper is its sense of touch**. You speak; it hears, understands, looks, and acts.
+The robot has senses: **d1-Omni-2B is its ears and its brain**, **YOLO is its eyes**, and the **feedback gripper is its sense of touch**. You speak; it hears, understands, looks, and acts.
+
+The voice model is a setting: `voice_intent` in `config/pipeline.yaml`. Liquid AI's d1-Omni-2B, a decision model, is the default; Gemma 4 E4B is the other choice ([The other voice model: Gemma 4](#the-other-voice-model-gemma-4)). Where this README says "the voice model", it means the one that setting names.
+
+A spoken command is acted on 0.39 s after its last word with d1-Omni-2B and 0.49 s after it with Gemma 4 (medians, measured in the same run): the decision model is 0.10 s, or 20 %, faster. [Voice latency](#voice-latency) has the measurements.
 
 
 ## Pipeline architecture
@@ -24,8 +28,8 @@ flowchart TB
     end
 
     subgraph THINK["Language &amp; routing"]
-        GEMMA["Gemma 4 E4B<br/>speech and intent<br/>(iGPU, GBNF)"]:::gpu
-        STOPCHK{{"stop robot?<br/>(Gemma's stop command)"}}:::gate
+        GEMMA["d1-Omni-2B<br/>speech to command<br/>(iGPU, fixed answers)"]:::gpu
+        STOPCHK{{"stop robot?<br/>(the model's stop command)"}}:::gate
         REG["CommandRegistry<br/>dispatch (main thread)"]:::cpu
     end
 
@@ -82,7 +86,7 @@ flowchart TB
     classDef gate fill:#f5f5f5,stroke:#666,color:#000;
 ```
 
-Legend — <span title="NPU">🟧 NPU (VitisAI EP)</span> · 🟦 iGPU (ROCm) · 🟪 CPU · 🟩 behavior · 🟥 robot/transport. YOLO-pose and YOLO-detect run on the NPU. Silero runs on the CPU. Gemma 4 E4B runs on the iGPU. See [Compute placement → NPU load order](#npu-load-order-important).
+Legend — <span title="NPU">🟧 NPU (VitisAI EP)</span> · 🟦 iGPU (ROCm) · 🟪 CPU · 🟩 behavior · 🟥 robot/transport. YOLO-pose and YOLO-detect run on the NPU. Silero runs on the CPU. The voice model (d1-Omni-2B by default) runs on the iGPU. See [Compute placement → NPU load order](#npu-load-order-important).
 
 ## The robot's senses → an SO-101
 
@@ -101,7 +105,7 @@ flowchart LR
     end
 
     EARS["👂 EARS<br/><b>Silero · CPU</b><br/>which frames are speech"]:::ear
-    BRAIN["🧠 BRAIN<br/><b>Gemma 4 E4B · iGPU</b><br/>speech and intent<br/>(one utterance, GBNF)"]:::brain
+    BRAIN["🧠 BRAIN<br/><b>d1-Omni-2B · iGPU</b><br/>speech to command<br/>(one utterance, fixed answers)"]:::brain
     EYES["👁 EYES<br/><b>YOLOv26s · NPU</b><br/>pose = where you are<br/>detect = what to grab"]:::eye
     TOUCH["✋ TOUCH<br/><b>Feedback gripper</b><br/>current + position stall<br/>+ camera verify"]:::touch
 
@@ -118,23 +122,23 @@ flowchart LR
     classDef touch fill:#f8cecc,stroke:#b85450,color:#000,font-size:14px;
 ```
 
-**Ears (Silero) → Brain (Gemma 4):** Silero on the CPU marks the 20 ms frames that are speech. They are collected into an utterance, which goes to Gemma 4 E4B on the iGPU the moment the person has been silent for 0.3 s. The grammar lets Gemma emit only the list `["<command>", "<object>", "<words heard>"]`, and the command is acted on as soon as Gemma has written it, before the words. **Eyes (YOLO) → the arm's aim and reach:** YOLO-pose finds *where you are* (drives `shoulder_pan` and the up/down reach for mimicry and handoff), while YOLO-detect finds *what to grab* (grounds "the ball" on a settled sweep, and one stored frame — the camera ray through the box's bottom meeting the table — gives the object's position for one IK reach). **Touch (gripper) → the jaws:** the feedback close loop senses contact through servo current and position stall, confirms with the arm camera, and keeps the goal a little past contact at `Torque_Limit` 500 while both fingers seat, then eases to `hold_torque_limit` for the carry — which is why a pen no longer slips.
+**Ears (Silero) → Brain (d1-Omni-2B):** Silero on the CPU marks the 20 ms frames that are speech. They are collected into an utterance, which goes to the voice model on the iGPU the moment the person has been silent for 0.3 s. d1-Omni-2B writes no text: it is asked which of the ten commands the speaker gave and, for a pick, which object, and it picks from those fixed answers. The command is acted on as soon as it is picked. **Eyes (YOLO) → the arm's aim and reach:** YOLO-pose finds *where you are* (drives `shoulder_pan` and the up/down reach for mimicry and handoff), while YOLO-detect finds *what to grab* (grounds "the ball" on a settled sweep, and one stored frame — the camera ray through the box's bottom meeting the table — gives the object's position for one IK reach). **Touch (gripper) → the jaws:** the feedback close loop senses contact through servo current and position stall, confirms with the arm camera, and keeps the goal a little past contact at `Torque_Limit` 500 while both fingers seat, then eases to `hold_torque_limit` for the carry — which is why a pen no longer slips.
 
 ## Voice commands → behaviors
 
-Gemma 4 is constrained by `config/intent.gbnf` so it can only emit the list `["<intent>", "<object words>", "<words heard>"]`. A spoken "stop robot" is Gemma's `stop` command; a typed one is matched as a keyword before Gemma is asked. Either interrupts the running behavior. "stop" alone is not a command.
+The voice model can only answer with one of the ten commands below. d1-Omni-2B picks it from the answers it is offered (`COMMAND_ANSWERS` in `vla_pipeline/llm/intents.py`); Gemma 4 is held to the list `["<intent>", "<object words>", "<words heard>"]` by `config/intent.gbnf`. A spoken "stop robot" is the model's `stop` command; a typed one is matched as a keyword before the model is asked. Either interrupts the running behavior. "stop" alone is not a command.
 
 | Say something like | Intent | What happens |
 |---|---|---|
 | "mirror my arm", "copy my movements" | `gesture_mimic` | YOLO-pose tracks your wrist; a direct camera-frame mapping drives the arm joints to follow your hand (depth from MediaPipe hand size). MediaPipe tracks your thumb–index pinch → gripper. |
 | "pick up the ball", "grab the bottle and give it to me" | `pick_place` | YOLO-detect grounds the named object on the arm camera → stop at the first usable view → one table locate → one grasp solve → joint-space descent → feedback grasp → lift it above the other objects and hold it out. The jaws stay closed. |
-| "release", "open", "drop it" | `release` | Gemma maps the phrase to `release`. The jaws open where they are and the arm stays put, so the object can be taken or dropped. |
+| "release", "open", "drop it" | `release` | The voice model maps the phrase to `release`. The jaws open where they are and the arm stays put, so the object can be taken or dropped. |
 | "fetch the block", "bring me the cube" | `fetch_block` | Approach the block at its taught pose → grasp → lift → find you (YOLO-pose) → extend → release → home. |
 | "hold this", "take this pencil" | `grip` | Closes until contact (current/stall + grace window), confirms with the arm camera, then **locks the grip** until "release". A following `gesture_mimic` hands the gripper to your pinch, so the object drops when you open your fingers. |
 | "dance", "show me some moves" | `dance` | BPM-paced keyframe choreography. |
 | "wave at me", "say hi" | `wave` | Raises the arm and waves `behaviors.wave.cycles` times. |
 | "go home" | `home` | Returns to the rest pose. "home" or "reset" alone is not a command. |
-| "stop robot" | `stop` | **Interrupts any running behavior immediately.** Spoken, it is Gemma's `stop` command; typed, it is matched as a keyword before Gemma is asked. "stop" alone is not a command. |
+| "stop robot" | `stop` | **Interrupts any running behavior immediately.** Spoken, it is the voice model's `stop` command; typed, it is matched as a keyword before the model is asked. "stop" alone is not a command. |
 
 ## Tested environment
 
@@ -144,8 +148,9 @@ Gemma 4 is constrained by `config/intent.gbnf` so it can only emit the list `["<
 | OS | Ubuntu 24.04 |
 | ROCm | 7.2.4 |
 | Ryzen AI SW | 1.7.1 (VitisAI ONNX Runtime EP) |
-| llama.cpp | build 12720 (commit `33aeb17`), built with HIP; Gemma 4 audio needs commit `547765a` or newer |
-| Voice model | Gemma 4 E4B-IT, Q4_0 GGUF, with its Q8_0 audio projector (`ggml-org/gemma-4-E4B-it-GGUF`) |
+| llama.cpp | build 12720 (commit `33aeb17`), built with HIP; d1-Omni-2B needs commit `d05706b` or newer, Gemma 4 audio `547765a` or newer |
+| Voice model (default) | Liquid AI d1-Omni-2B, Q8_0 GGUF, with its Q8_0 projector (`LiquidAI/d1-Omni-2B-GGUF`) |
+| Voice model (the other choice, and the student lesson's) | Gemma 4 E4B-IT, Q4_0 GGUF, with its Q8_0 audio projector (`ggml-org/gemma-4-E4B-it-GGUF`) |
 | ROS 2 | Jazzy (required), with ros2_control and the controllers |
 | LeRobot | v0.6.0 source, installed without its dependency set. The Feetech SDK is installed separately. |
 | PyTorch | 2.11.0+rocm7.13.0 from `repo.amd.com/rocm/whl/<detected gfx>`. The PyPI wheel is not used; it downloads the NVIDIA CUDA stack. |
@@ -163,7 +168,7 @@ The pipeline is powered by AI models that utilize every subsystem of the APU. Ea
 </thead>
 <tbody>
 <tr style="background-color: rgba(0, 0, 0, 0)"><td rowspan="2" valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Voice control</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Silero VAD</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">marks 20 ms frames that contain speech</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">ONNX Runtime</td></tr>
-<tr style="background-color: rgba(0, 0, 0, 0)"><td style="border: 1px solid rgba(128, 128, 128, 0.4)">Gemma 4 E4B-IT (Q4_0)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">an utterance of audio → command</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">iGPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)"><code>llama.cpp</code> <code>llama-server</code> (HIP) and the audio projector</td></tr>
+<tr style="background-color: rgba(0, 0, 0, 0)"><td style="border: 1px solid rgba(128, 128, 128, 0.4)">d1-Omni-2B (Q8_0), or Gemma 4 E4B-IT (Q4_0) when <code>voice_intent</code> selects it</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">an utterance of audio → command</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">iGPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)"><code>llama.cpp</code> <code>llama-server</code> (HIP) and the audio projector</td></tr>
 <tr style="background-color: rgba(0, 0, 0, 0)"><td rowspan="2" valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Gestures</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">YOLOv26s-pose</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">finds your body and wrist</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">NPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">ONNX Runtime, VitisAI EP</td></tr>
 <tr style="background-color: rgba(0, 0, 0, 0)"><td style="border: 1px solid rgba(128, 128, 128, 0.4)">MediaPipe Hands</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">detects the hand gesture (pinch, roll)</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">CPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">MediaPipe Tasks</td></tr>
 <tr style="background-color: rgba(0, 0, 0, 0)"><td rowspan="2" valign="top" style="background-color: rgba(128, 128, 128, 0.2); vertical-align: top; border: 1px solid rgba(128, 128, 128, 0.4)">Object localization</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">YOLOv26s-detect</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">finds the named object in the arm camera</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">NPU</td><td style="border: 1px solid rgba(128, 128, 128, 0.4)">ONNX Runtime, VitisAI EP</td></tr>
@@ -172,13 +177,13 @@ The pipeline is powered by AI models that utilize every subsystem of the APU. Ea
 </tbody>
 </table>
 
-An utterance goes to Gemma the moment the person falls silent. [Voice latency](#voice-latency) has the measured times; the samples are not denoised.
+An utterance goes to the voice model the moment the person falls silent. [Voice latency](#voice-latency) has the measured times; the samples are not denoised. The digital twin notebook builds this same table from the config files (`workshop/common/compute_placement.py`), so there it always shows the model that is set.
 
 Every NPU session is built through one shared factory (`vla_pipeline/utils/npu_session.py`), and each model's `device:` is set in `config/pipeline.yaml`.
 
 ### NPU load order (important)
 
-YOLO-pose and YOLO-detect run on the NPU. Voice does not: Silero is on the CPU and Gemma 4 is on the iGPU.
+YOLO-pose and YOLO-detect run on the NPU. Voice does not: Silero is on the CPU and the voice model is on the iGPU.
 
 Those two sessions share buffers within a process. The first one sizes them, and they last until the last one closes. Opening YOLO-pose while YOLO-detect is already open fails with `HW context creation unsuccessful / sub buffer size and offset`. `size_npu` opens YOLO-pose first and keeps that session for the life of the process, so the detector can load after it.
 
@@ -410,11 +415,11 @@ python scripts/export_yolo26s_detect.py
 ./bootstrap.sh --skip-apt --skip-llama --skip-models
 ```
 
-`./bootstrap.sh` installs the apt packages, ROCm, the `.venv`, the ROCm PyTorch wheels, LeRobot v0.6.0 without its dependency set, and llama.cpp with HIP (gfx1100 on Strix). A checkout on another LeRobot release is moved to v0.6.0. numpy stays below 2 and huggingface-hub stays on 0.34.2 through 0.35.x, because those are the pins in `requirements.txt`. ONNX Runtime needs the numpy 1.x ABI, and transformers needs huggingface-hub below 1.0. It downloads the Gemma 4 E4B GGUF and its audio projector with `hf download` from `ggml-org/gemma-4-E4B-it-GGUF`, and Silero VAD v6.2.3, through `scripts/ensure_voice.sh`. It installs ROS 2 Jazzy when it is absent, plus ros2_control, the controllers, and `topic_based_ros2_control` 0.3.0 with the patches in `patches/topic_based_ros2_control/`, and builds that into `ros_ws/`. The second run writes `cache/yolo26s_pose_fp32/` and `cache/yolo26s_detect_fp32/` (about 16 minutes and 3 minutes). `./run_pipeline.sh` sources the venv, ROS 2, and `scripts/ryzen_ai_env.sh`.
+`./bootstrap.sh` installs the apt packages, ROCm, the `.venv`, the ROCm PyTorch wheels, LeRobot v0.6.0 without its dependency set, and llama.cpp with HIP (gfx1100 on Strix). A checkout on another LeRobot release is moved to v0.6.0. numpy stays below 2 and huggingface-hub stays on 0.34.2 through 0.35.x, because those are the pins in `requirements.txt`. ONNX Runtime needs the numpy 1.x ABI, and transformers needs huggingface-hub below 1.0. It downloads both voice models into `models/` with `hf download`, each GGUF with its projector (d1-Omni-2B from `LiquidAI/d1-Omni-2B-GGUF`, 2.2 GB; Gemma 4 E4B from `ggml-org/gemma-4-E4B-it-GGUF`, 4.8 GB), and Silero VAD v6.2.3, through `scripts/ensure_voice.sh`. The launchers run that script too, so a model that is missing later is fetched at the next start. It installs ROS 2 Jazzy when it is absent, plus ros2_control, the controllers, and `topic_based_ros2_control` 0.3.0 with the patches in `patches/topic_based_ros2_control/`, and builds that into `ros_ws/`. The second run writes `cache/yolo26s_pose_fp32/` and `cache/yolo26s_detect_fp32/` (about 16 minutes and 3 minutes). `./run_pipeline.sh` sources the venv, ROS 2, and `scripts/ryzen_ai_env.sh`.
 
 `cache/` is not in git and does not copy to another machine: a cache from a different compiler loads and then mis-detects (`recompile model with latest VAIML version`). Delete the two directories above and run the second bootstrap again on this machine. To rebuild one model, remove its directory and run `scripts/compile_npu_models.sh --only yolo_pose` (or `yolo_detect`). When those `.rai` files were already compiled here, skip the export and the second bootstrap: `./bootstrap.sh --skip-compile` is the whole repository step. Other flags are `--skip-apt`, `--skip-llama`, `--skip-models`, and `--cpu-only`.
 
-`scripts/verify_npu_stack.py --preflight` confirms the VitisAI provider. `scripts/ensure_voice.sh` confirms the Gemma GGUF, the audio projector, Silero, and a `llama-server` built with Gemma 4 audio.
+`scripts/verify_npu_stack.py --preflight` confirms the VitisAI provider. `scripts/ensure_voice.sh` confirms both voice models' GGUF and projector files, Silero, and a `llama-server` built from a llama.cpp that knows both models. `bootstrap.sh` clones llama.cpp when it is missing and does not update an existing checkout; on a machine set up before d1-Omni-2B the script says so and names the two commands that update and rebuild it.
 
 ### Robot prerequisites (hardware runs only)
 
@@ -481,7 +486,7 @@ Hold your hand at a comfortable mid-distance, then paste the printed `hand_size_
 
 ### Pose backend choice
 
-Kept: **YOLOv26s-pose on the NPU for the body + MediaPipe Hands on CPU for the pinch.** Rationale: the NPU session is already compiled/cached, runs at camera rate without touching CPU/iGPU budgets needed by Gemma and MediaPipe, and COCO-17 keypoints are exactly what the mapper needs; MediaPipe Hands remains the best cheap pinch detector. The often-suggested alternative — MediaPipe Pose with world landmarks (metric 3-D, CPU) — would give Z without calibration, but costs CPU it would share with MediaPipe Hands, adds a second pose stack to fuse, and its world-landmark Z is noisy enough at 2-3 m that it needs the same One Euro treatment anyway. The mapper is backend-agnostic (consumes COCO-17 arrays), so swapping the estimator later is a one-file change.
+Kept: **YOLOv26s-pose on the NPU for the body + MediaPipe Hands on CPU for the pinch.** Rationale: the NPU session is already compiled/cached, runs at camera rate without touching CPU/iGPU budgets needed by the voice model and MediaPipe, and COCO-17 keypoints are exactly what the mapper needs; MediaPipe Hands remains the best cheap pinch detector. The often-suggested alternative — MediaPipe Pose with world landmarks (metric 3-D, CPU) — would give Z without calibration, but costs CPU it would share with MediaPipe Hands, adds a second pose stack to fuse, and its world-landmark Z is noisy enough at 2-3 m that it needs the same One Euro treatment anyway. The mapper is backend-agnostic (consumes COCO-17 arrays), so swapping the estimator later is a one-file change.
 
 ## Gripper: closing on contact
 
@@ -494,35 +499,52 @@ Kept: **YOLOv26s-pose on the NPU for the body + MediaPipe Hands on CPU for the p
 
 ## Voice latency
 
-A sentence is sent the moment it has ended, and its command is acted on the moment Gemma has written it.
+A sentence is sent the moment it has ended, and its command is acted on the moment the voice model has decided it.
 
-1. **The utterance.** A constant offset is first taken out of the microphone's samples (a built-in microphone was measured to deliver samples around +1028, which alone reads −30 dBFS). Silero marks each 20 ms frame as speech or not. An utterance starts at the first speech frame, with `pre_roll_ms` (300 ms) of the sound before it, and is sent on the frame that completes `end_silence_ms` (300 ms) of silence: one request per sentence. Gemma takes a whole clip, not sound as it comes, so the end of the speech is the earliest moment a sentence can be sent. An utterance is at most `window_s` (6 s) long; one with less than `min_voice_ms` (100 ms) of speech is dropped. It is raised to a fixed level before it is sent, because Gemma hears quiet sound worse.
-2. **The answer.** Gemma writes the list `["<command>", "<object>", "<words heard>"]`, and the client reads it as it is written. The command and the object come first: the behavior starts when they are complete, while Gemma still writes the words it heard. The words are shown when they arrive. An utterance that holds no command ends its request there. A typed sentence ends its request at the command too.
+1. **The utterance.** A constant offset is first taken out of the microphone's samples (a built-in microphone was measured to deliver samples around +1028, which alone reads −30 dBFS). Silero marks each 20 ms frame as speech or not. An utterance starts at the first speech frame, with `pre_roll_ms` (300 ms) of the sound before it, and is sent on the frame that completes `end_silence_ms` (300 ms) of silence: one request per sentence. The voice model takes a whole clip, not sound as it comes, so the end of the speech is the earliest moment a sentence can be sent. An utterance is at most `window_s` (6 s) long; one with less than `min_voice_ms` (100 ms) of speech is dropped. It is raised to a fixed level before it is sent; that level was chosen with Gemma, which hears quiet sound worse, and d1-Omni-2B is sent the same sound.
+2. **The answer.** d1-Omni-2B, a decision model, writes no text. It is asked one question, which command the speaker gave, and answers in one pass over the clip; for a pick it is asked a second one, which object. The behavior starts when the answer is in. An utterance that holds no command ends there.
 3. **The warm-up.** One request is sent when the server has started, so the first spoken command does not pay for the model reading in its instructions.
 
-Measured on a Strix Halo (Ryzen AI Max+ 395) with sentences of a synthetic voice played in real time through the listener and the real Gemma, from the end of a sentence to its command:
+How d1-Omni-2B is asked (`vla_pipeline/llm/intents.py`, `COMMAND_ANSWERS`): "What does the speaker ask the robot arm to do?", with one answer per command, each a few phrases a speaker says for it, and four answers that all mean no command (one word alone, talk about stopping, a negation, any other talk). The object of a pick is chosen out of every name the detector knows. Two rules use the probabilities it returns: a pick is taken when its probability reaches `min_pick_probability` (0.08), and the names of one object ("ball", "football", "sports ball") are added up before the object is chosen. It writes no words, so the console shows the command and no "you: …" line for speech.
 
-| Listener | min / median / max |
-|---|---|
-| before: the last 6 s of sound sent every 2 s, the whole answer awaited | 0.87 / 2.01 / 2.22 s |
-| now: one utterance, the command acted on when written | 0.45 / 0.46 / 0.71 s |
+Measured on a Strix Halo (Ryzen AI Max+ 395) with six sentences of a synthetic voice played in real time through the listener and the real model, from the end of a sentence to its command (2026-11-25, llama.cpp build 12720, both models in the same test run):
 
-The second row was measured on 2026-11-25 with llama.cpp build 12720; an earlier build, 11548, gave 0.55 / 0.55 / 0.77 s for the same listener. Of the 0.46 s, 0.3 s is the end silence and 0.15 s is the request up to the command; the words heard follow 0.11 to 0.16 s later. The slowest of the six sentences is "pick up the ball", the first one and the only one with an object: its request takes 0.39 s to the command. Every command logs its own time: `Command 'home' 0.46 s after the end of the speech (request 0.15 s to the call)`. `tests/sim/test_voice_live.py` repeats the measurement.
+| From the last word to the command | min | median | max |
+|---|---|---|---|
+| d1-Omni-2B, the decision model (the default) | 0.39 s | 0.39 s | 0.61 s |
+| Gemma 4 E4B | 0.47 s | 0.49 s | 0.76 s |
+| d1-Omni-2B is faster by | 0.08 s (17 %) | 0.10 s (20 %) | 0.15 s (20 %) |
 
-Two more measurements, both on the same machine:
+Both wait the same 0.3 s of end silence, so the whole difference is the model's own time. That time alone, from the request to the command, median over typed sentences and clips of the synthetic voice (2026-11-24, llama.cpp `33aeb17`):
 
-- **A person at the microphone, with two talk shows playing beside it** (2026-11-25, the digital twin notebook running, the first 14 minutes, times from the `llama-server` log). Of 96 requests, 67 ended at the call, which is where a sentence without a command ends: 0.21 / 0.24 / 0.34 s (min / median / max). The 29 spoken commands were read to the end, words included, in 0.29 / 0.44 / 0.56 s. The person reported that the commands were understood over the other voices. The time from the end of a spoken sentence to its command was not logged in that session.
-- **While the digital twin renders on the same iGPU.** A spoken clip's request takes 3 % longer up to the command: 0.227 s instead of 0.220 s (median), with the twin rendering its wrist, mount and 3-D views.
+| From the request to the command, median | d1-Omni-2B | Gemma 4 E4B | d1-Omni-2B is faster by |
+|---|---|---|---|
+| Typed sentence | 0.093 s | 0.135 s | 0.042 s (31 %) |
+| Spoken sentence, not a pick | 0.110 s | 0.185 s | 0.075 s (41 %) |
+| Spoken pick, with its object | 0.230 s | 0.275 s | 0.045 s (16 %) |
 
-A spoken "stop robot" is a command Gemma returns like any other, so a stop takes the same time. "stop" alone does nothing.
+A pick gains least because d1-Omni-2B is asked a second question for the object, while Gemma writes the object in the same answer.
 
-### The other voice model: d1-Omni-2B
+Of d1-Omni-2B's 0.39 s, 0.3 s is the end silence and 0.08 s is the request. The slowest of the six sentences is "pick up the ball", the only one with an object and so with two questions: its request takes 0.30 s. Every command logs its own time: `Command 'home' 0.39 s after the end of the speech (request 0.08 s to the call)`. `tests/sim/test_voice_live.py` repeats the measurement for both models.
 
-`voice_intent: d1-omni-2b` in `config/pipeline.yaml` replaces Gemma with Liquid AI's d1-Omni-2B, a decision model: it writes no text, it picks one of the answers it is offered, in one pass. Run `scripts/ensure_voice.sh` once after the change; it fetches the model (2.2 GB) and checks that `llama-server` is new enough for it. The microphone, the utterance cut and the behaviors are the same for both models.
+Two more measurements of d1-Omni-2B, both on the same machine:
 
-What it is asked (`vla_pipeline/llm/intents.py`, `COMMAND_ANSWERS`): "What does the speaker ask the robot arm to do?", with one answer per command, each a few phrases a speaker says for it, and four answers that all mean no command (one word alone, talk about stopping, a negation, any other talk). For a pick it is asked a second question, which object, out of every name the detector knows. Two rules use the probabilities it returns: a pick is taken when its probability reaches `min_pick_probability` (0.08), and the names of one object ("ball", "football", "sports ball") are added up before the object is chosen. It writes no words, so the console shows the command and no "you: …" line for speech.
+- **A person at the microphone** (2026-11-25, 3 minutes, times from the `llama-server` log): 60 passes of the model, each 0.09 / 0.16 / 0.24 s (min / median / max). A pass is one question, so a pick is two. The person reported that it worked well. Not measured in that session: the time from the end of a sentence to its command, and how it does with other people talking in the room.
+- **While the digital twin renders on the same iGPU.** A spoken clip's request takes 3 % longer: 0.078 s instead of 0.076 s (median), with the twin rendering its wrist, mount and 3-D views.
 
-Measured side by side on a Strix Halo (Ryzen AI Max+ 395), both models through their own parsers on the same inputs (2026-11-24, llama.cpp `33aeb17`). Speech is a synthetic voice (espeak-ng); "voice B" is a second synthetic voice neither model was tuned on; "noise" is pink noise 10 dB below the speech. "Tuned-on" are the sentences d1's answers were chosen with; "held-out" are sentences in none of its answers' phrases. A pick is right only with its object.
+A spoken "stop robot" is a command the voice model returns like any other, so a stop takes the same time. "stop" alone does nothing.
+
+### The other voice model: Gemma 4
+
+`voice_intent: gemma4-e4b-it` in `config/pipeline.yaml` replaces d1-Omni-2B with Gemma 4 E4B. Nothing else has to be done: `scripts/ensure_voice.sh` keeps both models' files in place (d1-Omni-2B 2.2 GB, Gemma 4 4.8 GB) and checks that `llama-server` is new enough for both. The microphone, the utterance cut and the behaviors are the same for both models. The student lesson's own intent parser (`workshop/project`, `workshop/solution`) always uses Gemma 4.
+
+What differs with Gemma. It writes the list `["<command>", "<object>", "<words heard>"]`, held to that shape by `config/intent.gbnf`, and the client reads it as it is written. The command and the object come first: the behavior starts when they are complete, while Gemma still writes the words it heard, which the console then shows. A typed sentence ends its request at the command.
+
+Gemma 4 at the microphone, with two talk shows playing beside it (2026-11-25, the digital twin notebook running, the first 14 minutes, times from the `llama-server` log): of 96 requests, 67 ended at the call, which is where a sentence without a command ends, in 0.21 / 0.24 / 0.34 s (min / median / max); the 29 spoken commands were read to the end, words included, in 0.29 / 0.44 / 0.56 s. The person reported that the commands were understood over the other voices. Before the listener sent one utterance per sentence, Gemma was sent the last 6 s of sound every 2 s and the whole answer was awaited: 0.87 / 2.01 / 2.22 s.
+
+### The two models side by side
+
+Measured on a Strix Halo (Ryzen AI Max+ 395), both models through their own parsers on the same inputs (2026-11-24, llama.cpp `33aeb17`). Speech is a synthetic voice (espeak-ng); "voice B" is a second synthetic voice neither model was tuned on; "noise" is pink noise 10 dB below the speech. "Tuned-on" are the sentences d1's answers were chosen with; "held-out" are sentences in none of its answers' phrases. A pick is right only with its object.
 
 | Right answers, Gemma 4 / d1-Omni-2B | Commands | Picks | Must do nothing | All |
 |---|---|---|---|---|
@@ -535,22 +557,17 @@ Measured side by side on a Strix Halo (Ryzen AI Max+ 395), both models through t
 | Noise, tuned-on | 20 / 32 of 36 | 6 / 8 of 21 | 33 / 36 of 42 | 59 / 76 of 99 |
 | Noise, held-out | 34 / 39 of 48 | 10 / 12 of 12 | 37 / 28 of 42 | 81 / 79 of 102 |
 
-| Seconds from the request to the command, median | Gemma 4 | d1-Omni-2B |
-|---|---|---|
-| Typed | 0.135 | 0.093 |
-| Spoken, not a pick | 0.185 | 0.110 |
-| Spoken pick, with its object | 0.275 | 0.230 |
-| From the last word to the command, live (`tests/sim/test_voice_live.py`) | 0.48 | 0.38 |
+The two models' times are in [Voice latency](#voice-latency): d1-Omni-2B's command comes 0.10 s (20 %) sooner after the last word, and its request alone is 16 to 41 % shorter.
 
-What the numbers say. d1-Omni-2B is the faster one, by about 0.1 s a command, and it finds commands and picks at least as well as Gemma, also in the second voice and in noise. It is worse at leaving talk alone that it was not shown: on the held-out sentences that must do nothing it is right 92 times of 140 against Gemma's 120. A sentence that names an object ("the ball is red") is taken for a pick, and "don't wave at them" for a wave. Gemma in turn takes a bare "stop", "halt" or "freeze" for a stop, which d1 does not. Both are 3 % slower while the twin renders on the same iGPU (three views, 17 ms a pass either way). Not measured: a person at the microphone. `min_pick_probability` and the answers' phrases are calibrated on the synthetic voice; calibrate them again on the voices of your floor.
+What the numbers say. d1-Omni-2B is the faster one, by about 0.1 s a command, and it finds commands and picks at least as well as Gemma, also in the second voice and in noise. It is worse at leaving talk alone that it was not shown: on the held-out sentences that must do nothing it is right 92 times of 140 against Gemma's 120. A sentence that names an object ("the ball is red") is taken for a pick, and "don't wave at them" for a wave. When these tables were measured Gemma took a bare "stop", "halt" or "freeze" for a stop, which d1 does not; its instructions were reworded the next day and it now leaves them alone (`tests/sim/test_voice_live.py` asks it). Both are 3 % slower while the twin renders on the same iGPU (three views, 17 ms a pass either way). Each model has been used at the microphone by one person; only Gemma with other voices playing in the room. `min_pick_probability` and the answers' phrases are calibrated on the synthetic voice; calibrate them again on the voices of your floor, and raise `d1-omni-2b.min_confidence` there if talk that is no command moves the arm.
 
 ### No denoiser
 
-An utterance is sent with the microphone's constant offset taken out and raised to a fixed level; nothing else is done to it. There is no noise-suppression stage. Google's audio guide for Gemma 4 specifies one channel, 16 kHz, float samples from −1 to 1, and a Fourier resample. It does not specify a denoiser ([Audio understanding](https://ai.google.dev/gemma/docs/capabilities/audio)).
+An utterance is sent with the microphone's constant offset taken out and raised to a fixed level; nothing else is done to it. There is no noise-suppression stage, for either voice model. Liquid's model card for d1-Omni-2B asks for one channel of 16-bit samples at 16 kHz. Google's audio guide for Gemma 4 specifies one channel, 16 kHz, float samples from −1 to 1, and a Fourier resample, and it does not specify a denoiser ([Audio understanding](https://ai.google.dev/gemma/docs/capabilities/audio)).
 
-A cleaner in front of this model is a poor trade. Gemma 4 E4B is weaker on noisy spontaneous speech than on clean read speech, and it inserts words when the audio is hard ([Open ASR write-up](https://twango.dev/writing/gemma4-asr-benchmark)). A 20-clip noisy-English set measured 7.6% word error ([TypeWhisper](https://typewhisper.github.io/typewhisper-benchmark/?model=crispasr%3Agemma4-e4b-it-q8_0&view=model)). MetricGAN raised the error for Whisper, Parakeet, and Gemini on every noise condition tried, including clips that were already clean ([When De-noising Hurts](https://arxiv.org/html/2512.17562)). SAM-Audio separation raised the signal-to-noise ratio and still raised Whisper's word error ([When Audio Separation Hurts](https://arxiv.org/html/2603.04710v2)). On large audio-language models, ordinary denoisers sometimes made the internal noise measure worse ([SEE](https://arxiv.org/html/2601.07331)). The enhancer invents a spectrum the encoder was not trained on, and the language model then guesses the missing words.
+A cleaner in front of such a model is a poor trade. The measurements that follow are of Gemma 4 and of speech recognisers; none was made with d1-Omni-2B. Gemma 4 E4B is weaker on noisy spontaneous speech than on clean read speech, and it inserts words when the audio is hard ([Open ASR write-up](https://twango.dev/writing/gemma4-asr-benchmark)). A 20-clip noisy-English set measured 7.6% word error ([TypeWhisper](https://typewhisper.github.io/typewhisper-benchmark/?model=crispasr%3Agemma4-e4b-it-q8_0&view=model)). MetricGAN raised the error for Whisper, Parakeet, and Gemini on every noise condition tried, including clips that were already clean ([When De-noising Hurts](https://arxiv.org/html/2512.17562)). SAM-Audio separation raised the signal-to-noise ratio and still raised Whisper's word error ([When Audio Separation Hurts](https://arxiv.org/html/2603.04710v2)). On large audio-language models, ordinary denoisers sometimes made the internal noise measure worse ([SEE](https://arxiv.org/html/2601.07331)). The enhancer invents a spectrum the encoder was not trained on, and the language model then guesses the missing words.
 
-A tradeshow floor is another person talking. Silero treats that as speech and passes it. Separating one voice out of a crowd is the approach those measurements found raised error. A mild steady-noise suppressor (RNNoise or DeepFilterNet, gain only where speech is absent) is a later experiment for a fan louder than the visitors, scored by whether the command intent still matches. It is not this path. The NPU overlay is unrelated: Gemma's audio encoder runs on the iGPU through `llama-server`.
+A tradeshow floor is another person talking. Silero treats that as speech and passes it. Separating one voice out of a crowd is the approach those measurements found raised error. A mild steady-noise suppressor (RNNoise or DeepFilterNet, gain only where speech is absent) is a later experiment for a fan louder than the visitors, scored by whether the command intent still matches. It is not this path. The NPU overlay is unrelated: the voice model's audio encoder runs on the iGPU through `llama-server`.
 
 ## Voice pick-and-place
 
@@ -586,7 +603,7 @@ the scan says it cannot see a bottle and the grasp never starts.
 2. Add the name to the `cmd` rule in `config/intent.gbnf`.
 3. Register a handler in `vla_pipeline/main.py`: `@registry.register(Intent.MY_COMMAND)` — it receives `(ctx, cmd)` with the arm, cameras, models, `cmd.params`, and `ctx.stop_check`.
 
-`wave` and `home` (`vla_pipeline/behaviors/simple.py`) are the template. `stop robot` (Gemma's `stop` command when spoken, a keyword match when typed) interrupts any running behavior — including mid-move (every move's wait checks `stop_check`). "stop" alone is not a command.
+`wave` and `home` (`vla_pipeline/behaviors/simple.py`) are the template. `stop robot` (the voice model's `stop` command when spoken, a keyword match when typed) interrupts any running behavior — including mid-move (every move's wait checks `stop_check`). "stop" alone is not a command.
 
 ## Testing each component independently
 
@@ -595,8 +612,8 @@ Most components are standalone modules with their own `__main__` self-test. Pick
 | Component | Needs hardware? | Command |
 |---|---|---|
 | Camera→joint mapping (One Euro/depth) | no (twin) | `./run_sim_tests.sh -k mimic` |
-| Intent grammar + parser | Gemma server running | `python -m vla_pipeline.llm.llama_intent --selftest` |
-| Decision model's questions + parser | the d1-Omni-2B files (`voice_intent: d1-omni-2b`, then `scripts/ensure_voice.sh`) | `python -m vla_pipeline.llm.d1_intent --selftest` |
+| d1-Omni-2B's questions + parser (the default voice model) | no (the model's files, `scripts/ensure_voice.sh`) | `python -m vla_pipeline.llm.d1_intent --selftest` |
+| Gemma 4's grammar + parser | no (the model's files, `scripts/ensure_voice.sh`) | `python -m vla_pipeline.llm.llama_intent --selftest` |
 | Spoken sentences → commands, with their times | no (a synthetic voice stands in for the microphone; each real voice model on the iGPU, so the files of both are needed) | `./run_sim_tests.sh -k voice_live -s` |
 | YOLO pose | webcam | `python -m vla_pipeline.vision.yolo_pose_npu --device npu` |
 | YOLO detect | webcam | `python -m vla_pipeline.vision.yolo_detect_npu --find ball --role arm` |
@@ -631,9 +648,9 @@ cd workshop && ./run_notebooks.sh --test    # notebooks and the Instructor's cor
 ./run_sim_tests.sh                          # NPU load order and the twin stacks
 ```
 
-`./run_notebooks.sh --test` does the setup [workshop/README.md](workshop/README.md) describes: the `.venv`, the Ryzen AI runtime, ROS 2, the `vvla-workshop` kernel, and the check of the Gemma files and `llama-server` (`scripts/ensure_voice.sh`). Then it runs the notebooks in `workshop/notebooks/`, in the README's order, and the README's Instructor's corner commands. A notebook that needs Gemma starts its own `llama-server`.
+`./run_notebooks.sh --test` does the setup [workshop/README.md](workshop/README.md) describes: the `.venv`, the Ryzen AI runtime, ROS 2, the `vvla-workshop` kernel, and the check of both voice models' files and `llama-server` (`scripts/ensure_voice.sh`). Then it runs the notebooks in `workshop/notebooks/`, in the README's order, and the README's Instructor's corner commands. A notebook that needs a voice model starts its own `llama-server`.
 
-`./run_sim_tests.sh` uses the same `.venv`, Ryzen AI runtime, and ROS 2. It runs `pytest tests/npu`, then `pytest tests/sim -m "sim and not docs"`. Arguments after the command go to the twin tests only. It does not start Jupyter (the one `llama-server` in it is the one `tests/sim/test_voice_live.py` starts for itself), and it does not run the tests marked `docs` (the notebooks, the Instructor's corner, and the notebook console). Those belong to `./run_notebooks.sh --test`, which stands in a generated frame for the webcam and a scripted person for pose. The notebook reads that frame in this process. It does not open `/dev/video0` or wait on `/cameras/mount/image_raw`. A notebook under test has no microphone (opening one fails, as on a machine without one) and asks Gemma on a free port of its own, so it neither hears the room nor shares a `llama-server` with a notebook open on the same machine. One test speaks to the notebook: in `tests/sim/test_twin_notebook_voice.py` the kernel's microphone plays a synthetic voice in real time. It answers the notebook's "say one command" cell, then says to the console, one after the other, "give me a wave", a question, "pick up the ball", "open your hand" and "go home". Each command must run when its turn comes (the arm waves, the ball is held up, then let go, the arm is at rest), and the question must run nothing.
+`./run_sim_tests.sh` uses the same `.venv`, Ryzen AI runtime, and ROS 2. It runs `pytest tests/npu`, then `pytest tests/sim -m "sim and not docs"`. Arguments after the command go to the twin tests only. It does not start Jupyter (the one `llama-server` in it is the one `tests/sim/test_voice_live.py` starts for itself), and it does not run the tests marked `docs` (the notebooks, the Instructor's corner, and the notebook console). Those belong to `./run_notebooks.sh --test`, which stands in a generated frame for the webcam and a scripted person for pose. The notebook reads that frame in this process. It does not open `/dev/video0` or wait on `/cameras/mount/image_raw`. A notebook under test has no microphone (opening one fails, as on a machine without one) and asks Gemma on a free port of its own, so it neither hears the room nor shares a `llama-server` with a notebook open on the same machine. One test speaks to the notebook: in `tests/sim/test_twin_notebook_voice.py` the kernel's microphone plays a synthetic voice in real time. It answers the notebook's "say one command" cell, then says to the console, one after the other, "give me a wave", a question, "pick up the ball", "open your hand" and "robot, go home". Each command must run when its turn comes (the arm waves, the ball is held up, then let go, the arm is at rest), and the question must run nothing. The notebook is heard by the voice model the config selects, d1-Omni-2B by default; the sentences are ones both models took right on every clip of the synthetic voice.
 
 In `./run_sim_tests.sh` spoken commands are injected as text, except in `tests/sim/test_voice_live.py`: there a stand-in microphone plays six sentences of a synthetic voice (espeak-ng, `libespeak-ng1`) in real time through the real listener, and a `llama-server` the test starts answers them, once with the real Gemma and once with the real d1-Omni-2B. The same file asks the real Gemma the typed stop sentences: "stop robot" in four forms must stop, and "stop", "halt", "freeze", "stop it", "abort" and "stop talking" must do nothing. The operator's pose and hands are scripted. The arm camera is read by YOLO on the NPU (`--sim-eyes seg` substitutes the twin's segmentation boxes). The twin stands in for the arm and its camera, and its rendering runs on the iGPU. No arm, camera, or microphone has to be attached. The ROS cases run headless on a private ROS domain, and the exit code is the result.
 
@@ -641,7 +658,7 @@ Spoken commands, and how each one is checked. A cell is blank when that stack do
 
 | Use case | Command | Pipeline, in process | Workshop, in process | Workshop over ROS 2 |
 |---|---|---|---|---|
-| Wave | `wave at me` | `wave` starts and ends ok. The LLM request carries a grammar and temperature 0. The elbow goes below −35° and the pan passes +20° and −20°. Parks at rest. | | Pan span is greater than 40°. |
+| Wave | `wave at me` | `wave` starts and ends ok. The request to the voice model is its own kind: with d1-Omni-2B one question, which command, offering every command; with Gemma 4 a grammar and temperature 0. The elbow goes below −35° and the pan passes +20° and −20°. Parks at rest. | | Pan span is greater than 40°. |
 | Stop a wave | `wave`, then `stop robot` | `stop` is the keyword path: one transcript is parsed, and it is not `stop`. The elbow goal moves within 150 ms, and the pan goal does not return to ±25° after that. The wave ends stopped. Parks at rest. | | |
 | Startup noise | `wave`, `thank you.`, `you`, `...` inside a 1 s grace window | Dropped as grace, then three noises. The mock LLM receives nothing. The joints stay put. | | |
 | Release | `drop it`, then `open`, then `release` | Three `release` behaviors end ok. The arm says "Released", the gripper passes 80°, and the grip lock is cleared. Parks at rest. | `drop it` only. The keyword parser also maps `release`, `open`, `drop it`, and `let go` to `release`, and `pick up the ball` to `pick_place`. One release is parsed. Same speech, gripper, lock, and park checks. | After `pick up the ball`: says "Released", gripper past 80°, and the twin's props (TF frames and `/diagnostics`) show the ball released. Joints come from `/so101/hardware/joint_states`. |
@@ -690,13 +707,13 @@ The same command also runs these checks. None of them speak a command.
 | ROS twin plumbing | The default `so101_sim.node` launch publishes the arm camera and none of the props (`/sim/props_settled`). A move under the grasp limits reaches the grasp wrist, and an ordinary move stops at the desk cap. Frames read after a move are stamped after the arm settled. A publisher on another ROS domain is invisible, and a second twin on the test domain is refused. Killing the notebook kernel reaps the twin node and its controllers. The reset service puts every prop back on its scene-file pose and parks the arm. |
 | Notebook UI polling | In a real `python3` kernel, a cell queued behind a `ui_events` loop runs after the loop ends. Jupyter's stop button cancels a queued cell and interrupts the running one. Running the loop cell again ends the loop. |
 
-Arguments after `./run_sim_tests.sh` select twin tests, for example `./run_sim_tests.sh -k toothbrush`. `--sim-yolo-device cpu` runs YOLO on the CPU on a machine without an NPU. `--sim-video failed` keeps the recordings of failed tests only (by default every test is recorded to `_artifacts/sim_tests/`).
+Arguments after `./run_sim_tests.sh` select twin tests, for example `./run_sim_tests.sh -k toothbrush`. The scenarios run with the voice model `voice_intent` names, d1-Omni-2B by default; `--sim-voice-intent gemma4-e4b-it` runs them with Gemma 4. `--sim-yolo-device cpu` runs YOLO on the CPU on a machine without an NPU. `--sim-video failed` keeps the recordings of failed tests only (by default every test is recorded to `_artifacts/sim_tests/`).
 
 ## Configuration
 
 All tunables live in `config/pipeline.yaml`:
 
-- **voice_intent** — which model hears the microphone: `gemma4-e4b-it` (the default) or `d1-omni-2b`. Run `scripts/ensure_voice.sh` after a change; it fetches that model's files
+- **voice_intent** — which model hears the microphone, for `./run_pipeline.sh` and for section 4 of the digital twin notebook: `d1-omni-2b` (the default) or `gemma4-e4b-it`. A change needs nothing else: both models' files are kept in place. Each model's section has `name` and `does`, which the two consoles' voice panel and the notebook's compute placement table show
 - **listening** — how the microphone's sound is cut, for either model: Silero path, the utterance cut (`end_silence_ms` 300, `pre_roll_ms` 300, `window_s` 6, `min_voice_ms` 100, `min_dbfs` −60), the level an utterance is sent at (`sent_peak`, `most_gain`)
 - **d1-omni-2b** — GGUF, projector, `llama-server` port 8083, batch size, and the confidence below which a command (`min_confidence`) or an object (`min_object_confidence`) is not taken
 - **gemma4-e4b-it** — GGUF, audio projector, `llama-server` port 8082, GPU layers, ctx size, GBNF path, `hsa_override_gfx_version`
@@ -710,10 +727,10 @@ All tunables live in `config/pipeline.yaml`:
 ## Architecture notes
 
 - **Transport-agnostic behaviors.** Behaviors only ever talk to the `ArmClient` ABC and the `CameraClient` ABC. The same behavior code runs over ROS 2 (`Ros2ArmClient` → the ros2_control controllers → `So101ServerNode`, which exclusively owns the Feetech bus), direct serial (`DirectArm` → LeRobot `SO101Follower`, owned by a thread of the orchestrator), the digital twin (`SimArmClient`), or `DryRunArm` for development; cameras likewise over ROS 2 topics or direct V4L2. A move ends when the arm's owner reports it over (the trajectory controller's result, or the servos' `Moving` flags), and the loops that sample the arm wait for the owner's next state.
-- **Grammar-constrained intent.** llama.cpp's GBNF support means Gemma physically cannot emit anything but the list `["<command>", "<object>", "<words heard>"]`, with one of the ten commands (`gesture_mimic`, `fetch_block`, `pick_place`, `dance`, `grip`, `release`, `wave`, `home`, `stop`, `unknown`) first.
+- **An answer that can only be a command.** d1-Omni-2B does not write: it picks among the answers it is offered, one per command. Gemma 4 writes, and llama.cpp's GBNF support means it physically cannot emit anything but the list `["<command>", "<object>", "<words heard>"]`. Either way the answer holds one of the ten commands (`gesture_mimic`, `fetch_block`, `pick_place`, `dance`, `grip`, `release`, `wave`, `home`, `stop`, `unknown`) first.
 - **Registry dispatch.** The orchestrator never hardcodes behaviors; handlers register on a `CommandRegistry`, so adding a command never touches `main.py`'s dispatch loop.
 - **Grip-lock.** `grip` and `pick_place` record the held position in shared state, so a second "hold this" is refused while the arm holds something. `release` ("release", "open", "drop it") clears the lock and opens the jaws where they are. `gesture_mimic` clears it too and hands the gripper to your pinch.
-- **Safety.** All joint targets pass through `clamp_joints` against per-joint limits; `max_relative_target` bounds per-tick deltas at the LeRobot layer; "stop robot" (Gemma's `stop` command when spoken, a keyword match when typed) is acted on before any other command and sets a shared stop event every move and wait checks (a trajectory goal is cancelled, and the arm holds where it is); `q` in any preview window and Ctrl-C are equivalent; the server node parks the arm at `REST_POSE` on any shutdown path; crashed behaviors are caught by the orchestrator, which parks the arm.
+- **Safety.** All joint targets pass through `clamp_joints` against per-joint limits; `max_relative_target` bounds per-tick deltas at the LeRobot layer; "stop robot" (the voice model's `stop` command when spoken, a keyword match when typed) is acted on before any other command and sets a shared stop event every move and wait checks (a trajectory goal is cancelled, and the arm holds where it is); `q` in any preview window and Ctrl-C are equivalent; the server node parks the arm at `REST_POSE` on any shutdown path; crashed behaviors are caught by the orchestrator, which parks the arm.
 
 ## Troubleshooting
 

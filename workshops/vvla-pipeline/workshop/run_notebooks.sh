@@ -23,8 +23,8 @@
 #      shared by every clone on this machine, so a launch must rewrite it.
 #   4. Sources ROS 2 (required) so the notebook kernel gets rclpy + DDS.
 #   5. scripts/ensure_voice.sh (run above the Jupyter launch) checks the
-#      Gemma 4 files and the built llama-server. A notebook that needs Gemma
-#      starts the server itself.
+#      voice models' files (d1-Omni-2B and Gemma 4) and the built llama-server.
+#      A notebook that needs a model starts the server itself.
 #   6. Opens the always-on-top resource HUD (CPU% / GPU% / NPU inf/s) so you
 #      can watch the devices light up while a cell runs. It closes with Jupyter.
 #   7. Launches Jupyter Lab in workshop/ (browse the notebooks/ folder).
