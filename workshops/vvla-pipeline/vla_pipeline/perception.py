@@ -267,18 +267,28 @@ def main() -> None:
         link.status = status()
         link.publish_status(link.status)
 
+        # The speech session calls on_text with a command the moment the model has written it,
+        # and on_heard with its words when the answer is complete: both on its one request
+        # thread, in that order. So the token of the command just offered belongs to that
+        # thread alone; a stop has no words.
+        offered: list[int | None] = [None]
+
         def on_text(text: str) -> None:
+            offered[0] = None
             if is_stop(text):
                 link.offer_stop()
                 return
             command = command_from_json(text)
             if command is None:
                 return
-            link.offer_command(
-                command.intent.value,
-                str((command.params or {}).get("object", "")),
-                command.transcript or "",
+            offered[0] = link.offer_command(
+                command.intent.value, str((command.params or {}).get("object", "")),
             )
+
+        def on_heard(words: str) -> None:
+            token, offered[0] = offered[0], None
+            if token is not None:
+                link.offer_heard(token, words)
 
         def on_level(level: float, speaking: bool) -> None:
             link.level = level
@@ -299,7 +309,10 @@ def main() -> None:
         if voice.error:
             logger.warning("Voice is unavailable (%s).", voice.error)
         else:
-            voice.start(on_text, on_level=on_level, on_busy=on_busy, on_drop=on_drop, stop_check=stop.is_set)
+            voice.start(
+                on_text, on_level=on_level, on_busy=on_busy, on_drop=on_drop, stop_check=stop.is_set,
+                on_heard=on_heard,
+            )
     else:
         link.publish_status(status())
 
@@ -307,7 +320,10 @@ def main() -> None:
     for slot in slots:
         slot.close()
     for worker in workers:
+        # A closed slot wakes its worker; a model call under way ends within its own frame.
         worker.join(timeout=2.0)
+        if worker.is_alive():
+            logger.error("%s did not end within 2 s of its camera slot closing", worker.name)
     if voice is not None:
         voice.close()
     if hands is not None:

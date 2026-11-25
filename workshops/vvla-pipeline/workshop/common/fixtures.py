@@ -267,7 +267,8 @@ def open_webcam(cfg: dict):
 class MockLlamaServer:
     """A llama-server imposter: ``GET /health`` + ``POST /v1/chat/completions``.
 
-    Routes intents with keywords and *records every request payload* so the
+    It answers as an event stream, the way the real server does for a request
+    with ``"stream": true``. Routes intents with keywords and *records every request payload* so the
     self-test can verify your client sent the GBNF grammar, the system
     prompt, and temperature 0 - the things that make the intent parser
     deterministic on the real iGPU server.
@@ -300,19 +301,24 @@ class MockLlamaServer:
                 for m in payload.get("messages", []):
                     if m.get("role") == "user":
                         user = m.get("content", "")
-                content = json.dumps(offline_parse_text(user))
-                body = json.dumps(
-                    {
-                        "choices": [
-                            {"message": {"role": "assistant", "content": content}}
-                        ]
-                    }
-                ).encode()
+                # The answer as the real server writes it for the pipeline's parser: an event
+                # stream carrying a JSON list of the command, the object and the words heard,
+                # in two pieces here, so the call is complete before the words are.
+                answer = offline_parse_text(user)
+                words = user if isinstance(user, str) else ""
+                content = json.dumps([answer["command"], answer["object"], words])
                 self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
-                self.wfile.write(body)
+                call_ends = content.index(",", content.index(",") + 1) + 1  # after the object
+                try:
+                    for piece in (content[:call_ends], content[call_ends:]):
+                        event = {"choices": [{"delta": {"content": piece}}]}
+                        self.wfile.write(b"data: " + json.dumps(event).encode() + b"\n\n")
+                        self.wfile.flush()
+                    self.wfile.write(b"data: [DONE]\n\n")
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # the client had its call and closed: it does not read the words
 
         self._httpd = ThreadingHTTPServer((host, port), Handler)
         self.host = host

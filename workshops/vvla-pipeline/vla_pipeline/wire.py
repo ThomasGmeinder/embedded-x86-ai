@@ -40,16 +40,18 @@ from vla_pipeline.ipc import (
     SpeechOutbox,
     PerceptionStatus,
     VoiceCommand,
+    VoiceHeard,
     VoiceStop,
-    decode_command,
     decode_joints,
     decode_mount,
     decode_reset,
     decode_state,
     decode_status,
     decode_stop,
+    decode_voice,
     decode_wrist,
     encode_command,
+    encode_heard,
     encode_joints,
     encode_mount,
     encode_reset,
@@ -208,10 +210,17 @@ class ControlLink:
         self.publish_state()
 
     def _on_command(self, msg) -> None:
-        command = self._drops.decode(decode_command, msg.data)
-        if command is None or not self.ledger.accept_command(command.epoch, command.command_seq):
+        """A command, or the words heard for the command accepted last; both on the voice topic."""
+        message = self._drops.decode(decode_voice, msg.data)
+        if message is None:
             return
-        self.robot_voice.on_transcript(command.body())
+        if isinstance(message, VoiceHeard):
+            if self.ledger.accept_heard(message.epoch, message.command_seq):
+                self.robot_voice.on_heard(message.heard)
+            return
+        if not self.ledger.accept_command(message.epoch, message.command_seq):
+            return
+        self.robot_voice.on_transcript(message.body())
 
     def _on_stop(self, msg) -> None:
         stop = self._drops.decode(decode_stop, msg.data)
@@ -312,9 +321,18 @@ class PerceptionLink:
         self._speech.offer_stop()
         self._flush()
 
-    def offer_command(self, command: str, obj: str, heard: str) -> None:
-        """Keep the latest command. It is published only after an outstanding stop."""
-        self._speech.offer_command(command, obj, heard)
+    def offer_command(self, command: str, obj: str) -> int:
+        """Keep the latest command. It is published only after an outstanding stop.
+
+        Returns the token :meth:`offer_heard` takes for this command's words.
+        """
+        token = self._speech.offer_command(command, obj)
+        self._flush()
+        return token
+
+    def offer_heard(self, token: int, heard: str) -> None:
+        """The words heard for the command ``token``: published after it, on the same topic."""
+        self._speech.offer_heard(token, heard)
         self._flush()
 
     def _flush(self) -> None:
@@ -328,10 +346,12 @@ class PerceptionLink:
             if item[0] == "stop":
                 self._stop.publish(_string(encode_stop(VoiceStop(item[1]))))
                 continue
-            _, epoch, seq, command, obj, heard = item
-            self._command.publish(_string(encode_command(
-                VoiceCommand(epoch, seq, command, obj, heard),
-            )))
+            if item[0] == "heard":
+                _, epoch, seq, heard = item
+                self._command.publish(_string(encode_heard(VoiceHeard(epoch, seq, heard))))
+                continue
+            _, epoch, seq, command, obj = item
+            self._command.publish(_string(encode_command(VoiceCommand(epoch, seq, command, obj))))
 
     def publish_mount(self, observation) -> None:
         self._mount.publish(_string(encode_mount(observation)))

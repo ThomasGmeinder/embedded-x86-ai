@@ -272,7 +272,12 @@ class UserRobotControl:
         """Gate one transcript (stop, noise, mimic) and queue it for dispatch."""
         logger.info("Heard: %r", text)
         spoken = command_from_json(text)
-        self.ctx.emit("heard", text=spoken.transcript if spoken is not None and spoken.transcript else text)
+        # A typed sentence is its own words. A command the speech front end resolved arrives the
+        # moment the model has written it; its words follow in :meth:`on_heard`.
+        if spoken is None:
+            self.ctx.emit("heard", text=text)
+        elif spoken.transcript:
+            self.ctx.emit("heard", text=spoken.transcript)
         if is_stop(text):
             self.ctx.request_stop()
             self.ctx.say("Stopping.")
@@ -305,6 +310,11 @@ class UserRobotControl:
             logger.info("New command while %s runs - stopping it to switch.",
                         self.current.intent.value if self.current else "a behavior")
             self.ctx.stop_event.set()
+
+    def on_heard(self, words: str) -> None:
+        """The words the model heard for the spoken command delivered last; shown, not acted on."""
+        logger.info("Its words: %r", words)
+        self.ctx.emit("heard", text=words)
 
     def _mimic_running(self) -> bool:
         """True while the behavior on the dispatch thread is gesture mimic."""

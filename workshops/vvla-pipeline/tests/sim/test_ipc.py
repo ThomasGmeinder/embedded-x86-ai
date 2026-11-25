@@ -25,9 +25,13 @@ from vla_pipeline.ipc import (
     MountObservation,
     SpeechOutbox,
     VoiceCommand,
+    VoiceHeard,
     decode_command,
+    decode_heard,
     decode_mount,
+    decode_voice,
     encode_command,
+    encode_heard,
     encode_mount,
 )
 
@@ -40,9 +44,24 @@ def test_a_bad_payload_is_rejected():
     with pytest.raises(ContractError):
         decode_command('{"epoch": 1, "command_seq": 1, "command": "wave"}')
     with pytest.raises(ContractError):
-        decode_command(
-            '{"epoch": 0, "command_seq": 1, "command": "wave", "object": "", "heard": "wave"}'
-        )
+        decode_command('{"epoch": 0, "command_seq": 1, "command": "wave", "object": ""}')
+    # The words are a message of their own; a command that carries them is not one.
+    with pytest.raises(ContractError):
+        decode_command('{"epoch": 1, "command_seq": 1, "command": "wave", "object": "", "heard": "wave"}')
+    with pytest.raises(ContractError):
+        decode_heard('{"epoch": 1, "command_seq": 0, "heard": "wave"}')
+    with pytest.raises(ContractError):
+        decode_voice('{"epoch": 1, "command_seq": 1, "heard": 5}')
+    with pytest.raises(ContractError):
+        decode_voice("[1]")
+
+
+def test_the_voice_topic_carries_a_command_and_then_its_words():
+    command = VoiceCommand(2, 3, "pick_place", "ball")
+    assert decode_voice(encode_command(command)) == command
+    assert command.body() == '{"command":"pick_place","object":"ball"}'
+    heard = VoiceHeard(2, 3, "pick up the ball")
+    assert decode_voice(encode_heard(heard)) == heard
 
 
 def test_a_command_from_an_old_epoch_is_rejected_and_a_sequence_is_accepted_once():
@@ -76,15 +95,15 @@ def test_an_observation_whose_stamp_went_backwards_is_ignored():
 
 
 def _child(conn) -> None:
-    conn.send(encode_command(VoiceCommand(1, 1, "wave", "", "wave at me")))
+    conn.send(encode_command(VoiceCommand(1, 1, "wave", "")))
     conn.recv()
-    conn.send(encode_command(VoiceCommand(1, 1, "wave", "", "wave at me")))
+    conn.send(encode_command(VoiceCommand(1, 1, "wave", "")))
     conn.close()
 
 
 def test_a_command_spoken_before_the_epoch_is_kept_and_a_stop_goes_first():
     speech = SpeechOutbox()
-    speech.offer_command("pick_place", "boy", "Pick up the boy")
+    speech.offer_command("pick_place", "boy")
     assert speech.take() is None
     speech.offer_stop()
     speech.set_epoch(1)
@@ -92,7 +111,88 @@ def test_a_command_spoken_before_the_epoch_is_kept_and_a_stop_goes_first():
     assert speech.take() is None
     speech.set_epoch(2)
     sent = speech.take()
-    assert sent[0] == "command" and sent[1] == 2 and sent[3:] == ("pick_place", "boy", "Pick up the boy")
+    assert sent[0] == "command" and sent[1] == 2 and sent[3:] == ("pick_place", "boy")
+
+
+def test_the_words_go_out_after_their_command_with_its_epoch_and_sequence():
+    speech = SpeechOutbox()
+    speech.set_epoch(1)
+    token = speech.offer_command("wave", "")
+    assert speech.take() == ("command", 1, 1, "wave", "")
+    assert speech.take() is None  # the model is still writing the words
+    speech.offer_heard(token, "wave at me")
+    assert speech.take() == ("heard", 1, 1, "wave at me")
+    assert speech.take() is None
+    # Words that arrive while their command still waits for an epoch go out right after it.
+    waiting = SpeechOutbox()
+    token = waiting.offer_command("pick_place", "ball")
+    waiting.offer_heard(token, "pick up the ball")
+    assert waiting.take() is None
+    waiting.set_epoch(4)
+    assert waiting.take() == ("command", 4, 1, "pick_place", "ball")
+    assert waiting.take() == ("heard", 4, 1, "pick up the ball")
+    assert waiting.take() is None
+
+
+def test_the_words_of_a_command_that_was_replaced_before_it_went_out_are_dropped():
+    speech = SpeechOutbox()
+    first = speech.offer_command("wave", "")
+    second = speech.offer_command("dance", "")  # replaces the unsent wave
+    speech.offer_heard(first, "wave at me")
+    speech.set_epoch(1)
+    assert speech.take() == ("command", 1, 1, "dance", "")
+    assert speech.take() is None
+    speech.offer_heard(second, "dance for me")
+    assert speech.take() == ("heard", 1, 1, "dance for me")
+    # The words of the command sent last go out before a newer command does.
+    third = speech.offer_command("home", "")
+    speech.offer_heard(second, "late words for a command already answered")
+    assert speech.take() == ("heard", 1, 1, "late words for a command already answered")
+    assert speech.take() == ("command", 1, 2, "home", "")
+    speech.offer_heard(third, "go home")
+    assert speech.take() == ("heard", 1, 2, "go home")
+
+
+def test_control_takes_the_words_of_the_command_it_accepted_last_once():
+    ledger = Ledger()
+    assert ledger.accept_heard(1, 1) is False  # no command yet
+    assert ledger.accept_command(1, 1) is True
+    assert ledger.accept_heard(1, 1) is True
+    assert ledger.accept_heard(1, 1) is False  # a second copy
+    assert ledger.accept_command(1, 2) is True
+    assert ledger.accept_heard(1, 1) is False  # the words of the command before
+    # A stop between a command and its words: the words are refused.
+    assert ledger.claim_stop(1) == 2
+    assert ledger.accept_heard(1, 2) is False
+    assert ledger.accept_command(2, 3) is True
+    assert ledger.accept_heard(2, 3) is True
+
+
+def test_control_shows_a_spoken_commands_words_after_the_command():
+    """The wire's control side and the dispatcher: the command is acted on when it arrives, its
+    words are shown when they follow, and words for anything but that command are not shown."""
+    from vla_pipeline.llm.intents import CommandRegistry, Intent, ParsedCommand
+    from vla_pipeline.user_robot_control import PipelineContext, UserRobotControl
+    from vla_pipeline.wire import ControlLink, _Drops
+
+    class _Message:
+        def __init__(self, data: str) -> None:
+            self.data = data
+
+    ctx = PipelineContext(cfg={}, arm=None, registry=CommandRegistry())
+    ctx.say = lambda _message: None
+    events = []
+    voice = UserRobotControl(ctx, lambda text: ParsedCommand(Intent.UNKNOWN, transcript=text))
+    voice.listeners.append(lambda event, **data: events.append((event, data.get("text"))))
+    link = ControlLink.__new__(ControlLink)
+    link.ledger, link._drops, link.robot_voice = Ledger(), _Drops(), voice
+    link._on_command(_Message(encode_heard(VoiceHeard(1, 1, "words before any command"))))
+    link._on_command(_Message(encode_command(VoiceCommand(1, 1, "wave", ""))))
+    link._on_command(_Message(encode_heard(VoiceHeard(1, 1, "wave at me"))))
+    link._on_command(_Message(encode_heard(VoiceHeard(1, 1, "wave at me"))))
+    shown = [item for item in events if item[0] in ("heard", "queued")]
+    assert [kind for kind, _ in shown] == ["queued", "heard"], events
+    assert shown[1] == ("heard", "wave at me")
 
 
 def test_the_joint_sample_carries_the_gripper_current():
@@ -235,6 +335,30 @@ def test_the_action_line_follows_the_transcript_and_the_gripper_label_fits():
     })
     assert console._joints["gripper_joint"] == 0.84
     assert len(console._log) == len(logged)
+
+
+def test_the_console_shows_a_spoken_command_before_its_words():
+    """Control publishes the state with the command's line when it is parsed, and a later state
+    with the words when they arrive: the console shows them in that order."""
+    import threading
+    from collections import deque
+
+    from vla_pipeline.console import TwinConsole
+    from vla_pipeline.ipc import ControlState
+
+    console = TwinConsole.__new__(TwinConsole)
+    console._lock = threading.Lock()
+    console._say = ""
+    console._heard = ""
+    console._behavior = None
+    console._behavior_t0 = 0.0
+    console._resetting = False
+    console._joints = None
+    console._log_seq = 0
+    console._log = deque()
+    console.apply_state(ControlState(1, "wave", False, "", "", {}, 1.0, 1, "cyan", "-> wave"))
+    console.apply_state(ControlState(1, "wave", False, "", "wave at me", {}, 1.5, 1, "cyan", "-> wave"))
+    assert [line for line, _color in console._log] == ["-> wave", "you: wave at me"]
 
 
 def test_a_reset_wakes_the_ledger():

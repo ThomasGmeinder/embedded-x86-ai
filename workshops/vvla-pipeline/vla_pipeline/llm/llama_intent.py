@@ -10,10 +10,17 @@
 The model runs in ``llama-server`` (built with ``-DGGML_HIP=ON`` by
 ``bootstrap.sh``) and is queried over its OpenAI-compatible HTTP API. A GBNF
 grammar (``config/intent.gbnf``) constrains generation so the model can only
-emit ``{"command": "<name>", "object": "<words>", "heard": "<words>"}`` - no
-free-form parsing. The ``gemma4-e4b-it`` config section picks the model; when it
-has an ``mmproj`` (the audio projector), :func:`parse_audio_clip` sends a
-microphone clip and Gemma hears it directly.
+emit the list ``["<name>", "<object>", "<words heard>"]`` - no free-form
+parsing. The ``gemma4-e4b-it`` config section picks the model; when it has an
+``mmproj`` (the audio projector), :func:`parse_audio_clip` sends a microphone
+clip and Gemma hears it directly.
+
+The answer is read as the server writes it (a stream of server-sent events).
+It is written in the order command, object, heard, so the call is complete
+before the words heard are: ``on_call`` receives the call at that moment, with
+the seconds since the request began, while the rest is still being written.
+Nothing waits for the whole answer to act on the call. A typed sentence is its
+own words, so its request ends at the call.
 
 :func:`llama_server_command` is the launch recipe and :func:`parse_intent`
 one grammar-constrained request (the workshop's TODOs 1.5 and 1.6).
@@ -42,16 +49,27 @@ import signal
 import subprocess
 import threading
 import time
+from collections.abc import Callable, Iterator
 
 import requests
 
-from vla_pipeline.llm.intents import INTENT_SYSTEM_PROMPT, Intent, ParsedCommand
+from vla_pipeline.llm.intents import (
+    INTENT_SYSTEM_PROMPT,
+    Intent,
+    ParsedCommand,
+    call_from_partial,
+    heard_from_partial,
+)
 from vla_pipeline.utils.config import load_config, resolve
 
 logger = logging.getLogger(__name__)
 
 # What llama-server logs once its model is loaded and it serves requests.
 READY_LINE = "listening on http://"
+# The longest a request may go without the server sending anything, in seconds.
+REQUEST_TIMEOUT_S = 30
+# The call, and the seconds from the request to it. Returning False says the words are not wanted.
+OnCall = Callable[[ParsedCommand, float], bool | None]
 
 # The config section that names the model, its port, and its grammar.
 DEFAULT_SECTION = "gemma4-e4b-it"
@@ -122,15 +140,42 @@ def llama_server_command(cfg: dict, section: str = DEFAULT_SECTION):
     return cmd, env
 
 
+def answer_pieces(lines) -> Iterator[str]:
+    """The answer's text piece by piece, as the server's events carry it.
+
+    ``lines`` are the lines of an OpenAI-style event stream; it ends at ``[DONE]``.
+    """
+    for line in lines:
+        if not line.startswith(b"data:"):
+            continue
+        data = line[5:].strip()
+        if data == b"[DONE]":
+            return
+        event = json.loads(data)
+        if "error" in event:
+            raise RuntimeError(f"llama-server reported: {str(event['error'])[:300]}")
+        choices = event.get("choices") or [{}]
+        yield (choices[0].get("delta") or {}).get("content") or ""
+
+
 def _chat_command(
     user_content, base_url: str, grammar: str, http=None, temperature: float = 0.0,
-    *, audio: bool = False, transcript: str = "",
-) -> ParsedCommand:
-    """One grammar-constrained chat completion, read into a :class:`ParsedCommand`.
+    *, audio: bool = False, transcript: str = "", on_call: OnCall | None = None, words: bool = False,
+) -> tuple[ParsedCommand, float, float]:
+    """One grammar-constrained chat completion, its answer read as it is written.
 
     ``user_content`` is the text or, for audio, the content list with the WAV
-    clip. ``heard`` (the words Gemma reports) is the transcript when Gemma gives
-    none.
+    clip. ``on_call`` gets the call the moment it is complete. With ``words``
+    false, or when ``on_call`` returns False, the reading ends there and the
+    connection is closed: for a caller that has the sentence already, or that
+    drops the call. The server is then free for the next request sooner. An
+    answer that ends before its call is complete is ``unknown``. ``heard``
+    (the words Gemma reports) is the transcript when Gemma gives none.
+
+    Returns the command, the seconds until its call was complete (0.0 when it
+    never was), and the seconds until reading the answer ended. They are
+    returned, not kept: a typed sentence and a spoken one are asked from two
+    threads.
     """
     http = http or requests
     payload = {
@@ -139,28 +184,39 @@ def _chat_command(
             {"role": "user", "content": user_content},
         ],
         "temperature": temperature,
-        "max_tokens": 96,  # command JSON plus the short "heard" phrase
+        "max_tokens": 96,  # the command list plus the short "heard" phrase
         "grammar": grammar,
+        "stream": True,
     }
     if audio:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
-    r = http.post(f"{base_url}/v1/chat/completions", json=payload, timeout=30)
-    if r.status_code >= 400:
-        logger.error("llama-server rejected the request: %s", r.text[:500])
-    r.raise_for_status()
-    content = r.json()["choices"][0]["message"]["content"]
-    try:
-        data = json.loads(content)
-        command = data["command"]
-    except (json.JSONDecodeError, KeyError):
-        logger.warning("Unparseable LLM output: %r", content)
-        return ParsedCommand(Intent.UNKNOWN, transcript=transcript)
-    params: dict[str, str] = {}
-    obj = str(data.get("object", "") or "").strip()
-    if obj:
-        params["object"] = obj
-    heard = str(data.get("heard", "") or "").strip() or transcript
-    return ParsedCommand(Intent.from_string(command), params=params, transcript=heard)
+    text, call, call_s = "", None, 0.0
+    t0 = time.perf_counter()
+    with http.post(
+        f"{base_url}/v1/chat/completions", json=payload, stream=True, timeout=REQUEST_TIMEOUT_S,
+    ) as r:
+        if r.status_code >= 400:
+            logger.error("llama-server rejected the request: %s", r.text[:500])
+        r.raise_for_status()
+        # chunk_size=1: a line is handed on when its last byte arrives. The library's
+        # default reads in blocks of 512 bytes and would hold the end of the call back
+        # until the server has written that much more.
+        for piece in answer_pieces(r.iter_lines(chunk_size=1)):
+            text += piece
+            if call is None:
+                call = call_from_partial(text)
+                if call is not None:
+                    call_s = time.perf_counter() - t0
+                    # on_call answers False when it has no use for the words (a call it drops).
+                    wanted = on_call(call, call_s) if on_call is not None else None
+                    if not words or wanted is False:
+                        break  # leaving the block closes the connection; the rest is not read
+    total_s = time.perf_counter() - t0
+    if call is None:
+        logger.warning("Unparseable LLM output: %r", text)
+        return ParsedCommand(Intent.UNKNOWN, transcript=transcript), 0.0, total_s
+    heard = heard_from_partial(text) or transcript
+    return ParsedCommand(call.intent, params=call.params, transcript=heard), call_s, total_s
 
 
 def parse_intent(
@@ -171,25 +227,40 @@ def parse_intent(
     POSTs an OpenAI-style chat completion to ``{base_url}/v1/chat/completions``
     with the system prompt (:data:`INTENT_SYSTEM_PROMPT`), the transcript as
     the user message, ``temperature`` (0 = deterministic routing), a small
-    ``max_tokens``, and the GBNF ``grammar``, which is what makes the output
-    JSON guaranteed parseable. An empty transcript maps to UNKNOWN without
-    any HTTP round trip.
+    ``max_tokens``, ``stream`` on, and the GBNF ``grammar``, which is what
+    makes the answer guaranteed parseable. The answer is read as it is written
+    (:func:`answer_pieces`) and the request ends when the call is complete
+    (:func:`~vla_pipeline.llm.intents.call_from_partial`): a typed sentence is
+    its own words. An empty transcript maps to UNKNOWN without any HTTP round
+    trip.
     """
     if not transcript or not transcript.strip():
         return ParsedCommand(Intent.UNKNOWN, transcript=transcript or "")
     return _chat_command(
         transcript.strip(), base_url, grammar, http, temperature, audio=audio, transcript=transcript,
-    )
+    )[0]
 
 
-def parse_audio_clip(wav: bytes, base_url: str, grammar: str, http=None, temperature: float = 0.0) -> ParsedCommand:
-    """One WAV clip → one :class:`ParsedCommand`: Gemma hears the audio itself."""
+def _audio_content(wav: bytes) -> list:
+    """The user message of an audio request: the instruction and the WAV clip."""
     encoded = base64.b64encode(wav).decode("ascii")
-    content = [
+    return [
         {"type": "text", "text": "Classify the spoken robot instruction in this audio."},
         {"type": "input_audio", "input_audio": {"data": encoded, "format": "wav"}},
     ]
-    return _chat_command(content, base_url, grammar, http, temperature, audio=True)
+
+
+def parse_audio_clip(
+    wav: bytes, base_url: str, grammar: str, http=None, temperature: float = 0.0, on_call: OnCall | None = None,
+) -> ParsedCommand:
+    """One WAV clip → one :class:`ParsedCommand`: Gemma hears the audio itself.
+
+    ``on_call`` receives the call while Gemma still writes the words it heard;
+    the returned command holds those words.
+    """
+    return _chat_command(
+        _audio_content(wav), base_url, grammar, http, temperature, audio=True, on_call=on_call, words=True,
+    )[0]
 
 
 class LlamaIntentParser:
@@ -226,6 +297,12 @@ class LlamaIntentParser:
         """Launch llama-server as a subprocess and block until it logs that it
         is listening (:data:`READY_LINE`), or exits."""
         cmd, env = llama_server_command(self._cfg, self._section)
+        # The process that starts the server may be pinned to one core (``cores`` in the pipeline
+        # config pins perception), and a child inherits that. The server is not pinned: its
+        # threads feed the iGPU and decode the audio, and on one shared core they wait behind the
+        # cameras and the vision models. ``taskset`` sets the allowed cores before the server
+        # starts its first thread.
+        cmd = ["taskset", "-c", f"0-{os.cpu_count() - 1}", *cmd]
         logger.info("Starting llama-server (ROCm): %s", " ".join(cmd))
         log_dir = resolve(self._log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -234,14 +311,16 @@ class LlamaIntentParser:
         self._proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True, errors="replace",
         )
-        ready = threading.Event()
+        ready = threading.Event()  # the readiness line was logged, or the output ended
+        listening = threading.Event()  # the readiness line was logged
 
         def relay() -> None:
-            """The server's output to its log; its readiness line, or its exit, sets ``ready``."""
+            """The server's output to its log; its readiness line, or the end of its output, sets ``ready``."""
             for line in self._proc.stdout:
                 self._server_log.write(line)
                 self._server_log.flush()
                 if READY_LINE in line:
+                    listening.set()
                     ready.set()
             ready.set()
 
@@ -252,10 +331,12 @@ class LlamaIntentParser:
                     f"llama-server did not log {READY_LINE!r} within {ready_timeout_s:.0f} s "
                     f"(log: {self._server_log_path})"
                 )
-            if self._proc.poll() is not None:
+            if not listening.is_set():
+                # Its output ended without the readiness line: it is exiting. Wait for that exit.
+                code = self._proc.wait()
                 tail = self._read_server_log_tail()
                 raise RuntimeError(
-                    f"llama-server exited with code {self._proc.wait()} during "
+                    f"llama-server exited with code {code} during "
                     f"startup. Last log lines:\n{tail}\n"
                     f"(full log: {self._server_log_path})"
                 )
@@ -292,7 +373,10 @@ class LlamaIntentParser:
     # ------------------------------------------------------------------
 
     def parse(self, transcript: str) -> ParsedCommand:
-        """Map one spoken transcript to a ParsedCommand (grammar-constrained), logging the latency."""
+        """Map one typed sentence to a ParsedCommand (grammar-constrained), logging the latency.
+
+        The sentence is its own words, so the request ends when the call is complete.
+        """
         t0 = time.perf_counter()
         cmd = parse_intent(
             transcript, self.base, self.grammar, http=self._http, temperature=self.temperature, audio=self._audio,
@@ -306,18 +390,41 @@ class LlamaIntentParser:
         )
         return cmd
 
-    def parse_audio(self, wav: bytes) -> ParsedCommand:
-        """Map one WAV clip to a ParsedCommand: Gemma hears the audio (needs the ``mmproj``)."""
+    def parse_audio(self, wav: bytes, on_call: OnCall | None = None) -> ParsedCommand:
+        """Map one WAV clip to a ParsedCommand: Gemma hears the audio (needs the ``mmproj``).
+
+        ``on_call`` receives the call while Gemma still writes the words it heard; the
+        returned command holds those words.
+        """
+        call_s: list[float] = []  # this request's own, so a typed request on another thread cannot change it
+
+        def call_written(call: ParsedCommand, seconds: float):
+            call_s.append(seconds)
+            return on_call(call, seconds) if on_call is not None else None
+
         t0 = time.perf_counter()
-        cmd = parse_audio_clip(wav, self.base, self.grammar, http=self._http, temperature=self.temperature)
+        cmd = parse_audio_clip(
+            wav, self.base, self.grammar, http=self._http, temperature=self.temperature, on_call=call_written,
+        )
         logger.info(
-            "Intent %r %s ← %r (%.0f ms)",
+            "Intent %r %s ← %r (call after %.0f ms, %.0f ms in all)",
             cmd.intent.value,
             cmd.params or "",
             cmd.transcript,
+            (call_s[0] if call_s else 0.0) * 1e3,
             (time.perf_counter() - t0) * 1e3,
         )
         return cmd
+
+    def warm_up(self) -> float:
+        """One request whose answer is thrown away; the seconds it took.
+
+        The first request to a freshly started server pays for the instructions being read
+        into the model. Paid here, at the start, not at the user's first command.
+        """
+        t0 = time.perf_counter()
+        self.parse("hello")
+        return time.perf_counter() - t0
 
 
 # =============================================================================

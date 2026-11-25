@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 
 from so101_sim.control import LAUNCH_FILE, sensor_qos
+from so101_sim.parent_death import STOP_S
 from vla_pipeline.robot.ros2_control_arm import Spinner
 from vla_pipeline.utils.config import DEFAULT_CONFIG
 from vla_pipeline.vision.camera import from_image_msg
@@ -531,10 +532,11 @@ class TwinSession:
                 logger.debug("twin client close: %s", e)
         proc = self._proc
         if proc is not None and proc.poll() is None:
-            # parent_death ignores SIGINT and, on SIGTERM, signals its process group.
+            # parent_death ignores SIGINT and, on SIGTERM, signals its process group; it kills
+            # what has not exited STOP_S later. This wait is that same bound, not a second one.
             proc.send_signal(signal.SIGTERM)
             try:
-                proc.wait(timeout=10.0)
+                proc.wait(timeout=STOP_S)
             except subprocess.TimeoutExpired:
                 try:
                     os.killpg(proc.pid, signal.SIGKILL)

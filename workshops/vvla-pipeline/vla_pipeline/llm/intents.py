@@ -76,8 +76,40 @@ STOP_KEYWORDS = ("stop robot",)
 _STOP_RE = re.compile(r"\b(" + "|".join(STOP_KEYWORDS) + r")\b", re.IGNORECASE)
 
 
+# Gemma's answer is a JSON list of three strings, in this order (config/intent.gbnf fixes it).
+# A list and not an object with named keys: fewer tokens before the call is complete (measured
+# on the so101 workshop, 2026-11-23: 12 tokens to the call instead of 21). The words heard come
+# last, so the call is complete, and acted on, while they are still being written.
+FIELDS = ("command", "object", "heard")
+
+# The values of the first two hold no quote and no backslash (the grammar's word rule). The
+# comma after the object's closing quote is what completes the call.
+_CALL_SO_FAR = re.compile(r'\s*\[\s*"([a-z_]*)"\s*,\s*"([a-z ]*)"\s*,')
+_HEARD_SO_FAR = re.compile(r'\s*"([^"\\]*)')  # what follows the call
+
+
+def call_from_partial(text: str) -> ParsedCommand | None:
+    """The call (command, object) once the answer's text so far holds all of it; None before.
+
+    The words heard are not in the result: they follow.
+    """
+    found = _CALL_SO_FAR.match(text or "")
+    if found is None:
+        return None
+    command, obj = found.groups()
+    params = {"object": obj.strip()} if obj.strip() else {}
+    return ParsedCommand(Intent.from_string(command), params=params)
+
+
+def heard_from_partial(text: str) -> str:
+    """The words heard as far as the answer's text has them: all of them in a finished answer."""
+    call = _CALL_SO_FAR.match(text or "")
+    found = _HEARD_SO_FAR.match(text, call.end()) if call else None
+    return found.group(1).strip() if found else ""
+
+
 def command_from_json(text: str) -> ParsedCommand | None:
-    """A command JSON string already produced by the audio model, or None."""
+    """A command the speech front end already resolved, handed on as a JSON object, or None."""
     raw = (text or "").strip()
     if not raw.startswith("{"):
         return None
@@ -193,7 +225,7 @@ _OBJECT_WORDS = (
 
 
 def offline_parse_text(text: str) -> dict:
-    """Keyword routing -> the same ``{"command", "object"}`` dict the LLM emits."""
+    """Keyword routing -> ``{"command", "object"}``: the call the LLM would write, without an LLM."""
     low = (text or "").lower()
     for pattern, command, obj_mode in _KEYWORD_ROUTES:
         if re.search(pattern, low):
@@ -251,12 +283,19 @@ class CommandRegistry:
 # Few-shot system prompt for the intent LLM. Kept here so the parser and any
 # eval scripts share one source of truth. The grammar (config/intent.gbnf)
 # guarantees the output shape; this prompt steers the choice.
+#
+# The "stop" line says the two words together, and that the word alone is unknown. With the
+# line as it was ('the speaker says "stop robot". "stop", "halt", ... are "unknown"') and the
+# answer as a list, Gemma took a typed "stop", "halt", "freeze", "stop it" and "abort" for a
+# stop. Measured on the real model on the Gemma 4 branch, 2026-11-25, typed sentences and
+# spoken clips: 258 right of 284 with this line, 241 with the old one; every stop case right.
+# tests/sim/test_voice_live.py asks the real model the stop sentences.
 INTENT_SYSTEM_PROMPT = """\
 You are the command router for a robot arm on a crowded floor. Other people
 are talking. Ignore background conversation, a second speaker, questions,
 quotes, negations, and anything not addressed to the robot: those are
 "unknown". Map a clear instruction to exactly one command and answer ONLY
-with a JSON object {"command": "<name>", "object": "<object or empty string>", "heard": "<words>"}.
+with a JSON list ["<name>", "<object or empty string>", "<words>"]: the command, then "object", then "heard".
 "object" is the thing to act on for pick_place (one or two plain words,
 e.g. "ball", "water bottle"); for every other command use "".
 "heard" is the words the person said to the robot, and nothing else.
@@ -281,7 +320,8 @@ Commands:
 - "wave": the user wants a wave / greeting ("wave at me", "say hi").
 - "home": the speaker says "go home". "home", "rest", and "reset" alone
   are "unknown".
-- "stop": the speaker says "stop robot". "stop", "halt", "freeze",
-  "stop it", "abort", and "stop talking" are "unknown".
+- "stop": the speaker says the two words "stop robot" together ("stop
+  robot", "robot stop", "stop robot now"). The word "stop" alone is "unknown",
+  and so are "halt", "freeze", "stop it", "abort", and "stop talking".
 - "unknown": anything else.
 """

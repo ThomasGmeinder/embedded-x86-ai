@@ -16,6 +16,7 @@ onnx>=1.16,<1.18           # VitisAI ORT supports IR <= 11; onnx 1.18+ emits IR 
 transformers>=4.44
 soundfile>=0.13            # audio I/O (AMD ASR demo)
 sounddevice>=0.4.7
+scipy>=1.11                # the high-pass that takes the microphone's offset out (vla_pipeline/audio/gemma_listen.py)
 pyyaml>=6.0
 requests>=2.31
 psutil>=5.9

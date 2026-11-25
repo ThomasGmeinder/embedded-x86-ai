@@ -34,7 +34,10 @@ OVERLAY_MOUNT = "/perception/overlay/mount"
 OVERLAY_HANDS = "/perception/overlay/hands"
 OVERLAY_WRIST = "/perception/overlay/wrist"
 
-_COMMAND_FIELDS = ("epoch", "command_seq", "command", "object", "heard")
+_COMMAND_FIELDS = ("epoch", "command_seq", "command", "object")
+# The words heard for a command already sent. On the command's topic: one publisher's messages
+# on one reliable topic arrive in the order sent, so the words cannot overtake their command.
+_HEARD_FIELDS = ("epoch", "command_seq", "heard")
 _STOP_FIELDS = ("epoch",)
 _RESET_FIELDS = ("epoch",)
 _STATE_FIELDS = (
@@ -106,11 +109,20 @@ class VoiceCommand:
     command_seq: int
     command: str
     object: str
-    heard: str
 
     def body(self) -> str:
-        """The command JSON ``UserRobotControl`` already accepts."""
-        return dumps({"command": self.command, "object": self.object, "heard": self.heard})
+        """The command JSON ``UserRobotControl`` already accepts. The words heard follow in a
+        :class:`VoiceHeard`: the command is sent the moment the model has written it."""
+        return dumps({"command": self.command, "object": self.object})
+
+
+@dataclass(frozen=True)
+class VoiceHeard:
+    """The words the model heard for the command ``command_seq`` of ``epoch``."""
+
+    epoch: int
+    command_seq: int
+    heard: str
 
 
 @dataclass(frozen=True)
@@ -204,16 +216,34 @@ def encode_command(message: VoiceCommand) -> str:
         "command_seq": message.command_seq,
         "command": message.command,
         "object": message.object,
-        "heard": message.heard,
     })
 
 
 def decode_command(raw: str) -> VoiceCommand:
     data = _object(raw, _COMMAND_FIELDS)
     return VoiceCommand(
-        _epoch(data["epoch"]), _seq(data["command_seq"]), _text(data["command"]),
-        _text(data["object"]), _text(data["heard"]),
+        _epoch(data["epoch"]), _seq(data["command_seq"]), _text(data["command"]), _text(data["object"]),
     )
+
+
+def encode_heard(message: VoiceHeard) -> str:
+    return dumps({"epoch": message.epoch, "command_seq": message.command_seq, "heard": message.heard})
+
+
+def decode_heard(raw: str) -> VoiceHeard:
+    data = _object(raw, _HEARD_FIELDS)
+    return VoiceHeard(_epoch(data["epoch"]), _seq(data["command_seq"]), _text(data["heard"]))
+
+
+def decode_voice(raw: str) -> VoiceCommand | VoiceHeard:
+    """One message of the voice topic: a command, or the words heard for one already sent."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ContractError("not JSON") from exc
+    if isinstance(data, dict) and "heard" in data:
+        return decode_heard(raw)
+    return decode_command(raw)
 
 
 def encode_stop(message: VoiceStop) -> str:
@@ -439,18 +469,28 @@ def decode_status(raw: str) -> PerceptionStatus:
 
 
 class SpeechOutbox:
-    """The one unsent stop and the one unsent command, on the perception side.
+    """The one unsent stop, the one unsent command and its words, on the perception side.
 
     A newer command replaces the unsent one. A stop is kept beside it and is
     sent first. The command is sent only with an epoch newer than that stop,
     so the two cannot be reordered into "command survived the stop."
+
+    The words the model heard arrive after the command they belong to was
+    offered (the command is offered the moment the model has written it).
+    :meth:`offer_command` returns a token for that command; :meth:`offer_heard`
+    takes it. The words are sent after their command, with its epoch and
+    sequence. Words for a command that a newer one replaced before it was sent
+    are dropped: that command never went out.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._epoch = 0
         self._stop = False
-        self._command: tuple[str, str, str] | None = None
+        self._token = 0  # the commands offered so far
+        self._command: tuple[int, str, str] | None = None  # (token, command, object), unsent
+        self._sent: tuple[int, int, int] | None = None  # (token, epoch, seq) of the command sent last
+        self._heard: tuple[int, str] | None = None  # (token, words), unsent
         self._stop_at = 0
         self._seq = 0
 
@@ -462,14 +502,26 @@ class SpeechOutbox:
         with self._lock:
             self._stop = True
 
-    def offer_command(self, command: str, obj: str, heard: str) -> None:
+    def offer_command(self, command: str, obj: str) -> int:
+        """Keep this command as the one to send. The token that names it to :meth:`offer_heard`."""
         with self._lock:
-            self._command = (command, obj, heard)
+            self._token += 1
+            self._command = (self._token, command, obj)
+            return self._token
+
+    def offer_heard(self, token: int, heard: str) -> None:
+        """Keep the words heard for the command ``token``; dropped when that command was replaced."""
+        with self._lock:
+            unsent = self._command is not None and self._command[0] == token
+            sent = self._sent is not None and self._sent[0] == token
+            if unsent or sent:
+                self._heard = (token, heard)
 
     def take(self) -> tuple | None:
         """One message that can be published now, or None.
 
-        ``("stop", epoch)`` or ``("command", epoch, seq, command, object, heard)``.
+        ``("stop", epoch)``, ``("command", epoch, seq, command, object)`` or
+        ``("heard", epoch, seq, words)``, where epoch and seq are the command's.
         """
         with self._lock:
             if self._epoch < 1:
@@ -478,11 +530,19 @@ class SpeechOutbox:
                 self._stop = False
                 self._stop_at = self._epoch
                 return ("stop", self._epoch)
+            if self._heard is not None and self._sent is not None and self._heard[0] == self._sent[0]:
+                # The words of the command sent last: they go before a newer command.
+                _token, words = self._heard
+                self._heard = None
+                return ("heard", self._sent[1], self._sent[2], words)
             if self._command is not None and self._epoch > self._stop_at:
-                command, obj, heard = self._command
+                token, command, obj = self._command
                 self._command = None
                 self._seq += 1
-                return ("command", self._epoch, self._seq, command, obj, heard)
+                self._sent = (token, self._epoch, self._seq)
+                if self._heard is not None and self._heard[0] != token:
+                    self._heard = None  # words of a command this one replaced
+                return ("command", self._epoch, self._seq, command, obj)
             return None
 
     def waiting(self) -> bool:
@@ -534,6 +594,7 @@ class Ledger:
         self.resetting = False
         self._reset_again = False
         self._command_seq = 0
+        self._heard_seq = 0  # the command sequence whose words were accepted last
         self._obs_seq: dict[str, int] = {}
         self._obs_stamp: dict[str, float] = {}
 
@@ -586,6 +647,17 @@ class Ledger:
             if epoch != self.epoch or command_seq <= self._command_seq:
                 return False
             self._command_seq = command_seq
+            return True
+
+    def accept_heard(self, epoch: int, command_seq: int) -> bool:
+        """True once for the words of the command accepted last, in the current epoch.
+
+        A stop or a reset bumps the epoch, so the words of a command it cancelled are refused.
+        """
+        with self._lock:
+            if epoch != self.epoch or command_seq != self._command_seq or command_seq <= self._heard_seq:
+                return False
+            self._heard_seq = command_seq
             return True
 
     def _accept_observation(self, role: str, seq: int, stamp: float) -> bool:

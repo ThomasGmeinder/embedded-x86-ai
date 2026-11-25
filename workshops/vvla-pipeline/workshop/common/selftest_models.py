@@ -228,8 +228,12 @@ def _offline_checks(rep: Reporter, cfg: dict, reference: bool) -> None:
                 assert got.intent == want, f"{text!r} → {got.intent.value}, expected {want.value}"
                 if obj:
                     assert got.object_name == obj, (
-                        f"{text!r} lost its object: got {got.object_name!r}, expected {obj!r} - read data.get('object')")
+                        f"{text!r} lost its object: got {got.object_name!r}, expected {obj!r} - "
+                        "the object is the second string of the answer; call_from_partial() reads it")
             p = mocksrv.last_payload
+            assert p.get("stream") is True, (
+                "request payload had no '\"stream\": True' - the answer is read as the server writes it, "
+                "so the command is known before the words are")
             assert p.get("grammar"), (
                 "request payload had no 'grammar' - the GBNF constraint is what makes the output "
                 "guaranteed-parseable; attach it")
