@@ -20,11 +20,9 @@ import importlib.util
 import pytest
 import yaml
 
-from notebook_harness import PIPE_ROOT
+from so101_sim.stack import LAUNCH
 
 pytestmark = pytest.mark.sim
-
-LAUNCH = PIPE_ROOT / "launch" / "strix_vla.launch.py"
 
 
 def _entities(tmp_path, **arguments):
