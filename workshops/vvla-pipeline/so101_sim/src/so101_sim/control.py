@@ -18,6 +18,7 @@ import signal
 import subprocess
 import sys
 
+from so101_sim.parent_death import STOP_S
 from vla_pipeline.utils.config import REPO_ROOT  # noqa: E402
 LAUNCH_FILE = REPO_ROOT / "launch" / "so101_control.launch.py"
 
@@ -39,20 +40,17 @@ def start_controllers(config_path, gripper: str = "forward", log=None, hardware_
     ``real`` (the Feetech bus). ``gripper`` is accepted so older callers still
     import, and the ros2_so_arm bringup chooses the gripper controller itself.
     """
-    import shutil
+    from so101_sim.ros_launch import python_args
 
-    ros2 = shutil.which("ros2")
-    if ros2 is None:
-        raise RuntimeError("ros2 is not on PATH: source /opt/ros/jazzy/setup.bash first")
+    launch = python_args(LAUNCH_FILE, f"config:={config_path}", f"hardware_type:={hardware_type}")
     return subprocess.Popen(
-        [sys.executable, "-m", "so101_sim.parent_death", sys.executable, ros2, "launch", str(LAUNCH_FILE),
-         f"config:={config_path}", f"hardware_type:={hardware_type}"],
+        [sys.executable, "-m", "so101_sim.parent_death", sys.executable, *launch],
         cwd=str(REPO_ROOT), stdout=log, stderr=subprocess.STDOUT if log is not None else None,
         start_new_session=True,
     )
 
 
-def stop_controllers(proc: subprocess.Popen, budget_s: float = 10.0) -> None:
+def stop_controllers(proc: subprocess.Popen, budget_s: float = STOP_S) -> None:
     """SIGINT the launch's process group; kill it when it has not exited within ``budget_s``."""
     if proc.poll() is None:
         os.killpg(proc.pid, signal.SIGINT)

@@ -59,15 +59,13 @@ def launch_argv(
     dry_run: bool,
     config: str | None = None,
 ) -> list[str]:
-    """The ``ros2 launch`` command, with the twin, control and perception cores."""
+    """The launch's command, with the twin, control and perception cores:
+    ``ros2 launch``, through :mod:`so101_sim.ros_launch`."""
+    from so101_sim.ros_launch import python_args
     from vla_pipeline.utils.config import load_config
 
-    ros2 = shutil.which("ros2")
-    if ros2 is None:
-        raise RuntimeError("ros2 is not on PATH: source /opt/ros/jazzy/setup.bash first")
     cores = load_config(config).get("cores") or {}
-    argv = [
-        sys.executable, ros2, "launch", "--noninteractive", str(LAUNCH),
+    arguments = [
         f"arm:={str(arm).lower()}",
         f"cameras:={str(cameras).lower()}",
         f"digital_twin:={str(digital_twin).lower()}",
@@ -77,8 +75,8 @@ def launch_argv(
         f"perception_core:={cores.get('perception', '')}",
     ]
     if config:
-        argv.append(f"config:={config}")
-    return argv
+        arguments.append(f"config:={config}")
+    return [sys.executable, *python_args(LAUNCH, *arguments, options=("--noninteractive",))]
 
 
 def accept_stop_signals() -> None:

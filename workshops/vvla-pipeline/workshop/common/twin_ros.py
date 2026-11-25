@@ -300,14 +300,11 @@ class TwinSession:
 
         self._domain_lock = acquire(self.domain_id)
 
-        import shutil
+        from so101_sim.ros_launch import python_args
 
-        ros2 = shutil.which("ros2")
-        if ros2 is None:
-            raise RuntimeError("ros2 is not on PATH: source /opt/ros/jazzy/setup.bash first")
         cmd = [
-            sys.executable, "-m", "so101_sim.parent_death", sys.executable, ros2, "launch",
-            str(LAUNCH_FILE), f"config:={self.config_path}", "hardware_type:=mujoco",
+            sys.executable, "-m", "so101_sim.parent_death", sys.executable,
+            *python_args(LAUNCH_FILE, f"config:={self.config_path}", "hardware_type:=mujoco"),
         ]
         fd, log_name = tempfile.mkstemp(prefix="twin_node_", suffix=".log")
         self.log_path = Path(log_name)
