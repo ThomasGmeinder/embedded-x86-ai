@@ -304,8 +304,13 @@ class MockLlamaServer:
                 # The answer as the real server writes it for the pipeline's parser: an event
                 # stream carrying a JSON list of the command, the object and the words heard,
                 # in two pieces here, so the call is complete before the words are.
-                answer = offline_parse_text(user)
+                # A clip arrives as a list of parts. The imposter does not hear: it routes on
+                # the text parts and reports no words.
                 words = user if isinstance(user, str) else ""
+                text = words if isinstance(user, str) else " ".join(
+                    part.get("text", "") for part in user if part.get("type") == "text"
+                )
+                answer = offline_parse_text(text)
                 content = json.dumps([answer["command"], answer["object"], words])
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")

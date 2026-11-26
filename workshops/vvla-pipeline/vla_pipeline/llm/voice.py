@@ -281,9 +281,11 @@ def open_voice(cfg: dict, *, device=None) -> VoiceSession:
         logger.warning("Gemma is not ready (%s). Typed commands use the keyword match.", exc)
         session = VoiceSession(kind, keyword_parse, error=str(exc))
         return session
-    # The first request pays for the instructions being read into the model: here, not at
-    # the user's first command.
-    logger.info("Gemma warmed up with one request, %.1f s", llm.warm_up())
+    # The first request pays for the instructions being read into the model, and the first clip
+    # for the part that hears: here, not at the user's first command. The clip is half a second
+    # of silence at the microphone's rate.
+    rate = int((cfg.get("audio") or {}).get("sample_rate", 16000))
+    logger.info("Gemma warmed up with one clip of silence, %.1f s", llm.warm_up(_wav(bytes(rate // 2 * 2), rate)))
     session = VoiceSession(kind, llm.parse, llm)
     session._cfg = cfg
     session._gemma_cfg = cfg["gemma4-e4b-it"]

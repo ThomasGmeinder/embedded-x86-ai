@@ -416,14 +416,23 @@ class LlamaIntentParser:
         )
         return cmd
 
-    def warm_up(self) -> float:
+    def warm_up(self, wav: bytes | None = None) -> float:
         """One request whose answer is thrown away; the seconds it took.
 
         The first request to a freshly started server pays for the instructions being read
         into the model. Paid here, at the start, not at the user's first command.
+
+        ``wav`` is a clip to send as that request, for a server that hears audio. The first
+        clip also pays for the part of the model that hears, which a typed request does not
+        run: after the typed "hello" the first spoken command's call came after 0.34 s and
+        every later one after 0.16 s; after a clip of silence the first came after 0.17 s
+        (2026-11-26, two fresh servers each).
         """
         t0 = time.perf_counter()
-        self.parse("hello")
+        if wav is not None and self._audio:
+            self.parse_audio(wav)
+        else:
+            self.parse("hello")
         return time.perf_counter() - t0
 
 
