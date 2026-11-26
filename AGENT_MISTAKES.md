@@ -93,3 +93,31 @@ This branch (`vvla-moveit-arm`) had no journal before 2026-11-25. The voice bran
   the last word. `./run_sim_tests.sh` on `d759f20`: exit 0. Still not ported, as the plan the
   user approved says: the Gemma branch's controller bring-up, whose spawners here live in
   `ros2_so_arm`.
+
+## 2026-11-26 — Let a test suite go on opening a webcam whose driver was deadlocked
+
+- **Agent/tool:** Claude Code (Claude Fable 5.2)
+- **Task:** Run the notebook suite as soon as the user's own pipeline session had ended
+- **Mistake:** Three things. (1) Armed a watcher that started the suite the instant the user's
+  session released the webcam; the first test opened it eight seconds later, the driver failed
+  to start the stream and deadlocked. (2) Having seen the camera node stuck in the kernel,
+  wrote "I am letting the suite finish"; two more processes opened the webcam after that and
+  are stuck too. (3) Told the user the node was stuck at shutdown by a signal arriving during
+  the driver's stop call, and that a kernel worker had been stuck since 06:52
+- **Evidence:** `journalctl -k`: 07:33:17 `amd_isp_capture: fail to get out prop`, `fail to setup
+  output`; hung-task trace of `v4l2_camera_node` in `VIDIOC_STREAMON` →
+  `isp4vid_qops_start_streaming` → `isp4sd_enable_streams` → `isp4sd_stop_stream` →
+  `mutex_lock`. `ps`: four processes in state D, three of them in `_vb2_fop_release`, started
+  07:35, 07:45 and 08:00. The kernel worker was idle on the next look; its elapsed time is its
+  age
+- **Cause:** (1) Treated "the session has ended" as "the webcam is ready", although this
+  branch's notebooks say the camera can stay busy just after it is released. (2) Wanted the
+  remaining results and did not weigh that every further open adds a process that cannot be
+  killed. (3) Named a cause from the process state and this branch's comments before reading
+  the kernel log, and read a worker's age as time spent stuck
+- **Correction:** Stopped the suite; reported the kernel trace and withdrew both wrong
+  statements. The webcam stays held until the machine is rebooted
+- **Prevention:** A process in uninterruptible sleep on a device means: stop everything that
+  touches that device, at once. Read the kernel log before naming the cause of a stuck
+  process. Do not open the webcam right after another process has released it
+- **Status:** unresolved (needs a reboot; the trigger is likely, not proven)
