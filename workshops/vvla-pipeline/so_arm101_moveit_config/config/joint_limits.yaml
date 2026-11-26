@@ -1,9 +1,27 @@
 # joint_limits.yaml allows the dynamics properties specified in the URDF to be overwritten or augmented as needed
 
-# The limits below are the STS3215 envelope (the worst pose, the heaviest prop
-# in the jaws). default_velocity_scaling_factor
-# and default_acceleration_scaling_factor are the global speed: every plan
-# uses them unless that plan passes its own scale. 1.0 is the full envelope.
+# Each joint's limit is the speed its STS3215 can still hold in its worst pose with the
+# heaviest prop in the jaws, except the shoulder lift, which runs at the pan joint's 2.14152.
+#
+# Until 2026-11-26 the shoulder lift had its worst-case speed too, 0.30543 rad/s. A planned
+# move runs all joints in step, so that one joint paced 81 % of the time the arm spent moving
+# in a run of ./run_pipeline.sh --digital-twin (a reach of 1.54 rad took 5.1 s). Measured on
+# the twin, the four heavy moves of a pick (home, ready, reach down with the arm stretched,
+# lift back, home; nothing in the jaws):
+#   shoulder lift 0.30543 (the old limit)   15.80 s, at most 0.003 rad behind the commanded path
+#   shoulder lift 2.14152 (now)              5.16 s, at most 0.011 rad behind
+#   every arm joint at 2.14152               4.70 s, at most 0.012 rad behind
+#   every arm joint at 3.18                  5.56 s, the lift 0.123 rad behind (the no-load speed: too fast)
+# Doubling max_acceleration made the moves no shorter.
+#
+# The elbow and the wrist keep their limits because streamed setpoints (mimic) use these
+# limits as well, and what stops a streamed joint before a self-collision is MoveIt Servo's
+# check, 10 times a second, 3 mm before contact. With the elbow at 2.14152 that check missed
+# it in 1 of 5 runs: the arm stopped at the joint bound, in a pose the planner calls a
+# collision, and the next planned move found no plan.
+#
+# default_velocity_scaling_factor and default_acceleration_scaling_factor are the global
+# speed: every plan uses them unless that plan passes its own scale. 1.0 is these limits.
 default_velocity_scaling_factor: 1.0
 default_acceleration_scaling_factor: 1.0
 
@@ -20,7 +38,7 @@ joint_limits:
     max_jerk: 1000.0
   shoulder_lift_joint:
     has_velocity_limits: true
-    max_velocity: 0.30543
+    max_velocity: 2.14152
     has_acceleration_limits: true
     max_acceleration: 7.97615
     has_jerk_limits: true

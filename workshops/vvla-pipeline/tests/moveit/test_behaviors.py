@@ -209,19 +209,24 @@ def test_mimic_parks_at_home_when_it_stops(arm, pipeline_cfg):
 
 @launch
 def test_mimic_parks_at_home_when_it_stops_mid_stream(arm, pipeline_cfg):
-    """The park abandons a streamed setpoint the arm is still more than
-    ``REPLY_S`` of travel from, at the lift's ``max_velocity``, and parks at home."""
+    """The park abandons a streamed setpoint the arm has only begun to travel
+    toward, and parks at home.
+
+    The setpoint is 1.83 rad of lift away. When the lift's ``max_velocity``
+    was 0.305 rad/s that was more than ``REPLY_S`` of travel; at 2.14 rad/s no
+    setpoint inside the joint's range is. The park comes straight after the
+    setpoint, with the arm still at its start, which is what it has to handle.
+    """
     from types import SimpleNamespace
 
     from vla_pipeline.behaviors.gesture_mimic import park_after_mimic
-    from vla_pipeline.robot.moveit_arm import PLANNING_GROUP, REPLY_S, moveit_configs
+    from vla_pipeline.robot.moveit_arm import PLANNING_GROUP
 
     lift = "shoulder_lift_joint"
-    speed = float(moveit_configs().joint_limits["robot_description_planning"]["joint_limits"][lift]["max_velocity"])
     group = arm.robot.get_robot_model().get_joint_model_group(PLANNING_GROUP)
     upper = dict(zip(group.active_joint_model_names, group.active_joint_model_bounds))[lift][0].max_position
     start = arm.get_joints()[lift]
-    far = start + 1.2 * REPLY_S * speed
+    far = start + 1.83
     assert far < upper, "the lift has no setpoint that far from here"
     arm.send_joints({lift: far})
     park_after_mimic(SimpleNamespace(arm=arm, cfg=pipeline_cfg))
@@ -284,7 +289,7 @@ def test_mimic_follows_generated_poses_to_its_range_ends_and_parks(arm, pipeline
     import numpy as np
 
     from vla_pipeline.behaviors.gesture_mimic import mimic_tick, run_mimic
-    from vla_pipeline.robot.moveit_arm import PLANNING_GROUP, moveit_configs
+    from vla_pipeline.robot.moveit_arm import PLANNING_GROUP, STREAM_BRAKE, STREAM_SPEED, moveit_configs
     from vla_pipeline.utils.gesture_map import mapper_from_config
     from vla_pipeline.vision.mediapipe_hands import HandObservation
     from vla_pipeline.vision.yolo_pose_npu import KP
@@ -375,12 +380,15 @@ def test_mimic_follows_generated_poses_to_its_range_ends_and_parks(arm, pipeline
             mimic_tick(offline, blank)
         steady = {name: sent[-1][name] for name in arm.arm_joints}
         settle = next(i for i, joints in enumerate(sent) if off(joints, steady) < 0.01)
-        # A long move cruises at max_velocity after a ramp of max_velocity/max_acceleration.
-        move_s = max(
-            abs(steady[name] - previous[name]) / float(limits[name]["max_velocity"])
-            + float(limits[name]["max_velocity"]) / float(limits[name]["max_acceleration"])
-            for name in arm.arm_joints
-        )
+        # A streamed move cruises at STREAM_SPEED of max_velocity. It gets there at
+        # max_acceleration and brakes at STREAM_BRAKE of it (moveit_arm.jog_velocity), so the two
+        # ramps together cost cruise/max_acceleration * (1 + 1/STREAM_BRAKE) / 2 beyond the cruise.
+        def stream_s(name: str) -> float:
+            cruise = STREAM_SPEED * float(limits[name]["max_velocity"])
+            ramps = cruise / float(limits[name]["max_acceleration"]) * (1.0 + 1.0 / STREAM_BRAKE) / 2.0
+            return abs(steady[name] - previous[name]) / cruise + ramps
+
+        move_s = max(stream_s(name) for name in arm.arm_joints)
         script += [key] * (settle + math.ceil(move_s / period))
         previous = steady
 

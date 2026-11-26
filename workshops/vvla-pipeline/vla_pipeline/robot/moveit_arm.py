@@ -50,8 +50,8 @@ def clear_rcutils_error() -> None:
 
 
 PLANNING_GROUP = "manipulator"
-# MoveIt Servo's publish period (the shipped default). A jog velocity is the
-# position error divided by this, so the position Servo aims at is the target.
+# MoveIt Servo's publish period (the shipped default). Far from its target a jog velocity is
+# the position error divided by this; near it, the speed the joint can stop from (jog_velocities).
 # The launch file sets the servo node's publish_period and its acceleration
 # filter's update_period from this same value.
 SERVO_PERIOD_S = 0.01
@@ -278,6 +278,51 @@ def _gripper_current(msg, joint: str) -> float | None:
 # A plan starts from a still arm: MoveIt rejects a start state more than its
 # allowed_start_tolerance (0.01 rad) from where the arm is when it executes.
 STILL_RAD_S = 0.01
+# The share of a joint's max_acceleration a streamed approach brakes with (see jog_velocity).
+STREAM_BRAKE = 0.5
+# The share of its max_velocity the fastest joint of a stream is asked for. The arm's speed
+# swings around what Servo commands: asked for the limit itself, the twin cruised near
+# 2.0 rad/s with peaks of 2.24 to 2.29 against a limit of 2.14 (2026-11-25/26). The margin
+# keeps the peaks inside it.
+STREAM_SPEED = 0.9
+
+
+def jog_velocity(error: float, max_acceleration: float) -> float:
+    """The jog velocity for a joint that is ``error`` rad short of its streamed target,
+    before the speed limit (:func:`jog_velocities` applies that).
+
+    It is the velocity that closes the error in one Servo period, or, when
+    that is less, the speed the joint can still stop from: Servo also limits
+    acceleration, so a joint asked for full speed until the last period
+    arrives too fast, runs past the target and comes back (a 1 rad step took
+    1.7 to 5.5 s to settle, 2026-11-26). Braking at ``STREAM_BRAKE`` of
+    ``max_acceleration`` from distance ``error`` allows
+    ``sqrt(2 * STREAM_BRAKE * max_acceleration * |error|)``.
+    """
+    reach = abs(error) / SERVO_PERIOD_S
+    stop = math.sqrt(2.0 * STREAM_BRAKE * max_acceleration * abs(error))
+    return math.copysign(min(reach, stop), error)
+
+
+def jog_velocities(
+    errors: dict[str, float], max_acceleration: dict[str, float], max_velocity: dict[str, float],
+) -> dict[str, float]:
+    """The jog velocities for the joints of one stream, by joint name.
+
+    Each joint's :func:`jog_velocity`, all multiplied by one factor so that
+    no joint is asked for more than ``STREAM_SPEED`` of its speed limit. One
+    factor for all, as Servo scales a command that is over a limit: the
+    joints keep their proportions and arrive together. Limiting each joint
+    on its own let every joint run at its own pace; mimic then froze at a
+    joint's end stop in 9 of 12 runs of its range test (2026-11-26).
+    """
+    wanted = {name: jog_velocity(error, max_acceleration[name]) for name, error in errors.items()}
+    factor = min(
+        (STREAM_SPEED * max_velocity[name] / abs(speed) for name, speed in wanted.items() if speed),
+        default=1.0,
+    )
+    factor = min(1.0, factor)
+    return {name: speed * factor for name, speed in wanted.items()}
 # The gripper action's goal_tolerance. The controller yaml leaves the default.
 # A repeat command inside this band is the same target, and a jaw reading
 # inside it is still on the model limit.
@@ -724,6 +769,10 @@ class MoveItArm:
         self._servo_type = None  # ~/switch_command_type
         self._servo_joint_jog = False
         self._servo_limited = False  # Servo's last ~/status slows or holds the stream short of its setpoint
+        # Each arm joint's limits from joint_limits.yaml, the file Servo limits with.
+        limits = moveit_configs().joint_limits["robot_description_planning"]["joint_limits"]
+        self._max_acceleration = {name: float(limits[name]["max_acceleration"]) for name in self.arm_joints}
+        self._max_velocity = {name: float(limits[name]["max_velocity"]) for name in self.arm_joints}
         self._jaw_sent = None
         self._attach_link = None  # the SRDF end effector's parent link, read once
         self._stops = 0
@@ -1623,7 +1672,8 @@ class MoveItArm:
         self._servo_joint_jog = True
 
     def _publish_jog(self) -> None:
-        """One Servo jog: the velocity whose next step is the streamed target.
+        """One Servo jog toward the streamed target, at a speed each joint can still stop from
+        (:func:`jog_velocities`).
 
         Servo integrates ``velocity * publish_period`` and then keeps that step
         inside the joint speed and acceleration limits. The stamp is the latest
@@ -1663,9 +1713,11 @@ class MoveItArm:
         # position drives one that is already on its stop through the velocity
         # scale, and the named joint then crawls.
         names = list(wanted)
-        velocities = [
-            (target[name] - measured.get(name, target[name])) / SERVO_PERIOD_S for name in names
-        ]
+        asked = jog_velocities(
+            {name: target[name] - measured.get(name, target[name]) for name in names},
+            self._max_acceleration, self._max_velocity,
+        )
+        velocities = [asked[name] for name in names]
         whole = int(stamp_s)
         nanosec = int(round((stamp_s - whole) * 1e9))
         if nanosec >= 1_000_000_000:

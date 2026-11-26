@@ -31,6 +31,24 @@ def _jaw(ros_node, name: str) -> float:
     return dict(zip(msg.name, msg.position))[name]
 
 
+def _window_speeds(samples: list[tuple[float, float]]) -> list[float]:
+    """The arm's speed over each 0.04 to 0.05 s window of ``(stamp, position)`` samples, so one
+    late sample does not read as a spike.
+
+    The twin's samples are 20 ms apart, so a window is two of them and its length is 0.04 s up
+    to rounding. The lower bound allows for that rounding: without it, whether a window
+    counted depended on the last bit of two stamps, and most were left out.
+    """
+    speeds = []
+    j = 0
+    for i, (t, q) in enumerate(samples):
+        while j < i and t - samples[j][0] > 0.05:
+            j += 1
+        if j < i and t - samples[j][0] >= 0.04 - 1e-6:
+            speeds.append(abs(q - samples[j][1]) / (t - samples[j][0]))
+    return speeds
+
+
 def _held(ros_node) -> dict:
     """The trajectory controller's reference: what it holds the arm at."""
     from control_msgs.msg import JointTrajectoryControllerState
@@ -45,8 +63,11 @@ def test_a_named_state_is_planned_executed_and_reached(arm):
     assert off(arm.get_joints(), arm.named_state("ready")) < 0.01
 
 
+# The lift needs max_velocity^2 / max_acceleration = 0.575 rad to reach and leave its cruise
+# speed. From the ready pose it has 0.89 rad of free travel forward: past -0.07 rad the twin's
+# arm cannot go with the other joints at ready (measured 2026-11-26). 0.9 rad uses that room.
 @launch
-@pytest.mark.parametrize("joint, distance", [(PAN, 1.5), ("shoulder_lift_joint", -0.2)])
+@pytest.mark.parametrize("joint, distance", [(PAN, 1.5), ("shoulder_lift_joint", 0.9)])
 def test_an_untimed_move_runs_at_the_joint_speed_limit(arm, ros_node, joint, distance):
     """An untimed move cruises at ``max_velocity`` x ``default_velocity_scaling_factor``
     from joint_limits.yaml, and the twin moves at that speed.
@@ -104,14 +125,7 @@ def test_an_untimed_move_runs_at_the_joint_speed_limit(arm, ros_node, joint, dis
     try:
         import statistics
 
-        # Measured speed over a 0.05 s window of the arm's clock, so one late sample does not read as a spike.
-        speeds = []
-        j = 0
-        for i, (t, q) in enumerate(samples):
-            while j < i and t - samples[j][0] > 0.05:
-                j += 1
-            if j < i and t - samples[j][0] >= 0.04:
-                speeds.append(abs(q - samples[j][1]) / (t - samples[j][0]))
+        speeds = _window_speeds(samples)
         fast_commanded = [v for v in commanded if v > 0.9 * cruise]
         fast_measured = [v for v in speeds if v > 0.9 * cruise]
         assert fast_commanded and fast_measured, f"{joint} never came within 10% of {cruise:.3f} rad/s"
@@ -223,13 +237,7 @@ def test_a_streamed_step_runs_no_faster_than_the_joint_speed_limit(arm, ros_node
         ros_node.destroy_subscription(sub)
     try:
         took = reached.header.stamp.sec + reached.header.stamp.nanosec * 1e-9 - started
-        speeds = []
-        j = 0
-        for i, (t, q) in enumerate(samples):
-            while j < i and t - samples[j][0] > 0.05:
-                j += 1
-            if j < i and t - samples[j][0] >= 0.04:
-                speeds.append(abs(q - samples[j][1]) / (t - samples[j][0]))
+        speeds = _window_speeds(samples)
         assert speeds, "no 0.05 s window of /joint_states during the step"
         peak = max(speeds)
         print(f"{PAN} {distance:+.2f} rad streamed in {took:.3f} s, peak {peak:.4f} limit {cruise:.4f} rad/s")
