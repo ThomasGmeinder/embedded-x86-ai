@@ -85,3 +85,11 @@ This branch (`vvla-moveit-arm`) had no journal before 2026-11-25. The voice bran
 - **Prevention:** When a "proceed" follows a list, either do every item or say in the same
   reply which items are not being done and why
 - **Status:** unresolved
+
+  **Amendment, 2026-11-26:** corrected. The voice fix is ported in `d759f20` (listener,
+  streamed request, command before its words across the three processes, the voice server
+  off its starter's one core), the documents in `8722efc`, the camera waits in `80964c8`.
+  `tests/sim/test_voice_live.py` against the real Gemma: command 0.48 / 0.49 / 0.86 s after
+  the last word. `./run_sim_tests.sh` on `d759f20`: exit 0. Still not ported, as the plan the
+  user approved says: the Gemma branch's controller bring-up, whose spawners here live in
+  `ros2_so_arm`.
