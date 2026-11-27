@@ -3166,3 +3166,14 @@ decorators back; the line was removed (`tests/test_voice_commands.py`).
 - **Correction:** (1) The three lines were stated to the user right after and are in the diff; every later edit went through the Edit tool. (2) The open decision was put again as a three-option question. (3) The script was written out and rerun.
 - **Prevention:** Source files change through the Edit tool only, however small the change. When a decision is open, the answer to "status?" is the decision as choices, with one line of state. Run a generated script's reporting code on a stub before a long run.
 - **Status:** corrected
+
+## 2026-11-27 — A commit carried a deletion that was already staged from other work, and was pushed
+
+- **Agent/tool:** Claude Code (Claude Fable 5.2)
+- **Task:** Commit and push the change to `notebooks/run_notebooks.sh` and its test (the launcher restores the SAPIEN twin a restart removed).
+- **Mistake:** Ran `git add` on the two files and `git commit` without a path list. The deletion of `src/so101_smolvla/voice/intent.gbnf`, staged earlier as part of voice work that is not committed yet, went into commit `e587c43` and was pushed. The committed `voice/settings.py` still reads that file.
+- **Evidence:** `git show --stat e587c43` lists `intent.gbnf` with 28 deletions; the status at the start of the session showed it as `D ` (staged); `git grep gbnf HEAD` shows `settings.py:36` `GRAMMAR_FILE`.
+- **Cause:** Assumed the index was empty apart from what I added; did not read the staged list before committing, although the session's status showed a staged entry.
+- **Correction:** Commit `66f68e4` puts the file back and was pushed; the deletion was staged again, so the working tree and index are as the user left them. No history was rewritten.
+- **Prevention:** Commit with an explicit path list (`git commit -- <paths>`), and read `git diff --cached --stat` before the commit, not after.
+- **Status:** corrected
