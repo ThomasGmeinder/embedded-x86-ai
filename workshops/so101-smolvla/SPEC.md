@@ -653,6 +653,56 @@ flowchart LR
      `stop`, the only line of the instructions that differs from the
      branch's. The bullet "Since 2026-11-23" below has the wording and
      the measurement.
+  6. The answer's shape and the listening, 2026-11-27, on the user's
+     request ("look at `~/GitHub/voice_intent` to learn the latest
+     improvements for low latency and robust voice control. apply them
+     here") and the user's two answers that day: listening without an
+     end-of-speech event, and the words heard kept, after the command.
+     What Gemma sees, hears and answers is no longer the branch's; it is
+     `voice_intent`'s at its commit `4161915`, with what is named below.
+     - **The answer** is a line of plain words, then a colon and the
+       words heard (`pick red cube box: put the red cube in the box`,
+       `stop: stop robot`, `none: who built this stack`), not a JSON
+       list: each word is one token, so the call is settled sooner (on
+       the NPU 0.80 s instead of 1.24 s typed, 1.46 s instead of 1.90 s
+       spoken, median over the 37 sentences). The words an object and a
+       place can be made of are a closed list (small, large; red, green,
+       blue, yellow; cube, bottle, pen, ball, cylinder; box, bin). One
+       place holds the lists, the instructions, the pattern for
+       FastFlowLM and the grammar for `llama-server`, which is built
+       from the lists: `src/so101_smolvla/voice/intents.py`. The file
+       `intent.gbnf` is gone. "A new command is three changes" (below)
+       is two now: its word in `SIMPLE` with its member of `Intent`, and
+       one line in the instructions.
+     - **The instructions** are `voice_intent`'s (this workshop's text
+       with the answer's shape replaced and rules for negations,
+       questions and remarks added), with three differences chosen by
+       measurement on this workshop's sentences (TESTING_LEDGER.md,
+       2026-11-27): the examples of a pick answer and of the words
+       heard; an object may carry two colours, so that an order naming
+       two cubes is refused as before; `cylinder` among the objects.
+     - **The listening** (`voice/continuous.py`, `voice/microphone.py`):
+       whenever Gemma has finished one request it gets the newest 3 s of
+       sound, cut at the speaker's last short pause, from its first
+       pause on when it begins inside speech, with quiet background talk
+       silenced. Only the first window after a second of silence waits
+       for the speaker's next short pause. A command is delivered once
+       per spoken sentence (the same command from a window that overlaps
+       the delivering one is a repeat), `stop` every time; a pick
+       command without a place waits one answer when the speaker went on
+       after it. The utterance per sentence, sent after 0.4 s of
+       silence, is gone.
+     - **Given up with it** (each the user's to take back): an object or
+       a place outside the closed list cannot be written. That includes
+       a cube as the place ("put the red cube on the blue cube" gave
+       `place: blue cube` on 2026-11-22, decision 9): the stacking form
+       is not expressible until the lists or the pattern are extended.
+       Known weak points of the new answer, measured: a colour that an
+       example of the instructions names leaks into spoken answers (on
+       `llama-server` two of the 37 spoken sentences are answered "blue
+       cube"); a colour can be left out ("pick up the yellow cylinder",
+       typed, gives `cylinder` on the NPU, so the voice notebook's typed
+       table is 29 of 30).
 - The grammar file today allows ten commands and an object of at most
   two words (`config/intent.gbnf`). Draft 1 of this spec extended it to
   more fields: command (pick, stack, learn the stack, rebuild the

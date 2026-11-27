@@ -7540,3 +7540,61 @@ Open, each needs the user's word:
 - Tests in `TESTING_LEDGER.md`,
   [the section](TESTING_LEDGER.md#t-2026-11-24-table-one-bar-per-row).
   Not committed.
+
+<a id="d-2026-11-27-plain-words-and-continuous-listening"></a>
+## 2026-11-27 — The voice path takes over `voice_intent`'s answer and its listening
+
+- The user: "look at /home/tgmeinde/GitHub/voice_intent to learn the latest
+  improvements for low latency and robust voice control. apply them here".
+  Asked two things before anything was changed (SPEC.md 5.1: a departure
+  from what Gemma sees, hears and answers needs the user's word): the
+  listening (answer: continuous windows) and the words heard (answer: kept,
+  after the command).
+- Already here and not touched: the offset removal, the level raise, the
+  warm-up request, FastFlowLM's `turbo` mode, graphics version 11.0.0 for
+  `llama-server`. Not taken over: the voice-first proxy and the "someone is
+  talking" signal, which protect voice from picture questions on the same
+  server; here Gemma has its processor to itself.
+- **The answer** (`voice/intents.py`, rewritten): a line of plain words, a
+  colon, the words heard. One module holds the word lists, the
+  instructions, the pattern for FastFlowLM and the grammar for
+  `llama-server`, which is now built from the lists; `voice/intent.gbnf` is
+  deleted. A command without parameters is settled by its one word, a pick
+  command by the colon.
+- **The listening**: `voice/continuous.py` (new: `RollingAudio`,
+  `CommandFilter`, from `voice_intent`'s `continuous.py` at `4161915`,
+  without its proxy signal and its unused second-answer confirmation) and
+  `voice/microphone.py` (the utterance cutter removed; `up_to_last_pause`,
+  `from_first_pause`, `foreground`, `window_wav` and a new `Listener`
+  around the buffer). The Listener's interface is unchanged (`on_call`,
+  `on_command`, `on_level`, `on_busy`), so `demo.py` needed no change. Whether
+  an answer is about sound from before a microphone overflow is the buffer's
+  decision (`RollingAudio.current`), not a field shared between two threads.
+- Settings (`configs/voice.toml`): `end_silence_ms` and `pre_roll_ms` are
+  gone; `window_s` is 3 (was 6); `enough_speech_ms`, `quiet_gate_db` are
+  new; `max_tokens` 48 (was 96). The synthetic voice's test clip has its own
+  length now, `clip_s = 6`, because it was the window's.
+- **What the measurement changed** (the section of this date in
+  `TESTING_LEDGER.md`): `voice_intent`'s instructions as they are lost
+  accuracy on this workshop's sentences (spoken 29 of 37 on the NPU instead
+  of 34; six "green" picks answered red). Three things differ from that
+  project's text now: the examples (a blue and a green cube for the pick
+  answer, no cube among the words heard), "never leave out a colour", and
+  an object that may carry two colours so that an order naming two cubes is
+  refused as before. `cylinder` was added to the objects for the notebook's
+  table, on my own choice. Two tried and dropped: a rule "two objects is
+  none" (typed picks became no command) and a mandatory colour slot with
+  "any" (Gemma then invented a colour).
+- **Weak points left, known and measured**: an example's colour leaks into
+  spoken answers (iGPU: two of 37 answered `blue cube`); a colour can be
+  left out (NPU typed: "pick up the yellow cylinder" gives `cylinder`, so
+  the voice notebook's typed table is 29 of 30 and its test fails); the
+  spoken question "is the red cube in the box" still picks red. An object
+  or a place outside the closed list cannot be written, which includes a
+  cube as the place (the stacking form of SPEC.md decision 9).
+- Both notebooks' text follows; the voice notebook's live cell prints the
+  call first and the words after it. Its two microphone cells keep the
+  user's recorded outputs (restored from git after the edit).
+- Tests in `TESTING_LEDGER.md`,
+  [the section](TESTING_LEDGER.md#t-2026-11-27-plain-words-and-continuous-listening).
+  Not committed.

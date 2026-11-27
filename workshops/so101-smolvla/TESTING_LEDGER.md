@@ -3597,3 +3597,60 @@ instead of the host name. Environment: the workshop directory,
 | `table-nb`, the two notebooks that open the table | ended 09:20, exit 0, 222.25 s | `pytest tests/test_demo_notebook.py tests/test_voice_notebook.py -v --tb=short -rA -s` (`/tmp/so101-table-nb.log`) | **3 passed.** |
 
 Not run after this change: the rest of the suite.
+
+<a id="t-2026-11-27-plain-words-and-continuous-listening"></a>
+## 2026-11-27 — Plain-word answers and listening without an end-of-speech event, taken over from `voice_intent`: five wordings on both real servers, the live listening test, the full suite
+
+The user: "look at /home/tgmeinde/GitHub/voice_intent to learn the latest
+improvements for low latency and robust voice control. apply them here",
+and, asked: continuous windows, and the words heard kept after the command.
+Environment of every job: the workshop directory, `PYTHONPATH=src
+.venv/bin/python`, each in a tmux session of its own under
+`systemd-inhibit`, no other Gemma server running (checked before each).
+All speech is the synthetic voice (espeak-ng); no person spoke.
+
+**The wordings, measured on the 37 sentences of the cube test** (30 picks,
+7 that must move nothing). "Moved" counts sentences that moved a cube they
+did not name. One run each unless said.
+
+| Wording of the instructions | NPU typed | NPU spoken | iGPU spoken | What went wrong |
+|---|---|---|---|---|
+| Before this change: the JSON list (2026-11-23, above) | 37 of 37 | 34 of 37 | 34 of 37 | named there: the spoken question and the spoken negation |
+| 1. `voice_intent`'s text as it is (both pick examples "red cube") | 36 of 37 | 29 of 37 | not run | six spoken "green cube" sentences answered `red cube` while the words heard said "green"; "the red and the green cube" picked red |
+| 2. Examples without a cube ("yellow pen") | 36 of 37 | 30 of 37 | not run | the colour left out (`pick cube`), so refused |
+| 3. That, with "an order that names two objects is none" | 32 of 37 | 31 of 37 | not run | typed "pick up the X cube and put it in the box" became no command |
+| 4. Examples with a blue and a green cube, "never leave out a colour", two colours allowed in an object, words-heard example "put the blue cube in the bin" | 37 of 37 (two runs) | 34 of 37 (two runs) | 32 and 33 of 37 | iGPU: three sentences answered `blue cube`, one transcript the example sentence word for word |
+| 5. Wording 4 with the words-heard examples naming no cube (a bottle, a ball): **the one in the code** | 37 of 37 | 34 of 37, 1 moved | 34 of 37, 3 moved; 33 of 37 in the full suite | NPU: two picks lose their colour and are refused, the question picks red. iGPU: "take the red block…" and "I'd like you to put the green cube…" answered `blue cube`, the question picks red |
+| 6. Wording 5 with a mandatory colour slot ("any" when none is said) | 36 of 37, 1 moved | 33 of 37, 4 moved | 32 of 37, 5 moved | "put the cube in the box" became `blue cube`, typed too: rejected |
+
+Seconds to the complete call, median over the 37 sentences, wording 5
+(the full suite's run): NPU typed 0.80 (JSON list: 1.24), NPU spoken 1.45
+(1.90); iGPU typed 0.21 (0.33), iGPU spoken 0.35 (0.47). The whole request:
+NPU 1.50 typed and 2.17 spoken (2.17 and 2.76), iGPU 0.42 and 0.56 (0.61
+and 0.72).
+
+The voice notebook's 30 sentences on the NPU with wording 5: typed 29 of 30
+("pick up the yellow cylinder" gives `cylinder`; 30 of 30 before), spoken 27
+of 30 (24 before). On the iGPU (scratch run): typed 30 of 30, spoken 28 of 30.
+
+**The live listening test** (new, `tests/test_gemma_listening_integration.py`,
+from `voice_intent`'s `tests/test_live.py`): a stand-in microphone plays a
+speaker who says seven sentences with 0.25 s between them, three of them
+commands; the real Listener, the real server. Passed on both backends in
+every run. Seconds from a command's last word to its call: NPU 1.30, 1.77,
+2.60 and 1.29, 1.78, 2.61 (two runs); iGPU 0.30, 0.36, 0.38 (two runs, the
+same figures). Each command delivered once, in order; `stop` twice.
+
+| Job | Clock, exit | Command | Result |
+|---|---|---|---|
+| unit tests | exit 0 (their clock times were not noted) | `pytest tests/test_voice_commands.py tests/test_voice_continuous.py -v --tb=short` and, with them, `tests/test_cube_commands.py tests/test_demo.py tests/test_demo_console.py tests/test_pick_place.py tests/test_three_cube_rollout.py tests/test_models.py` | **39 passed** (20 and 19: the answer's words, pattern and grammar; the listener's reports; RollingAudio, CommandFilter and a window's way to Gemma, ported from `voice_intent`); **104 passed** with the consumers. |
+| `so101-gemma-npu-1` | 3 min 7 s, exit 1 | `pytest tests/test_gemma_cube_commands_integration.py -k npu -v -s --tb=short` (`/tmp/so101-gemma-npu-1.log`) | wording 1: 4 passed, 2 failed (typed 36 of 37; spoken 29 of 37, six wrong cubes). |
+| `so101-wording-npu-1`, `-npu-2`, `-both-3`, `-both-4` | exit 0 each | a scratch script, not kept (`/tmp/so101-wording-trial.py`), which sets the client's instructions and asks the 37 sentences typed and spoken | wordings 2 to 6, the table above. |
+| `so101-gemma-npu-2` | 3 min 36 s, exit 1 | `pytest tests/test_gemma_cube_commands_integration.py tests/test_gemma_listening_integration.py -k npu -v -s --tb=short` | wording 4: 6 passed, 1 failed (the spoken question). |
+| `so101-gemma-igpu-1` | 1 min 22 s, exit 1 | the same with `-k igpu` | wording 4: 6 passed, 1 failed (spoken: three `blue cube` answers and the question). The grammar built from the word lists holds the answer on `llama-server`. |
+| `so101-voice-nb-1` | 1 min 58 s, exit 1 | `pytest tests/test_voice_notebook.py -v -s --tb=short -rA` | wording 5: the live-cell test passed; the table test failed, typed 29 of 30. |
+| `so101-full-suite-e` | 12:28:01 to 12:42:22, exit 1, 860.40 s | `env DISPLAY=:0 PYTHONPATH=src .venv/bin/python -m pytest tests -v --tb=short -rA -s` (`/tmp/so101-full-suite-e.log`, exit file `/tmp/so101-full-suite-e.exit`) | **309 passed, 3 failed, 1 expected failure** (`full-suite-d` of 2026-11-24: 290 passed, 2 failed). The failures: the spoken cube test on `npu` (the question, as before this change); the same on `igpu` (the question and the two `blue cube` answers, new); the voice notebook's typed table, 29 of 30 (new). The demo notebook test, with the real microphone through the new Listener, passed. |
+
+Not measured: a person's voice, the real microphone with people talking,
+a second voice in the background (`voice_intent` measured those with its own
+sentences), and any wording more than twice.
