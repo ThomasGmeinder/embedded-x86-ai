@@ -13,7 +13,7 @@ runner_port = 8083  # where the three-cube runner and the tests start their own 
 
 [request]  # one chat completion
 temperature = 0.0
-max_tokens = 96  # the command JSON plus the short "heard" phrase
+max_tokens = 48  # the command's words (six tokens at most) plus the short "heard" phrase
 timeout_s = 30
 
 [listening]
@@ -28,18 +28,27 @@ sample_rate = 16000
 # offset alone read -30.)
 min_dbfs = -60
 vad_threshold = 0.5  # Silero's probability from which a frame counts as speech
-# An utterance goes to Gemma with its loud samples at this share of full scale, the synthetic
+# A window goes to Gemma with its loud samples at this share of full scale, the synthetic
 # test voice's level, raised by most_gain at most: Gemma hears quiet sound worse.
 sent_peak = 0.5
 most_gain = 20
-# An utterance is sent to Gemma the moment the speaker has been silent this long. Shorter
-# sends sooner and cuts a sentence at a shorter pause; 400 is a first value, not yet tuned
-# with a person at the microphone.
-end_silence_ms = 400
-pre_roll_ms = 300    # sound kept from before the first frame of speech: the detector answers late
-min_voice_ms = 100   # an utterance with less speech than this (a click, a cough) is dropped
-window_s = 6         # the longest utterance; also the length of the synthetic voice's test clip
-max_age_s = 10       # an utterance that waited longer than this for Gemma is not asked
+# Listening without an end-of-speech event (so101_smolvla.voice.continuous), the way of
+# ~/GitHub/voice_intent, taken over 2026-11-27; the values and their measurements are that
+# project's (its README and RESEARCH_LEDGER.md).
+# The newest sound Gemma gets each time it is free. Gemma follows the speech a window begins
+# with, so a shorter window loses fewer commands to other people's talk; a longer one is not
+# slower. A pick command that goes on after a pause is asked about with up to twice this.
+window_s = 3
+min_voice_ms = 100   # less new speech than this (a click, a cough) sends nothing
+# When someone begins to speak after a second of silence, the first window is sent at the
+# speaker's next short pause, or when the talk has gone on this long: sent at once it would
+# hold the first syllable only. Longer than a short command; where someone always talks it
+# changes nothing.
+enough_speech_ms = 2500
+# What is quieter than a window's loud speech by more than this is silenced before the window
+# is sent: talk in the background. 0 turns it off.
+quiet_gate_db = 8
+max_age_s = 10       # an answer for sound older than this is not acted on
 
 [synthetic_voice]
 library = "libespeak-ng.so.1"
@@ -47,3 +56,4 @@ voice = "en-us"
 words_per_minute = 150
 peak = 0.5
 lead_s = 0.5
+clip_s = 6  # the quiet clip one test sentence is put into: longer than the longest of them

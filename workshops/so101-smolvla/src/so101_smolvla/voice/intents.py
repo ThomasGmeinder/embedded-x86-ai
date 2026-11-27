@@ -1,69 +1,60 @@
 """The commands Gemma can call, the instructions it is given, and what one answer holds.
 
-A new command is three changes: its member in :class:`Intent`, one line in
-:data:`INTENT_SYSTEM_PROMPT`, its name in the ``cmd`` rule of ``intent.gbnf``.
-The grammar holds the shape of the answer for ``llama-server``; the JSON schema
-of :func:`response_schema`, the same shape for FastFlowLM, follows
-:class:`Intent` and needs no change. The instructions steer the choice. The
-instructions and the grammar are the texts measured in SPEC.md and are not
-edited lightly. The "stop" entry is the wording of 2026-11-23, chosen by
-measurement on both backends (TESTING_LEDGER.md, "the stop entry"); the
-sentences that hold it are ``examples.STOP_ORDERS`` and the lists beside it.
+One answer is a line of plain words, then a colon and the words heard:
 
-One answer is a JSON list of four strings: the command, the object, the place
-and the words heard, in that order (:data:`FIELDS`). Until 2026-11-23 it was
-an object with those four names as keys; the list was chosen by measurement
-for its fewer tokens, on the user's word to shorten the answer. The sentence
-of the instructions that shows the shape, the grammar and the schema changed
-with it; every other word of the instructions is as it was.
+    stop: stop robot                                -> stop
+    learn: learn the stack                          -> learn_stack
+    pick red cube box: put the red cube in the box  -> pick_place(object: red cube, place: box)
+    none: who built this stack                      -> unknown
+
+Gemma writes about 15 tokens a second on the NPU, and a command can only be
+acted on when it is written. So the command's part is the fewest tokens that
+say it, each word a single token of Gemma's tokenizer, and it comes first: a
+command without parameters is settled by its one word, a pick command by the
+colon. The words heard follow and cost the call nothing. This is the answer of
+``~/GitHub/voice_intent`` (its ``commands.py``, and the ``HEARD`` rule of its
+notebook), taken over on 2026-11-27 on the user's word; measured there against
+the JSON list this workshop had since 2026-11-23: a pick command known 1.43 s
+after the request began instead of 1.83 s.
+
+The objects are a closed list: only what is in :data:`SIZES`, :data:`COLOURS`,
+:data:`OBJECTS` and :data:`PLACES` can be written. The lists are
+``voice_intent``'s, with ``cylinder`` added for the sentences of
+``examples.CASES``.
+
+This module is the one place for all of it. The answer is held to its shape by
+:data:`PATTERN` in a JSON schema for FastFlowLM (:func:`response_format`) and
+by the grammar of :func:`grammar_text` for ``llama-server``; both are built
+from the lists here. A new command without parameters is two changes: its word
+and member in :data:`SIMPLE` (and :class:`Intent`), and one line in
+:data:`INTENT_SYSTEM_PROMPT`.
+
+The instructions are ``voice_intent``'s: this workshop's text of 2026-11-23
+(the "stop" entry chosen by measurement, TESTING_LEDGER.md) with the answer's
+shape replaced and the rules for negations, questions and remarks added. Three
+things differ from that project's text, chosen by measurement on the NPU with
+this workshop's 37 test sentences (TESTING_LEDGER.md, 2026-11-27):
+
+- The examples of a pick answer show cubes of two colours, and the entry
+  says never to leave out a colour. With ``voice_intent``'s examples, both of
+  them a red cube, six spoken sentences about the green cube were answered
+  "red cube" while the words heard said "green"; with examples that name no
+  cube, the colour was left out. The examples of the words heard name no
+  cube: with "put the blue cube in the bin" among them, ``llama-server``
+  wrote that very sentence for three other spoken ones. A colour in an
+  example still leaks: on ``llama-server`` two of the 37 spoken sentences
+  are answered "blue cube" (one run; the known weak point of this wording).
+- An object may carry two colours ("pick red green cube box"), so that an
+  order that names two cubes can be written down and is then refused by
+  ``cube_commands.choose_cube``; with one colour at most it became a pick of
+  the first cube.
+- ``cylinder`` among the objects (above).
 """
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass, field
 from enum import Enum
-
-# The shape of one answer, as intent.gbnf writes it, for the schema of the FastFlowLM request.
-WORD = "[a-z]{1,16}"
-OBJECT_PATTERN = f"^$|^{WORD}( {WORD}){{0,2}}$"  # empty, or one to three lowercase words
-PLACE_PATTERN = f"^$|^{WORD}( {WORD}){{0,1}}$"  # empty, or one or two lowercase words
-HEARD_PATTERN = r"^[a-zA-Z0-9',.?!\- ]*$"  # the words said; empty when they cannot be made out
-
-
-FIELDS = ("command", "object", "place", "heard")  # one answer, in the order it is written
-
-
-def response_schema() -> dict:
-    """The JSON schema of one answer: the grammar's shape, with the commands of :class:`Intent`.
-
-    A list of four strings, the fields of :data:`FIELDS` by position. A list and not an object
-    with named keys: the call is then 12 tokens of Gemma's instead of 21 (measured on
-    FastFlowLM, 2026-11-23: 1.25 s to the complete call instead of 1.94 s; shorter key names
-    saved nothing, a key is one token whatever its length)."""
-    return {
-        "type": "array",
-        "prefixItems": [
-            {"type": "string", "enum": [intent.value for intent in Intent]},
-            {"type": "string", "pattern": OBJECT_PATTERN},
-            {"type": "string", "pattern": PLACE_PATTERN},
-            {"type": "string", "pattern": HEARD_PATTERN},
-        ],
-        "items": False,
-        "minItems": len(FIELDS),
-        "maxItems": len(FIELDS),
-    }
-
-
-def response_format() -> dict:
-    """The ``response_format`` field of an OpenAI-style request, holding the answer to the schema."""
-    return {"type": "json_schema", "json_schema": {"name": "intent", "schema": response_schema()}}
-
-
-def schema_text() -> str:
-    """The schema as one canonical text, for its checksum in a result's provenance."""
-    return json.dumps(response_schema(), sort_keys=True, separators=(",", ":"))
 
 
 class Intent(str, Enum):
@@ -91,6 +82,68 @@ class Intent(str, Enum):
             return cls.UNKNOWN
 
 
+# What Gemma writes -> the command. One word, one token, and the beginning of no other answer.
+SIMPLE = {
+    "copy": Intent.GESTURE_MIMIC,
+    "fetch": Intent.FETCH_BLOCK,
+    "dance": Intent.DANCE,
+    "grip": Intent.GRIP,
+    "release": Intent.RELEASE,
+    "wave": Intent.WAVE,
+    "home": Intent.HOME,
+    "learn": Intent.LEARN_STACK,
+    "build": Intent.REBUILD_STACK,
+    "stop": Intent.STOP,
+}
+PICK = "pick"  # then the object's words, then the place if one was named
+NONE = "none"  # no command
+SIZES = ("small", "large")
+COLOURS = ("red", "green", "blue", "yellow")
+OBJECTS = ("cube", "bottle", "pen", "ball", "cylinder")
+PLACES = ("box", "bin")
+HEARD_CHARACTERS = "a-zA-Z0-9',.?! -"  # the words heard: no colon, no quote
+
+MOST_COLOURS = 2  # an object names one colour; two say that the user named two objects
+
+# The command's words, then a colon and the words heard (empty when they cannot be made out).
+WORDS_PATTERN = "(%s|%s|%s( %s)?%s (%s)( %s)?)" % (
+    "|".join(SIMPLE), NONE, PICK, "| ".join(SIZES), ("( %s)?" % "| ".join(COLOURS)) * MOST_COLOURS,
+    "|".join(OBJECTS), "| ".join(PLACES),
+)
+PATTERN = f"^{WORDS_PATTERN}: [{HEARD_CHARACTERS}]*$"
+
+
+def response_format() -> dict:
+    """The ``response_format`` field of an OpenAI-style request: FastFlowLM holds the answer to
+    one JSON string of the allowed words (1.0.10 or later)."""
+    return {"type": "json_schema", "json_schema": {"name": "command", "schema": {"type": "string", "pattern": PATTERN}}}
+
+
+def grammar_text() -> str:
+    """The same shape as a grammar for ``llama-server``, built from the same lists: a JSON
+    string, as FastFlowLM writes it, so one reader reads both."""
+
+    def one_of(words) -> str:
+        return " | ".join(f'"{word}"' for word in words)
+
+    colours = ' (" " colour)?' * MOST_COLOURS
+    return "\n".join((
+        "# Built by so101_smolvla.voice.intents.grammar_text from the lists of that module.",
+        'root   ::= "\\"" words ": " said "\\""',
+        f'words  ::= simple | "{NONE}" | pick',
+        f"simple ::= {one_of(SIMPLE)}",
+        f'pick   ::= "{PICK}" (" " size)?{colours} " " thing (" " place)?',
+        f"size   ::= {one_of(SIZES)}",
+        f"colour ::= {one_of(COLOURS)}",
+        f"thing  ::= {one_of(OBJECTS)}",
+        f"place  ::= {one_of(PLACES)}",
+        "# What was said; empty when the words cannot be made out.",
+        "said   ::= hchar*",
+        'hchar  ::= [a-zA-Z0-9] | "\'" | "," | "." | "?" | "!" | "-" | " "',
+        "",
+    ))
+
+
 @dataclass
 class ParsedCommand:
     """One answer of Gemma: the command, its parameters (object, place) and the words it heard."""
@@ -107,76 +160,97 @@ class ParsedCommand:
     def place(self) -> str:
         return self.params.get("place", "")
 
-
-def command_from_json(text: str) -> ParsedCommand | None:
-    """The answer in Gemma's JSON text, a list of the four fields, or None when the text is not one."""
-    raw = (text or "").strip()
-    if not raw.startswith("["):
-        return None
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(data, list) or not data or not all(isinstance(item, str) for item in data):
-        return None
-    command, obj, place, heard = (*data, "", "", "")[: len(FIELDS)]
-    params = {key: value.strip() for key, value in (("object", obj), ("place", place)) if value.strip()}
-    return ParsedCommand(Intent.from_string(command), params=params, transcript=heard.strip())
+    @property
+    def call(self) -> tuple[str, str, str]:
+        """(command, object, place): what the listening session's filter compares."""
+        return self.intent.value, self.params.get("object", ""), self.place
 
 
-# An answer is written in the order command, object, place, heard (the grammar and the
-# schema fix it), so the call is complete while the words heard are still being written.
-# The values of the first three hold no quote and no backslash (WORD above).
-_CALL_SO_FAR = re.compile(r'\s*\[\s*"([a-z_]*)"\s*,\s*"([a-z ]*)"\s*,\s*"([a-z ]*)"\s*,')
-_HEARD_SO_FAR = re.compile(r'\s*"([^"\\]*)')  # what follows the call
+def command_from_words(words: str) -> ParsedCommand | None:
+    """The call of a complete answer's command words; None when they are no allowed answer."""
+    parts = words.split()
+    if len(parts) == 1 and parts[0] in SIMPLE:
+        return ParsedCommand(SIMPLE[parts[0]])
+    if parts == [NONE]:
+        return ParsedCommand(Intent.UNKNOWN)
+    if len(parts) < 2 or parts[0] != PICK:
+        return None
+    place = parts.pop() if parts[-1] in PLACES else ""
+    thing = parts[1:]
+    if not thing or thing[-1] not in OBJECTS:
+        return None
+    described = thing[:-1]
+    if described and described[0] in SIZES:
+        described = described[1:]
+    if len(described) > MOST_COLOURS or any(word not in COLOURS for word in described):
+        return None
+    params = {"object": " ".join(thing)}
+    if place:
+        params["place"] = place
+    return ParsedCommand(Intent.PICK_PLACE, params)
+
+
+def _opened(text: str) -> str | None:
+    """The answer's text after its opening quote; None before the quote is written."""
+    text = (text or "").lstrip()
+    return text[1:] if text.startswith('"') else None
 
 
 def call_from_partial(text: str) -> ParsedCommand | None:
-    """The call (command, object, place) once the answer's text so far holds all of it; None before.
+    """The call (command, object, place) once the answer's text so far settles it; None before.
 
-    The comma after the place's closing quote is what completes it. The words heard are not
-    in the result: they follow.
+    A command without parameters, and "none", is settled by its word, which is one token and
+    the beginning of no other answer. A pick command is settled by the colon (or, in an answer
+    without words heard, by the closing quote): until then a place can still follow. Words
+    that are complete and no allowed answer are ``unknown``: no command is the stricter
+    reading. The words heard are not in the result: they follow.
     """
-    found = _CALL_SO_FAR.match(text or "")
-    if found is None:
+    body = _opened(text)
+    if body is None:
         return None
-    command, obj, place = found.groups()
-    params = {key: value.strip() for key, value in (("object", obj), ("place", place)) if value.strip()}
-    return ParsedCommand(Intent.from_string(command), params=params)
+    words, colon, _ = body.partition(":")
+    if colon or words.endswith('"'):
+        return command_from_words(words.rstrip('"')) or ParsedCommand(Intent.UNKNOWN)
+    word = words.strip()
+    return command_from_words(word) if word in SIMPLE or word == NONE else None
 
 
 def heard_from_partial(text: str) -> str:
     """The words heard as far as the answer's text has them: all of them in a finished answer."""
-    call = _CALL_SO_FAR.match(text or "")
-    found = _HEARD_SO_FAR.match(text, call.end()) if call else None
-    return found.group(1).strip() if found else ""
+    body = _opened(text)
+    if body is None:
+        return ""
+    _, _, heard = body.partition(":")
+    return heard.rstrip().removesuffix('"').strip()
 
 
 INTENT_SYSTEM_PROMPT = """\
 You are the command router for a robot arm on a crowded floor. Other people
 are talking. Ignore background conversation, a second speaker, questions,
 quotes, negations, and anything not addressed to the robot: those are
-"unknown". Map a clear instruction to exactly one command and answer ONLY
-with a JSON list ["<name>", "<object or empty string>", "<place or empty string>", "<words>"]: the command, then "object", then "place", then "heard".
-"object" is the thing to act on for pick_place (one to three plain words,
-e.g. "ball", "water bottle", "small green bottle"); for every other command
-use "".
-"place" is where the user wants the object put for pick_place (one or two
-plain words, e.g. "box"); use "" when the user names no place and for every
-other command.
-"heard" is the words the person said to the robot, and nothing else.
-Use "" for "heard" when you cannot make out the words.
+"none". Map a clear instruction to exactly one command and answer ONLY
+with the command's words in lower case, nothing else.
+First decide whether the speaker orders the robot to do something now.
+A sentence that says NOT to do something ("do not rebuild the stack",
+"don't pick up the cube", "never mind") is "none". A question ("who built
+this stack", "is the ball in the box", "can it dance") is "none". A remark
+about things ("the stack looks nice", "the cube is red") is "none".
 
 Commands:
-- "gesture_mimic": the user wants the arm to copy / mirror / follow their own
+- "copy": the user wants the arm to copy / mirror / follow their own
   arm and hand movements ("copy me", "mirror my hand", "follow my arm").
-- "fetch_block": the user wants the block/cube from its usual spot brought to
-  them ("get me the block", "bring the cube here").
-- "pick_place": the user names an object to pick up / grab / hand over, or
+- "fetch": the user wants the block/cube from its usual spot brought to
+  them ("get me the block", "bring the cube here", "fetch the cube").
+- "pick": the user names an object to pick up / grab / hand over, or
   to put somewhere ("pick up the ball", "grab the bottle and give it to me",
-  "put the apple in the box"). Put the object name in "object" and the
-  place, if the user names one, in "place".
-- "dance": the user wants the robot to dance / groove / party.
+  "put the pen in the box"). Answer "pick", then the object as the user
+  names it: its size if said (small, large), its colour if said (red, green,
+  blue, yellow; both colours when the user names two), and what it is (cube, bottle, pen, ball, cylinder); then the
+  place if the user names one (box, bin). Never leave out a colour the user says.
+  Examples: "pick ball", "pick blue cube", "pick green cube box", "pick small yellow
+  bottle bin".
+- "dance": the user wants the robot to dance / groove / party / show its
+  dance moves.
 - "grip": the user is handing the robot something to hold ("hold this",
   "take this pencil", "grab what I give you").
 - "release": the user wants the jaws opened, here, so they can take the
@@ -184,17 +258,21 @@ Commands:
   "open your hand").
 - "wave": the user wants a wave / greeting ("wave at me", "say hi").
 - "home": the speaker says "go home". "home", "rest", and "reset" alone
-  are "unknown".
-- "learn_stack": the user tells the robot to learn / memorise the stack of
+  are "none".
+- "learn": the user orders the robot to learn / memorise the stack of
   cubes that stands on the table now ("learn the stack", "memorise this
   stack").
-- "rebuild_stack": the user tells the robot to build the stack it learned
+- "build": the user orders the robot to build the stack it learned
   again from the scattered cubes ("rebuild the stack", "build the stack
-  again").
+  again"). Talk about a stack that is no such order is "none".
 - "stop": the user orders the robot to stop moving ("stop", "stop robot",
   "robot stop", "stop the robot", "stop now"). This is the emergency
-  command: when in doubt between "stop" and "unknown" for such an order,
+  command: when in doubt between "stop" and "none" for such an order,
   answer "stop". Talk about stopping that is not an order to the robot
-  ("stop talking", "don't stop", "why did it stop") is "unknown".
-- "unknown": anything else.
+  ("stop talking", "don't stop", "why did it stop") is "none".
+- "none": anything else.
+
+After the command's words write a colon and then the words the person said, as you heard them, for example
+"pick small yellow bottle bin: put the small yellow bottle in the bin", "pick large red ball: grab the large red ball",
+"wave: wave at me", "none: who built this stack".
 """

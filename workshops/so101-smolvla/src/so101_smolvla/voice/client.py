@@ -4,14 +4,14 @@ The two requests are the ones measured in SPEC.md: a chat completion with the
 instructions of ``intents.py`` as the system message and the sentence, or the
 clip as ``input_audio``, as the user message, held to the shape of one answer.
 How the shape is held depends on the backend of the settings: ``llama-server``
-takes the grammar of ``intent.gbnf``; FastFlowLM takes the JSON schema of
-``intents.response_format`` and the model's tag, with thinking off through its
-own ``think`` field.
+takes the grammar of ``intents.grammar_text``; FastFlowLM takes the JSON schema
+of ``intents.response_format`` and the model's tag, with thinking off through
+its own ``think`` field.
 
 The answer is read as the server writes it (a stream of server-sent events).
-It is written in the order command, object, place, heard, so the call is
-complete before the words heard are: ``on_call`` receives the call at that
-moment, with the seconds since the request began, while the rest is still
+It is the command's plain words, a colon, the words heard, so the call is
+settled before the words heard are written: ``on_call`` receives the call at
+that moment, with the seconds since the request began, while the rest is still
 being written. Nothing waits for the whole answer to act on the call.
 """
 
@@ -30,10 +30,11 @@ from so101_smolvla.voice.intents import (
     Intent,
     ParsedCommand,
     call_from_partial,
+    grammar_text,
     heard_from_partial,
     response_format,
 )
-from so101_smolvla.voice.settings import Settings, grammar, load_settings
+from so101_smolvla.voice.settings import Settings, load_settings
 
 AUDIO_INSTRUCTION = "Classify the spoken robot instruction in this audio."
 # The call, and the seconds from the request to it. Returning False says the words are not wanted.
@@ -68,7 +69,7 @@ class GemmaClient:
         self.settings = settings or load_settings()
         self.backend = backend or self.settings.backend
         self.base = base
-        self.grammar = grammar()
+        self.grammar = grammar_text()
         self.instructions = INTENT_SYSTEM_PROMPT
         self.last_usage: dict | None = None  # the server's usage block of the last answer, when it sent one
         self.last_call_s: float | None = None  # the last request: seconds until its call was complete
@@ -103,7 +104,7 @@ class GemmaClient:
                 {"role": "user", "content": user_content},
             ],
             "temperature": float(request["temperature"]),
-            "max_tokens": int(request["max_tokens"]),  # the command JSON plus the short "heard" phrase
+            "max_tokens": int(request["max_tokens"]),  # the command's words plus the short "heard" phrase
             "stream": True,
             **self._constraint(),
         }

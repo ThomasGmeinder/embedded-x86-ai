@@ -33,7 +33,6 @@ from so101_smolvla.models import COMMAND_BACKENDS as BACKENDS
 from so101_smolvla.models import MODELS_FILE, ROOT, SetupFailure, load_models
 
 SETTINGS_FILE = ROOT / "configs" / "voice.toml"
-GRAMMAR_FILE = Path(__file__).with_name("intent.gbnf")
 SETUP = "scripts/setup_voice.sh"
 NPU_DEVICE = Path("/dev/accel/accel0")
 FLM_INSTALL = "https://github.com/ROCm/FastFlowLM/releases"
@@ -100,10 +99,6 @@ def gemma_file(settings: Settings, which: str) -> Path:
         return Path(hf_hub_download(repo, name, local_files_only=True))
     except LocalEntryNotFoundError:
         raise SetupFailure(f"{name} of {repo} is not in the Hugging Face cache; run {SETUP}") from None
-
-
-def grammar() -> str:
-    return GRAMMAR_FILE.read_text(encoding="utf-8")
 
 
 # ---- the NPU backend: FastFlowLM and its model store --------------------------------------------

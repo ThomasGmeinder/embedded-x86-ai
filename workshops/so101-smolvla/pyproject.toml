@@ -36,7 +36,7 @@ notebooks = ["ipykernel", "jupyterlab", "nbconvert", "ipywidgets"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-so101_smolvla = ["*.qml", "voice/*.gbnf"]
+so101_smolvla = ["*.qml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

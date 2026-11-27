@@ -2,14 +2,17 @@
 
 - ``settings``: the one reader of ``configs/voice.toml``; the backend Gemma runs on comes from
   ``configs/models.toml`` through ``so101_smolvla.models``; and where the model files are.
-- ``intents``: the commands, the instructions to the model, the schema of one answer, and what
-  one answer holds.
+- ``intents``: the commands, the instructions to the model, the plain words of one answer with
+  their pattern and grammar, and what one answer holds.
 - ``server``: the Gemma 4 E4B server, ``llama-server`` on the integrated graphics or FastFlowLM
   on the NPU, started and stopped here.
 - ``client``: one request to that server, typed text or a 16 kHz clip, held to the grammar
   (llama-server) or the schema (FastFlowLM).
 - ``speech``: a sentence in the synthetic voice of espeak-ng, inside a quiet clip.
-- ``microphone``: the live session, Silero speech detection and rolling windows.
+- ``continuous``: the newest sound and what of it Gemma has not been given, and which of
+  Gemma's answers is delivered as a command; no end-of-speech event.
+- ``microphone``: the live session: Silero speech detection, a window on its way to Gemma, the
+  two threads.
 - ``commands``: ``VoiceCommands``, what the three-cube test and its tests use.
 - ``examples``: the sentences of the tool-call test and what each must give.
 

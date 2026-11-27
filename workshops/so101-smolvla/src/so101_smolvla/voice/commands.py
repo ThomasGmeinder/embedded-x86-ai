@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from so101_smolvla.voice.client import GemmaClient, sha256
-from so101_smolvla.voice.intents import schema_text
+from so101_smolvla.voice.intents import PATTERN
 from so101_smolvla.voice.server import GemmaServer
 from so101_smolvla.voice.settings import Settings, check_ready, flm_model, flm_version, load_settings
 from so101_smolvla.voice.speech import SyntheticVoice
@@ -99,7 +99,7 @@ class VoiceCommands:
             "model_name": entry["url"].rstrip("/").rsplit("/", 1)[-1],
             "quantization": entry["details"]["quantization_level"],
             "context_length": self.settings.npu["context"] or entry["default_context_length"],
-            "schema_sha256": sha256(schema_text()),
+            "schema_sha256": sha256(PATTERN),  # the pattern the schema holds the answer to
         }
 
     def _fields(self, command, sentence: str, how: str, seconds: float, spoken_s=None) -> CommandFields:

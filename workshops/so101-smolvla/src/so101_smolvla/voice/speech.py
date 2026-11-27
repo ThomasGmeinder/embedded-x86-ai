@@ -1,8 +1,8 @@
 """A sentence in a synthetic voice (espeak-ng), inside a quiet clip, as the bytes of a WAV file.
 
-The voice, speaking rate, loudness and lead-in are the ``synthetic_voice``
-section of ``configs/voice.toml``; the clip's length and sample rate are those
-of the live session's windows, so a clip reaches Gemma as a window does.
+The voice, speaking rate, loudness, lead-in and the clip's length are the
+``synthetic_voice`` section of ``configs/voice.toml``; the sample rate is the
+live session's.
 """
 
 from __future__ import annotations
@@ -58,6 +58,7 @@ class SyntheticVoice:
         self.words_per_minute = int(voice["words_per_minute"])
         self.peak = float(voice["peak"])
         self.lead_s = float(voice["lead_s"])
+        self.clip_s = float(voice["clip_s"])
         try:
             ctypes.CDLL(self.library_name)  # only whether it is installed; no sentence is made in this process
         except OSError:
@@ -97,21 +98,19 @@ class SyntheticVoice:
         return np.round(sound).astype(np.int16)
 
     def clip(self, text: str) -> tuple[bytes, float]:
-        """The sentence inside a quiet clip of the live session's window: (WAV bytes, spoken seconds)."""
-        listening = self.settings.listening
-        rate, window_s = int(listening["sample_rate"]), float(listening["window_s"])
+        """The sentence inside a quiet clip of ``clip_s`` seconds: (WAV bytes, spoken seconds)."""
+        rate = int(self.settings.listening["sample_rate"])
         sound = self.say(text, rate)
-        return clip(sound, rate, window_s, self.lead_s), len(sound) / rate
+        return clip(sound, rate, self.clip_s, self.lead_s), len(sound) / rate
 
     def recorded(self) -> dict:
         """The voice's settings, as a result's provenance records them."""
-        listening = self.settings.listening
         return {
             "library": self.library_name,
             "voice": self.voice,
             "words_per_minute": self.words_per_minute,
             "peak": self.peak,
             "lead_s": self.lead_s,
-            "sample_rate": int(listening["sample_rate"]),
-            "clip_s": float(listening["window_s"]),
+            "sample_rate": int(self.settings.listening["sample_rate"]),
+            "clip_s": self.clip_s,
         }

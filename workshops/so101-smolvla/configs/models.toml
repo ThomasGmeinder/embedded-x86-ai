@@ -14,10 +14,11 @@
 
 [command]
 # Where Gemma runs: "npu" or "igpu", one of the two sections below. The two
-# answer the same request shape: a JSON schema built from the commands for
-# FastFlowLM, the grammar file intent.gbnf for llama-server. Measured side by
-# side in TESTING_LEDGER.md, 2026-11-23. After a change, run
-# scripts/setup_voice.sh once.
+# answer the same request shape, both built from the word lists of
+# so101_smolvla/voice/intents.py: a pattern in a JSON schema for FastFlowLM, a
+# grammar for llama-server. Measured side by side in TESTING_LEDGER.md,
+# 2026-11-23 (the answer then a JSON list) and 2026-11-27 (plain words). After
+# a change, run scripts/setup_voice.sh once.
 backend = "npu"
 
 [command.npu]  # FastFlowLM (flm serve) on the NPU

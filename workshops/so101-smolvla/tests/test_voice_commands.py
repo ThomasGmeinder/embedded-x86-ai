@@ -1,4 +1,6 @@
-"""so101_smolvla.voice without a Gemma server: settings, readiness, grammar and schema, the synthetic voice, the fields."""
+"""so101_smolvla.voice without a Gemma server: settings, readiness, the answer's words with their pattern and
+grammar, the synthetic voice, the fields, the client's reading, the listener's reports. (The rolling windows
+and a window's way to Gemma are in test_voice_continuous.py.)"""
 
 from __future__ import annotations
 
@@ -15,27 +17,24 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import numpy as np
 import pytest
 
+from so101_smolvla.voice import intents
 from so101_smolvla.voice import settings as voice_settings
 from so101_smolvla.voice.client import GemmaClient, answer_pieces
 from so101_smolvla.voice.commands import SPOKEN, TYPED, CommandFields, voice_ready
 from so101_smolvla.voice.intents import (
-    FIELDS,
-    HEARD_PATTERN,
     INTENT_SYSTEM_PROMPT,
-    OBJECT_PATTERN,
-    PLACE_PATTERN,
+    PATTERN,
     Intent,
     ParsedCommand,
     call_from_partial,
-    command_from_json,
+    command_from_words,
+    grammar_text,
     heard_from_partial,
     response_format,
-    response_schema,
-    schema_text,
 )
-from so101_smolvla.voice.microphone import _STOP, Listener, OffsetRemover, Utterances, at_level, dbfs
+from so101_smolvla.voice.microphone import Listener, OffsetRemover, at_level, dbfs
 from so101_smolvla.voice.server import RUNTIMES, GemmaServer
-from so101_smolvla.voice.settings import BACKENDS, SetupFailure, check_ready, grammar, load_settings
+from so101_smolvla.voice.settings import BACKENDS, SetupFailure, check_ready, load_settings
 from so101_smolvla.voice.speech import SyntheticVoice
 
 
@@ -108,60 +107,68 @@ def test_readiness_names_each_missing_piece_and_the_setup_script():
         assert "setup_voice.sh" in reason or "espeak" in reason or "FastFlowLM" in reason
 
 
-def test_the_grammar_and_the_schema_name_every_command_and_the_instructions_describe_each():
-    text = grammar()
-    schema = response_schema()
-    # One answer is a list of four strings, in the grammar's order: command, object, place, heard.
-    assert FIELDS == ("command", "object", "place", "heard")
-    assert schema["type"] == "array" and schema["items"] is False
-    assert schema["minItems"] == schema["maxItems"] == len(schema["prefixItems"]) == len(FIELDS)
-    assert schema["prefixItems"][0]["enum"] == [intent.value for intent in Intent]
-    assert [item.get("pattern") for item in schema["prefixItems"][1:]] == [OBJECT_PATTERN, PLACE_PATTERN, HEARD_PATTERN]
-    for intent in Intent:
-        assert f'"\\"{intent.value}\\""' in text, intent
-        assert f'"{intent.value}"' in INTENT_SYSTEM_PROMPT, intent
-    assert 'root    ::= "[" ws cmd ws "," ws obj ws "," ws place ws "," ws said ws "]"' in text
-    # The instructions show the same shape and name the three fields after the command in its order.
-    assert 'with a JSON list ["<name>", "<object or empty string>", "<place or empty string>", "<words>"]' in INTENT_SYSTEM_PROMPT
-    assert 'the command, then "object", then "place", then "heard".' in INTENT_SYSTEM_PROMPT
-    assert response_format() == {"type": "json_schema", "json_schema": {"name": "intent", "schema": schema}}
-    assert schema_text() == schema_text() and schema_text().startswith('{"items":false')
+def _picks() -> list[str]:
+    """Every pick answer the lists allow."""
+    return [
+        f"pick{size}{colour} {thing}{place}"
+        for size in ("", *(f" {word}" for word in intents.SIZES))
+        for colour in ("", *(f" {word}" for word in intents.COLOURS))
+        for thing in intents.OBJECTS
+        for place in ("", *(f" {word}" for word in intents.PLACES))
+    ]
 
 
-@pytest.mark.parametrize(
-    "pattern, accepted, rejected",
-    [
-        # obj ::= "\"\"" | "\"" word (" " word)? (" " word)? "\""   word ::= [a-z] [a-z]{0,15}
-        (OBJECT_PATTERN, ["", "ball", "red cube", "small green bottle", "a" * 16],
-         ["Red cube", "a b c d", "bottle!", "red  cube", " ball", "a" * 17]),
-        # place ::= "\"\"" | "\"" word (" " word)? "\""
-        (PLACE_PATTERN, ["", "box", "big box"], ["the big box", "Box", "box1"]),
-        # said ::= "\"" hchar* "\""   hchar ::= [a-zA-Z0-9] | "'" | "," | "." | "?" | "!" | "-" | " "
-        (HEARD_PATTERN, ["", "Put the red cube in the box", "I'd like it, please. OK? Yes! Re-do 2"],
-         ['say "this"', "ümlaut", "tab\tin", "colon: no"]),
-    ],
-)
-def test_the_schemas_patterns_accept_and_reject_what_the_grammar_does(pattern, accepted, rejected):
-    for text in accepted:
-        assert re.fullmatch(pattern, text), text
-    for text in rejected:
-        assert not re.fullmatch(pattern, text), text
+def test_every_command_has_its_word_and_the_pattern_the_grammar_and_the_instructions_name_each():
+    # Every command but pick_place and unknown is one word of its own; those two are "pick" and "none".
+    assert set(intents.SIMPLE.values()) == set(Intent) - {Intent.PICK_PLACE, Intent.UNKNOWN}
+    assert len(set(intents.SIMPLE.values())) == len(intents.SIMPLE)
+    text = grammar_text()
+    for word in (*intents.SIMPLE, intents.PICK, intents.NONE):
+        assert f'"{word}"' in text and f'"{word}"' in INTENT_SYSTEM_PROMPT, word
+    # Every word an object or a place can be made of is in the pattern, the grammar and the instructions.
+    for word in (*intents.SIZES, *intents.COLOURS, *intents.OBJECTS, *intents.PLACES):
+        assert f'"{word}"' in text and word in PATTERN and re.search(rf"\b{word}\b", INTENT_SYSTEM_PROMPT), word
+    assert 'root   ::= "\\"" words ": " said "\\""' in text
+    # The instructions say the shape: the command's words, a colon, the words heard.
+    assert "answer ONLY\nwith the command's words in lower case" in INTENT_SYSTEM_PROMPT
+    assert "After the command's words write a colon and then the words the person said" in INTENT_SYSTEM_PROMPT
+    assert response_format() == {
+        "type": "json_schema", "json_schema": {"name": "command", "schema": {"type": "string", "pattern": PATTERN}},
+    }
 
 
-def test_an_answer_is_read_from_gemmas_json_and_anything_else_is_none():
-    command = command_from_json('["pick_place", "red cube", "bin", "put it"]')
-    assert command.intent is Intent.PICK_PLACE and command.object_name == "red cube"
-    assert command.place == "bin" and command.transcript == "put it"
-    stop = command_from_json('["stop", "", "", "stop robot"]')
-    assert stop.intent is Intent.STOP and stop.params == {} and stop.transcript == "stop robot"
-    assert command_from_json('["fly"]').intent is Intent.UNKNOWN
-    assert command_from_json("not json") is None and command_from_json("") is None
-    assert command_from_json("[]") is None and command_from_json('["stop", 3]') is None
-    # The shape of before 2026-11-23, an object with named keys, is not an answer any more.
-    assert command_from_json('{"command": "stop", "object": "", "place": "", "heard": ""}') is None
+def test_every_allowed_answer_decodes_to_a_call_and_nothing_else_does():
+    allowed = re.compile(PATTERN)
+    assert command_from_words("stop") == ParsedCommand(Intent.STOP)
+    assert command_from_words("learn") == ParsedCommand(Intent.LEARN_STACK)
+    assert command_from_words("build") == ParsedCommand(Intent.REBUILD_STACK)
+    assert command_from_words("copy") == ParsedCommand(Intent.GESTURE_MIMIC)
+    assert command_from_words("none") == ParsedCommand(Intent.UNKNOWN)
+    assert command_from_words("pick ball") == ParsedCommand(Intent.PICK_PLACE, {"object": "ball"})
+    assert command_from_words("pick red cube box").call == ("pick_place", "red cube", "box")
+    assert command_from_words("pick small green bottle bin").call == ("pick_place", "small green bottle", "bin")
+    assert command_from_words("pick large cylinder").call == ("pick_place", "large cylinder", "")
+    # The pattern Gemma is held to and the decoder agree, on every combination and on what is not one.
+    picks = _picks()
+    for words in [*intents.SIMPLE, intents.NONE, *picks]:
+        assert allowed.match(f"{words}: ") and command_from_words(words) is not None, words
+    assert len({command_from_words(words).call for words in picks}) == len(picks) == 3 * 5 * 5 * 3
+    # Two colours can be written, so that an order naming two cubes is not read as a pick of the first.
+    for words, call in (("pick red green cube box", ("pick_place", "red green cube", "box")),
+                        ("pick small blue red ball", ("pick_place", "small blue red ball", ""))):
+        assert allowed.match(f"{words}: ") and command_from_words(words).call == call, words
+    for words in ("", "pick", "pick box", "pick red", "pick red small cube", "pick cube table", "pick two cubes",
+                  "stop now", "learn_stack", "pick_place", "Stop", "pick red cube box bin", "pick red green blue cube"):
+        assert not allowed.match(f"{words}: ") and command_from_words(words) is None, words
+    # The words heard: letters, digits and plain punctuation; no quote, no colon, nothing else.
+    for heard in ("", "Put the red cube in the box", "I'd like it, please. OK? Yes! Re-do 2"):
+        assert allowed.match(f"stop: {heard}"), heard
+    for heard in ('say "this"', "ümlaut", "tab\tin", "colon: no"):
+        assert not allowed.match(f"stop: {heard}"), heard
+    assert not allowed.match("stop") and not allowed.match("stop:")  # the colon and its space are part of the shape
 
 
-def test_the_synthetic_voice_gives_a_clip_of_the_windows_length_at_the_listening_rate():
+def test_the_synthetic_voice_gives_a_clip_of_its_own_length_at_the_listening_rate():
     settings = load_settings()
     try:
         voice = SyntheticVoice(settings)
@@ -171,9 +178,11 @@ def test_the_synthetic_voice_gives_a_clip_of_the_windows_length_at_the_listening
     with wave.open(io.BytesIO(clip)) as handle:
         rate, frames = handle.getframerate(), handle.getnframes()
     assert rate == int(settings.listening["sample_rate"])
-    assert frames == int(settings.listening["window_s"]) * rate
-    assert 0.5 < spoken_s < settings.listening["window_s"] - voice.lead_s
-    assert voice.recorded()["clip_s"] == settings.listening["window_s"]
+    assert frames == int(settings.synthetic_voice["clip_s"]) * rate
+    assert 0.5 < spoken_s < settings.synthetic_voice["clip_s"] - voice.lead_s
+    assert voice.recorded()["clip_s"] == settings.synthetic_voice["clip_s"]
+    # The clip holds one sentence whole, so it is longer than a window of the live session.
+    assert settings.synthetic_voice["clip_s"] > settings.listening["window_s"]
 
 
 def test_a_sentence_sounds_the_same_whatever_the_voice_said_before_it():
@@ -261,32 +270,40 @@ def test_the_fields_record_as_the_dictionary_a_result_stores():
 
 # ---- the answer read as it is written: the call before the words heard ---------------------------
 
-ANSWER = '["pick_place", "green cube", "bin", "Put the green cube in the bin"]'
-CALL_ENDS = ANSWER.index(', "Put') + 1  # the comma after the place completes the call
+ANSWER = '"pick green cube bin: Put the green cube in the bin"'
+CALL_ENDS = ANSWER.index(":") + 1  # the colon after the command's words settles a pick command
 
 
-def test_the_call_is_read_from_the_text_so_far_once_its_last_character_is_in():
+def test_the_call_is_read_from_the_text_so_far_once_it_is_settled():
     for length in range(CALL_ENDS):
         assert call_from_partial(ANSWER[:length]) is None, ANSWER[:length]
     for length in range(CALL_ENDS, len(ANSWER) + 1):
         call = call_from_partial(ANSWER[:length])
         assert call.intent is Intent.PICK_PLACE and call.params == {"object": "green cube", "place": "bin"}
         assert call.transcript == ""  # the words are not part of the call
-    # The whole answer read both ways gives the same call; the words so far grow to all of them.
-    whole = command_from_json(ANSWER)
-    assert (whole.intent, whole.params) == (call.intent, call.params)
+    assert call.call == ("pick_place", "green cube", "bin")
+    # The words so far grow to all of them.
     assert heard_from_partial(ANSWER[:CALL_ENDS]) == ""
     assert heard_from_partial(ANSWER[: ANSWER.index("Put the gre") + len("Put the gre")]) == "Put the gre"
-    assert heard_from_partial(ANSWER) == whole.transcript == "Put the green cube in the bin"
-    # Empty fields stay out of the parameters; a command the model may not name is unknown.
-    stop = call_from_partial('["stop", "", "", "st')
-    assert stop.intent is Intent.STOP and stop.params == {}
-    assert heard_from_partial('["stop", "", "", "st') == "st"
-    assert call_from_partial('["fly", "", "",').intent is Intent.UNKNOWN
-    assert call_from_partial("") is None and call_from_partial("not json") is None
-    # Written without spaces, as a server may write it, it reads the same.
-    tight = call_from_partial('["pick_place","green cube","bin","Put')
-    assert tight.params == {"object": "green cube", "place": "bin"} and heard_from_partial('["stop","","","go') == "go"
+    assert heard_from_partial(ANSWER) == "Put the green cube in the bin"
+    # A command without parameters, and "none", is settled by its word: before the colon.
+    assert call_from_partial('"') is None and call_from_partial('"sto') is None
+    stop = call_from_partial('"stop')
+    assert stop.intent is Intent.STOP and stop.params == {} and stop.call == ("stop", "", "")
+    assert call_from_partial('"stop: st').intent is Intent.STOP and heard_from_partial('"stop: st') == "st"
+    assert call_from_partial('"none').intent is Intent.UNKNOWN
+    assert call_from_partial('"learn').intent is Intent.LEARN_STACK
+    # A pick command is not: a place can still follow. Without words heard the closing quote settles it.
+    assert call_from_partial('"pick') is None and call_from_partial('"pick red cube box') is None
+    assert call_from_partial('"pick red cube"').call == ("pick_place", "red cube", "")
+    # Complete words that are no allowed answer are no command; text without the opening quote is no answer yet.
+    assert call_from_partial('"fly: off').intent is Intent.UNKNOWN
+    assert call_from_partial('"pick red: the red one').intent is Intent.UNKNOWN
+    assert call_from_partial("") is None and call_from_partial("stop") is None
+    assert heard_from_partial("") == "" and heard_from_partial('"stop') == ""
+    # No answer is the beginning of another: the first word settles a command without parameters.
+    answers = [*intents.SIMPLE, intents.NONE]
+    assert not [(a, b) for a in answers for b in [*answers, intents.PICK] if a != b and b.startswith(a)]
 
 
 def _events(*pieces: str, usage: dict | None = None) -> list[bytes]:
@@ -377,78 +394,124 @@ def test_the_client_hands_over_the_call_while_the_words_are_still_unwritten():
         stand_in.close()
 
 
-def test_the_listener_reports_the_call_first_then_the_whole_answer_and_nothing_for_no_command():
-    answers = [
-        (ParsedCommand(Intent.PICK_PLACE, {"object": "green cube"}),
-         ParsedCommand(Intent.PICK_PLACE, {"object": "green cube"}, "grab the green cube")),
-        (ParsedCommand(Intent.UNKNOWN), ParsedCommand(Intent.UNKNOWN, {}, "nice weather")),
-        # The same command again is a sentence of its own: utterances do not overlap, nothing is dropped.
-        (ParsedCommand(Intent.PICK_PLACE, {"object": "green cube"}),
-         ParsedCommand(Intent.PICK_PLACE, {"object": "green cube"}, "grab the green cube")),
-    ]
-    order, wanted = [], []
+LOUD = np.round(3000 * np.sin(2 * np.pi * 300 * np.arange(320) / 16000)).astype("<i2").tobytes()  # 20 ms of a tone
+QUIET = bytes(640)
 
-    class Client:
-        def parse_audio(self, wav, on_call=None):
-            call, whole = answers[len(wanted)]
-            wanted.append(on_call(call, 1.5))  # False: the listener has no use for the words
-            order.append("words written")
-            return whole
 
-    listener = Listener(Client(), settings=load_settings())
-    now = time.monotonic()
-    reported = threading.Thread(
-        target=listener._request,
-        args=(lambda command: order.append(("whole", command.transcript)), None,
-              lambda found, seconds: order.append(("call", found.transcript, seconds))),
-    )
-    for _ in answers:  # utterances wait in the queue while Gemma answers an earlier one
-        listener._put((bytes(2 * 16000), now))
-    listener._put(_STOP)
-    reported.start()
-    reported.join(10)
-    assert not reported.is_alive()
+class ScriptedGemma:
+    """A stand-in for the client: one scripted answer per request, the call handed to ``on_call`` first.
+    Each request is held at its end until the test has fed the sound of the next one (``go``), so what
+    the listener asks about next does not depend on how fast its thread runs. Plumbing only; the real
+    Gemma hears the real listener in test_gemma_listening_integration.py."""
+
+    def __init__(self, answers: list[ParsedCommand]) -> None:
+        self.answers, self.wanted, self.asked = answers, [], threading.Semaphore(0)
+        self.go = threading.Semaphore(0)
+        self.before_call = lambda: None  # what happens while Gemma works on the request
+
+    def parse_audio(self, wav, on_call=None):
+        whole = self.answers[len(self.wanted)]
+        self.before_call()
+        self.wanted.append(on_call(ParsedCommand(whole.intent, dict(whole.params)), 1.5))  # False: no use for the words
+        self.asked.release()
+        assert self.go.acquire(timeout=10)
+        return whole
+
+
+class FedListener:
+    """A Listener without a microphone: the test feeds its buffer the frames a microphone would."""
+
+    def __init__(self, answers: list[ParsedCommand]) -> None:
+        self.gemma, self.order, self.frames = ScriptedGemma(answers), [], 0
+        self.listener = Listener(self.gemma, settings=load_settings())
+        self.thread = threading.Thread(
+            target=self.listener._request,
+            args=(lambda command: self.order.append(("whole", command.call, command.transcript)), None,
+                  lambda call, seconds: self.order.append(("call", call.call, call.transcript, seconds))),
+        )
+        self.began = None
+
+    def feed(self, pattern: str) -> None:
+        """One 20 ms frame per character: 'v' a loud tone that counts as speech, '.' silence."""
+        self.began = self.began or time.monotonic()
+        for character in pattern:
+            self.listener.audio.feed(LOUD if character == "v" else QUIET, character == "v",
+                                     self.began + self.frames * 0.02)
+            self.frames += 1
+
+    def run(self, *sounds: str) -> list:
+        """Each sound is asked about once, in order; the reports of all of them."""
+        self.feed(sounds[0])
+        self.thread.start()
+        for following in (*sounds[1:], None):
+            assert self.gemma.asked.acquire(timeout=10)  # the request about the sound fed so far is at its end
+            if following is not None:
+                self.feed(following)
+            else:
+                self.listener.audio.close()  # nothing more: the listener's wait for speech ends
+            self.gemma.go.release()
+        self.thread.join(10)
+        assert not self.thread.is_alive() and len(self.gemma.wanted) == len(sounds)
+        return self.order
+
+
+# A sentence of 0.6 s and its pause. Said one after the other, each one's window (the newest 3 s) still
+# holds the ones before it.
+SENTENCE = "v" * 30 + "." * 10
+# The same after three seconds of silence: its window begins after the end of every window before it.
+MUCH_LATER = "." * 150 + "v" * 30 + "." * 10
+# Someone who has been talking for 2 s says "pick up the small red cube", pauses for 0.3 s and goes on:
+# the window is cut at the pause.
+GOES_ON = "v" * 100 + "." * 15 + "v" * 15
+
+
+def test_the_listener_reports_a_command_once_per_sentence_the_call_first_then_the_whole_answer():
+    pick = ParsedCommand(Intent.PICK_PLACE, {"object": "green cube"}, "grab the green cube")
+    stop = ParsedCommand(Intent.STOP, {}, "stop robot")
+    fed = FedListener([pick, ParsedCommand(Intent.UNKNOWN, {}, "nice weather"), pick, stop, stop, pick])
+    order = fed.run(SENTENCE, SENTENCE, SENTENCE, SENTENCE, SENTENCE, MUCH_LATER)
+    call, whole = ("pick_place", "green cube", ""), ("stop", "", "")
     assert order == [
-        ("call", "", 1.5), "words written", ("whole", "grab the green cube"),
-        "words written",
-        ("call", "", 1.5), "words written", ("whole", "grab the green cube"),
+        ("call", call, "", 1.5), ("whole", call, "grab the green cube"),  # the call, then the answer with its words
+        # no command: nothing. The same command from a window that overlaps the delivering one: nothing.
+        ("call", whole, "", 1.5), ("whole", whole, "stop robot"),
+        ("call", whole, "", 1.5), ("whole", whole, "stop robot"),          # stop is reported every time
+        ("call", call, "", 1.5), ("whole", call, "grab the green cube"),  # said again, after the first one's window
     ]
-    assert wanted == [True, False, True]
+    # The words are read only of an answer that is reported.
+    assert fed.gemma.wanted == [True, False, False, True, True, True]
 
 
-def test_an_utterance_is_handed_over_on_the_frame_that_ends_it():
-    frame = bytes(640)  # 20 ms at 16 kHz
-    cut = Utterances(16000, max_s=1.0, end_silence_ms=100, pre_roll_ms=40, min_voice_ms=40)
-    assert cut.end_silence_frames == 5 and cut.max_frames == 50 and cut.before.maxlen == 2
+def test_a_pick_command_without_a_place_waits_while_the_speaker_goes_on_and_the_whole_sentence_is_reported():
+    half = ParsedCommand(Intent.PICK_PLACE, {"object": "small red cube"}, "pick up the small red cube")
+    whole = ParsedCommand(Intent.PICK_PLACE, {"object": "small red cube", "place": "box"},
+                          "pick up the small red cube and put it in the box")
+    # The first window ends at the pause; the second is asked about with the first one's sound in front.
+    fed = FedListener([half, whole])
+    order = fed.run(GOES_ON, SENTENCE)
+    assert order == [("call", whole.call, "", 1.5), ("whole", whole.call, whole.transcript)]
+    assert fed.gemma.wanted == [False, True]  # the half is not reported, and its words are not read
 
-    def feed(pattern: str) -> list[int | None]:
-        """One frame per character, 'v' speech and '.' not; the length in frames of what each returned."""
-        return [None if got is None else len(got) // 640 for got in (cut.feed(frame, c == "v") for c in pattern)]
+    # The talk that followed was no pick command: the half is reported after all, without words.
+    fed = FedListener([half, ParsedCommand(Intent.UNKNOWN, {}, "and that is all")])
+    order = fed.run(GOES_ON, SENTENCE)
+    assert order == [("call", half.call, "", 1.5)] and fed.gemma.wanted == [False, False]
 
-    # Silence, then speech, then silence: handed over on the fifth silent frame, not a frame later,
-    # with the two frames from before the speech: 2 + 4 + 5 frames.
-    assert feed("....vvvv....") == [None] * 12 and cut.speaking
-    assert feed(".") == [11] and not cut.speaking
-    # A pause shorter than the end silence stays inside the utterance. It begins right after the
-    # one before it, whose last two frames are the sound in front of it: Gemma hears a sentence
-    # badly that starts at a clip's first sample.
-    assert feed("vv...vv....") == [None] * 11
-    assert feed(".") == [2 + 2 + 3 + 2 + 5]
-    # Less speech than min_voice_ms (a click) is dropped.
-    cut.clear()
-    assert feed("v.....") == [None] * 6 and not cut.speaking
-    # One that reaches the longest length is handed over as it is; the speech after it is the
-    # next, again with the two frames before it.
-    cut.clear()
-    assert feed("v" * 49) == [None] * 49
-    assert feed("v") == [50] and not cut.speaking
-    assert feed("vv.....") == [None] * 6 + [2 + 2 + 5]
-    # After a break in the microphone's frames nothing of the old sound is kept.
-    feed("vvv")
-    cut.clear()
-    assert not cut.speaking and not cut.before and feed(".....") == [None] * 5
-    with pytest.raises(ValueError, match="Invalid PCM frame length"):
-        cut.feed(bytes(10), True)
+    # Followed by a pause, it is reported at once.
+    fed = FedListener([half])
+    assert fed.run(SENTENCE) == [("call", half.call, "", 1.5), ("whole", half.call, half.transcript)]
+
+
+def test_an_answer_about_sound_from_before_a_break_or_too_old_is_not_acted_on():
+    pick = ParsedCommand(Intent.PICK_PLACE, {"object": "green cube"}, "grab the green cube")
+    # The microphone's buffer overflows while Gemma answers: the answer is about sound that did not go on.
+    broken = FedListener([pick])
+    broken.gemma.before_call = lambda: broken.listener.audio.reset(time.monotonic())
+    assert broken.run(SENTENCE) == [] and broken.gemma.wanted == [False]
+    # A window that is older than max_age_s when its call is written.
+    old = FedListener([pick])
+    old.began = time.monotonic() - 2 * float(load_settings().listening["max_age_s"])
+    assert old.run(SENTENCE) == [] and old.gemma.wanted == [False]
 
 
 def test_the_microphones_constant_offset_is_taken_out_and_the_speech_is_left():
