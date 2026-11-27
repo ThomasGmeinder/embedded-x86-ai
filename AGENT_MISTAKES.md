@@ -3177,3 +3177,14 @@ decorators back; the line was removed (`tests/test_voice_commands.py`).
 - **Correction:** Commit `66f68e4` puts the file back and was pushed; the deletion was staged again, so the working tree and index are as the user left them. No history was rewritten.
 - **Prevention:** Commit with an explicit path list (`git commit -- <paths>`), and read `git diff --cached --stat` before the commit, not after.
 - **Status:** corrected
+
+## 2026-11-27 — Opened the pull request on the user's fork instead of on the upstream repository
+
+- **Agent/tool:** Claude Code (an earlier session; its model was not read)
+- **Task:** "Make a PR" for the branch `gemma4-e4b-it_voice_intent` (voice control with Gemma 4).
+- **Mistake:** The pull request was opened against `ThomasGmeinder/embedded-x86-ai` (the remote `origin`, a fork) as its number 7. The user meant the upstream repository `amd/embedded-x86-ai`.
+- **Evidence:** User correction on 2026-11-27 ("when i said make a PR I meant on upstream !!!"). `git remote -v` lists `upstream` as `amd/embedded-x86-ai`; `gh repo view` shows the fork's parent; the upstream list of pull requests holds three earlier merged ones from this fork (numbers 9, 13, 15).
+- **Cause:** Not read from that session. What the repository shows: the target was not checked against the `upstream` remote and the earlier upstream pull requests before the pull request was opened.
+- **Correction:** Opened as `amd/embedded-x86-ai` pull request 24, same title and text, 50 commits, 125 files, mergeable; the fork's pull request 7 is closed with a link to it. It had to be opened with the `ThomasGmeinder` account: the active `gh` login `tgmeinde_amdeng` is refused on `amd/*`.
+- **Prevention:** Before opening a pull request, run `git remote -v`; when an `upstream` remote exists, the pull request goes there, with `GH_TOKEN=$(gh auth token --user ThomasGmeinder)`.
+- **Status:** corrected
