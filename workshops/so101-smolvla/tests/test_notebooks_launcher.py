@@ -7,6 +7,7 @@ does.
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import threading
@@ -14,6 +15,7 @@ import urllib.request
 from pathlib import Path
 
 from so101_smolvla.notebook_server import LISTENING
+from so101_smolvla.sapien_config import SAPIEN_COMMIT, SAPIEN_PYTHON, SAPIEN_SOURCE
 
 WORKSHOP =Path(__file__).resolve().parents[1]
 NOTEBOOKS = WORKSHOP / "notebooks"
@@ -52,6 +54,32 @@ def test_kernel_starts_in_the_workshops_environment_with_its_package(tmp_path):
     assert Path(got["prefix"]).resolve() == VENV.resolve()
     assert got["gfx"] is None
     assert Path(got["cwd"]).resolve() == tmp_path.resolve()  # the start command does not change directory
+
+
+def test_launcher_restores_the_sapien_twin_a_restart_removed(tmp_path):
+    """The simulator's checkout lies under /tmp, which a restart empties; the launcher clones and installs it again.
+
+    The checkout is renamed for the test, which is what a restart leaves behind (no directory, .venv-sapien pointing
+    at it), and put back afterwards. The launcher's clone needs the network, as the setup script does.
+    """
+    assert (SAPIEN_SOURCE / ".git").is_dir(), "the SAPIEN twin is not set up (scripts/setup_sapien_env.sh)"
+    aside = SAPIEN_SOURCE.with_name(SAPIEN_SOURCE.name + ".test-aside")
+    assert not aside.exists(), f"{aside} is left from an earlier run; move it back to {SAPIEN_SOURCE}"
+    SAPIEN_SOURCE.rename(aside)
+    try:
+        subprocess.run([str(LAUNCHER), "--kernel-only"], env=_environment(tmp_path), check=True, timeout=300)
+        head = subprocess.run(["git", "-C", str(SAPIEN_SOURCE), "rev-parse", "HEAD"],
+                              check=True, capture_output=True, text=True).stdout.strip()
+        assert head == SAPIEN_COMMIT
+        imported = subprocess.run([str(SAPIEN_PYTHON), "-c", "import so101_sim; print(so101_sim.__file__)"],
+                                  check=True, capture_output=True, text=True, timeout=120).stdout.strip()
+        assert Path(imported).is_relative_to(SAPIEN_SOURCE)
+        assert (tmp_path / "jupyter" / "kernels" / KERNEL / "kernel.json").is_file()  # and it went on to the kernel
+    finally:
+        # The checkout that was there before the test comes back, whatever the launcher did.
+        if SAPIEN_SOURCE.exists():
+            shutil.rmtree(SAPIEN_SOURCE)
+        aside.rename(SAPIEN_SOURCE)
 
 
 def test_every_notebook_names_the_kernel():

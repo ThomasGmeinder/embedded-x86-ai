@@ -11,6 +11,9 @@
 # ../scripts/setup_voice.sh installs them. The notebooks name this kernel, so
 # it is preselected.
 #
+# Before anything else it puts the SAPIEN twin back when a restart of the
+# machine removed it (../scripts/setup_sapien_env.sh), in every mode below.
+#
 # Usage:
 #   ./run_notebooks.sh                register the kernel, start JupyterLab in
 #                                     this directory and open the browser
@@ -54,6 +57,22 @@ VENV="$WORKSHOP/.venv"
 [[ -x "$VENV/bin/python" ]] || die "no Python at $VENV/bin/python - create .venv as README.md, Environment, says"
 "$VENV/bin/python" -c 'import ipykernel, jupyter_client' \
   || die "ipykernel / jupyter_client are not installed in $VENV - run $WORKSHOP/scripts/setup_voice.sh"
+
+# --- The SAPIEN twin: restored when a restart removed it ---------------------
+# The simulator's source is checked out under /tmp, which a restart of the
+# machine empties, and its environment (.venv-sapien) holds only a pointer to
+# that checkout. The two paths are the ones the notebooks check
+# (so101_smolvla.sapien_config); when either is missing the setup script puts
+# both back (it needs the network for the clone).
+SAPIEN_PATHS="$(PYTHONPATH="$WORKSHOP/src" "$VENV/bin/python" -c \
+  'from so101_smolvla.sapien_config import SAPIEN_PYTHON, SAPIEN_SOURCE; print(SAPIEN_SOURCE); print(SAPIEN_PYTHON)')" \
+  || die "could not read the SAPIEN twin's paths from so101_smolvla.sapien_config"
+{ read -r SAPIEN_SOURCE_DIR; read -r SAPIEN_PYTHON_BIN; } <<<"$SAPIEN_PATHS"
+if [[ ! -d "$SAPIEN_SOURCE_DIR/.git" || ! -x "$SAPIEN_PYTHON_BIN" ]]; then
+  echo "The SAPIEN twin is missing ($SAPIEN_SOURCE_DIR or $SAPIEN_PYTHON_BIN); running scripts/setup_sapien_env.sh"
+  SAPIEN_SOURCE="$SAPIEN_SOURCE_DIR" "$WORKSHOP/scripts/setup_sapien_env.sh" \
+    || die "scripts/setup_sapien_env.sh failed - the pick-and-place notebooks need the SAPIEN twin"
+fi
 
 # --- The kernel: the workshop's Python, its package on the path --------------
 # The start command is the interpreter itself, so interrupting a cell reaches
